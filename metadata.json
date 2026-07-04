@@ -1,0 +1,6 @@
+{
+  "name": "Живи в моменте",
+  "description": "Интерактивная афиша и календарь событий для здорового сообщества осознанного общения.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
