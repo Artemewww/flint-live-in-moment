@@ -519,7 +519,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
                 Вернуться на главную страницу
               </button>
               <a
-                href="https://t.me/LiveInMomentBot?start=year_planning_modal"
+                href="https://t.me/campsflint_bot?start=year_planning_modal"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 bg-[#E6FD3A] hover:bg-[#d8ed31] text-black py-3.5 rounded-xl text-xs font-black uppercase tracking-widest transition-all text-center flex items-center justify-center gap-2 shadow-md shadow-brand/10 hover:shadow-brand/20 cursor-pointer border-none"

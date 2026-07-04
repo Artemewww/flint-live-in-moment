@@ -44,7 +44,7 @@ export default function handler(req: VercelRequest, res: VercelResponse) {
       phase, // 'past' | 'locked' | 'open' | 'full' | 'closed'
       isOpen: phase === 'open',
       lockedHint: e.lockedHint ?? null,
-      botDeepLink: `https://t.me/LiveInMomentBot?start=event_${e.id}`,
+      botDeepLink: `https://t.me/campsflint_bot?start=event_${e.id}`,
     };
   });
 

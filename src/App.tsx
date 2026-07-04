@@ -171,14 +171,14 @@ export default function App() {
             )}
 
             <a
-              href="https://t.me/LiveInMomentBot"
+              href="https://t.me/campsflint_bot"
               target="_blank"
               rel="noopener noreferrer"
               className="bg-brand hover:bg-brand-hover text-black px-4.5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-2 cursor-pointer font-bold h-10 shadow-lg shadow-brand/10 hover:shadow-brand/20 active:scale-98"
               id="tg-bot-main-btn"
             >
               <span>В Бот</span>
-              <span className="font-mono text-[9px] text-black/50 hidden sm:inline">@LiveInMomentBot</span>
+              <span className="font-mono text-[9px] text-black/50 hidden sm:inline">@campsflint_bot</span>
             </a>
           </div>
         </div>
@@ -235,7 +235,7 @@ export default function App() {
             <div className="flex gap-4 font-black">
               <button onClick={() => setShowManifestoModal(true)} className="hover:underline bg-transparent border-none text-black p-0 cursor-pointer uppercase tracking-wider font-mono font-bold">СПИСОК ВЕКТОРОВ</button>
               <span>•</span>
-              <a href="https://t.me/LiveInMomentBot" className="hover:underline">ВСТУПИТЬ В БОТ</a>
+              <a href="https://t.me/campsflint_bot" className="hover:underline">ВСТУПИТЬ В БОТ</a>
             </div>
           </div>
         </div>
@@ -430,7 +430,7 @@ export default function App() {
                 Вернуться на главную
               </button>
               <a
-                href="https://t.me/LiveInMomentBot"
+                href="https://t.me/campsflint_bot"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all text-center flex items-center justify-center gap-1 shadow-md shadow-brand/10 hover:shadow-brand/20 cursor-pointer"

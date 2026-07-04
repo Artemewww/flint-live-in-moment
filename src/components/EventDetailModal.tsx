@@ -284,7 +284,7 @@ export default function EventDetailModal({
                 </span>
               </div>
               <a
-                href={`https://t.me/LiveInMomentBot?start=notify_${event.id}`}
+                href={`https://t.me/campsflint_bot?start=notify_${event.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="bg-brand hover:bg-brand-hover text-black font-black font-mono text-xs py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-center shadow-lg shadow-brand/10"
@@ -301,7 +301,7 @@ export default function EventDetailModal({
                 <span className="text-xs font-bold text-brand font-mono uppercase tracking-wider">Ваше участие подтверждено! Вы в кругу</span>
               </div>
               <a
-                href={`https://t.me/LiveInMomentBot?start=event_${event.id}`}
+                href={`https://t.me/campsflint_bot?start=event_${event.id}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="bg-[#E6FD3A] hover:bg-[#D4E825] text-black font-black font-mono text-xs py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-center shadow-lg shadow-brand/10"

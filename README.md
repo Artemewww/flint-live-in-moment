@@ -2,7 +2,7 @@
 
 Интерактивная афиша и календарь мероприятий трезвого сообщества осознанного
 общения (Минск, Беларусь). Работает как обычный сайт **и** как **Telegram
-Mini App**, связанный с ботом [@LiveInMomentBot](https://t.me/LiveInMomentBot).
+Mini App**, связанный с ботом [@campsflint_bot](https://t.me/campsflint_bot).
 
 ## Возможности
 

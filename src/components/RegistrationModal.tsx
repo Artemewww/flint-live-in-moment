@@ -280,7 +280,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       <div className="bg-brand/5 border border-brand/20 rounded-xl p-3 flex items-start gap-2 text-[10px] text-white/70 font-sans leading-normal">
                         <Bot className="w-4 h-4 text-brand shrink-0 mt-0.5" />
                         <span>
-                          Совет: откройте афишу через <strong className="text-brand">@LiveInMomentBot</strong> — тогда имя и Telegram подтянутся автоматически, а заявка сразу уйдёт организатору.
+                          Совет: откройте афишу через <strong className="text-brand">@campsflint_bot</strong> — тогда имя и Telegram подтянутся автоматически, а заявка сразу уйдёт организатору.
                         </span>
                       </div>
                     )}
@@ -459,7 +459,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
               {/* DIRECT TELEGRAM TRIGGER LINK */}
               <div className="pt-2 flex flex-col gap-2 font-mono">
                 <a
-                  href={`https://t.me/LiveInMomentBot?start=event_${event.id}`}
+                  href={`https://t.me/campsflint_bot?start=event_${event.id}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="w-full bg-brand hover:bg-brand-hover text-black font-black py-4 px-6 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand/15 cursor-pointer uppercase tracking-widest border-none text-center"
