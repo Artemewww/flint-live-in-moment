@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { INITIAL_EVENTS } from '../src/data';
-import { getEventPhase } from '../src/types';
+// Импортируем из общего .js-модуля (не из ../src/*.ts): Node-рантайм Vercel
+// не резолвит .ts при "type":"module", поэтому единый источник данных — .js.
+import { INITIAL_EVENTS, getEventPhase } from '../shared/events.data.js';
 
 /**
  * Единый источник правды о мероприятиях для Telegram-бота.
