@@ -27,6 +27,25 @@ export interface RegisterResult {
  * покажет успех (данные сохранятся локально), а организатор увидит
  * заявку в Telegram, как только будут заданы переменные окружения.
  */
+/**
+ * Сигнал спроса «Мне интересно» — уходит организаторам в группу заявок.
+ * Так видно, какие мероприятия хотят и что пора запускать.
+ */
+export async function submitInterest(eventId: string, eventTitle: string): Promise<RegisterResult> {
+  try {
+    const res = await fetch('/api/interest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventId, eventTitle, initData: getInitData() }),
+    });
+    if (!res.ok) return { ok: false, delivered: false, message: `HTTP ${res.status}` };
+    const data = (await res.json()) as Partial<RegisterResult>;
+    return { ok: true, delivered: Boolean(data.delivered), message: data.message };
+  } catch (err) {
+    return { ok: false, delivered: false, message: (err as Error).message };
+  }
+}
+
 export async function submitRegistration(payload: RegisterPayload): Promise<RegisterResult> {
   try {
     const res = await fetch('/api/register', {

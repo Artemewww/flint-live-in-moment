@@ -5,6 +5,8 @@ import {
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
+import { submitInterest } from '../api';
+import { haptic } from '../telegram';
 
 interface EventDetailModalProps {
   event: CommunityEvent;
@@ -26,6 +28,18 @@ export default function EventDetailModal({
   const percentFull = Math.min(100, Math.floor((totalRegistered / maxSpots) * 100));
   const phase = getEventPhase(event);
   const isLocked = phase === 'locked';
+
+  // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
+  const [interestSent, setInterestSent] = useState(false);
+  const [interestSending, setInterestSending] = useState(false);
+  const handleInterest = async () => {
+    if (interestSending || interestSent) return;
+    setInterestSending(true);
+    await submitInterest(event.id, event.title);
+    setInterestSending(false);
+    setInterestSent(true);
+    haptic('success');
+  };
 
   // Six vectors of development reference
   const orderedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] as const;
@@ -283,15 +297,24 @@ export default function EventDetailModal({
                   {event.lockedHint || 'Набор скоро откроется'}
                 </span>
               </div>
-              <a
-                href={`https://t.me/campsflint_bot?start=notify_${event.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-brand hover:bg-brand-hover text-black font-black font-mono text-xs py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-center shadow-lg shadow-brand/10"
+              <button
+                type="button"
+                onClick={handleInterest}
+                disabled={interestSending || interestSent}
+                className={`font-black font-mono text-xs py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-center border-none cursor-pointer ${
+                  interestSent
+                    ? 'bg-brand/15 text-brand border border-brand/30'
+                    : 'bg-brand hover:bg-brand-hover text-black shadow-lg shadow-brand/10'
+                }`}
               >
-                <Bell className="w-4 h-4 text-black shrink-0" />
-                Сообщить об открытии
-              </a>
+                {interestSent ? (
+                  <><Check className="w-4 h-4 shrink-0" /> Интерес учтён</>
+                ) : interestSending ? (
+                  'Отправляем…'
+                ) : (
+                  <><Bell className="w-4 h-4 text-black shrink-0" /> Мне интересно</>
+                )}
+              </button>
             </div>
           ) : isRegistered ? (
             /* Already Registered */
