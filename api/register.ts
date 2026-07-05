@@ -14,7 +14,9 @@ import * as crypto from 'crypto';
  */
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '';
+// chat_id группы заявок (не секрет). Env-переменная переопределяет значение.
+// Текущая группа: «ARTDEMENTIEV.BY & Кемпс» (супергруппа).
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 
 interface RegistrationBody {
   eventId?: string;
