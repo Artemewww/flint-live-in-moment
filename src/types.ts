@@ -109,3 +109,67 @@ export function getYandexMapsUrl(location: string): string {
   return `https://yandex.ru/maps/?text=${encodeURIComponent(location)}`;
 }
 
+/**
+ * Динамическое ценообразование для бани.
+ * Зависит от:
+ * - Количества участников (чем больше, тем дешевле)
+ * - Дня недели (выходные дороже)
+ * - Времени до события (ранняя регистрация дешевле)
+ */
+export function calculateDynamicPrice(event: CommunityEvent, today: string = getToday()): {
+  price: number;
+  label: string;
+  factors: string[];
+} {
+  const basePrice = 500; // Базовая цена в BYN
+  const eventDate = new Date(event.date);
+  const todayDate = new Date(today);
+  const daysUntilEvent = Math.ceil((eventDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
+  
+  // Определяем день недели (0 = воскресенье, 6 = суббота)
+  const dayOfWeek = eventDate.getDay();
+  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+  
+  let price = basePrice;
+  const factors: string[] = [];
+  
+  // 1. Цена зависит от заполненности
+  if (event.maxParticipants && event.participantsCount > 0) {
+    const fillRate = event.participantsCount / event.maxParticipants;
+    if (fillRate >= 0.8) {
+      price *= 1.3; // +30% если почти заполнено
+      factors.push('Высокий спрос (+30%)');
+    } else if (fillRate >= 0.5) {
+      price *= 1.1; // +10% если заполнено больше половины
+      factors.push('Средний спрос (+10%)');
+    } else if (fillRate <= 0.3) {
+      price *= 0.85; // -15% если мало людей
+      factors.push('Ранняя регистрация (-15%)');
+    }
+  }
+  
+  // 2. Выходные дороже
+  if (isWeekend) {
+    price *= 1.2; // +20%
+    factors.push('Выходные (+20%)');
+  }
+  
+  // 3. Ранняя регистрация (за 7+ дней) дешевле
+  if (daysUntilEvent >= 7) {
+    price *= 0.9; // -10%
+    factors.push('Ранняя запись (-10%)');
+  } else if (daysUntilEvent <= 2) {
+    price *= 1.15; // +15% если осталось меньше 2 дней
+    factors.push('Поздняя регистрация (+15%)');
+  }
+  
+  // 4. Минимальная и максимальная цена
+  price = Math.max(300, Math.min(price, 800)); // От 300 до 800 BYN
+  
+  return {
+    price: Math.round(price),
+    label: `${Math.round(price)} BYN`,
+    factors
+  };
+}
+

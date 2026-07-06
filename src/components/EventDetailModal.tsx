@@ -3,10 +3,35 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell
 } from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest } from '../api';
 import { haptic } from '../telegram';
+
+// Компонент динамической цены
+function DynamicPrice({ event }: { event: CommunityEvent }) {
+  const { price, label, factors } = calculateDynamicPrice(event);
+  
+  return (
+    <div className="space-y-1">
+      <div className="text-brand font-black text-lg">{label}</div>
+      <div className="text-white/50 text-[10px]">
+        {event.priceType === 'free' ? 'Полностью свободное участие' :
+         event.priceType === 'conscience' ? 'Взнос на личное усмотрение' : 'Взнос на организационные расходы'}
+      </div>
+      {factors.length > 0 && (
+        <div className="space-y-0.5 mt-1.5">
+          {factors.map((factor, idx) => (
+            <div key={idx} className="text-[9px] text-white/40 font-mono flex items-center gap-1">
+              <span className="w-1 h-1 rounded-full bg-brand/60" />
+              {factor}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface EventDetailModalProps {
   event: CommunityEvent;
@@ -171,11 +196,7 @@ export default function EventDetailModal({
                 <Tag className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">УСЛОВИЯ УЧАСТИЯ</span>
-                  <div className="text-brand font-black">{event.priceLabel}</div>
-                  <div className="text-white/50 text-[10px]">
-                    {event.priceType === 'free' ? 'Полностью свободное участие' :
-                     event.priceType === 'conscience' ? 'Взнос на личное усмотрение' : 'Взнос на организационные расходы'}
-                  </div>
+                  <DynamicPrice event={event} />
                 </div>
               </div>
 
