@@ -302,12 +302,25 @@ export default function EventDetailModal({
         {/* Footer Registration Action Area */}
         <div className="p-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
           {phase === 'past' ? (
-            /* Archive state */
-            <div className="flex items-center gap-2 w-full">
-              <div className="bg-[#E6FD3A]/10 border border-[#E6FD3A]/20 rounded-2xl w-full py-4 flex items-center justify-center gap-2 text-[#E6FD3A]">
-                <Eye className="w-5 h-5 text-[#E6FD3A]" />
-                <span className="text-xs font-bold font-mono uppercase tracking-widest">СОБЫТИЕ СВЕРШЕНО • ОТПРАВЛЕНО В АРХИВ СООБЩЕСТВА ({totalRegistered} уч.)</span>
-              </div>
+            /* Past event - feedback button */
+            <div className="flex flex-col sm:flex-row gap-2.5 items-stretch w-full">
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  window.dispatchEvent(new CustomEvent('openFeedback', { detail: { eventId: event.id, eventTitle: event.title } }));
+                }}
+                className="flex-1 bg-brand/10 border border-brand/30 text-brand py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-brand/20 transition-colors cursor-pointer font-mono"
+              >
+                Оставить отзыв
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="flex-1 border border-white/10 py-4 rounded-2xl text-xs font-bold uppercase tracking-widest text-[#FFF]/60 hover:bg-[#FFF]/5 transition-colors cursor-pointer font-mono bg-transparent"
+              >
+                Вернуться в каталог
+              </button>
             </div>
           ) : isLocked ? (
             /* «Под замочком» — набор ещё не открыт */
