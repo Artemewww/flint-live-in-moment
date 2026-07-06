@@ -27,18 +27,30 @@ export default function App() {
   const [verifyingEvent, setVerifyingEvent] = useState<CommunityEvent | null>(null);
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
+  const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
 
   // Load registration state from localStorage on init
   useEffect(() => {
     try {
       const savedIds = localStorage.getItem('moment_registered_event_ids');
       const savedRegs = localStorage.getItem('moment_user_registrations');
+      const savedBirthdays = localStorage.getItem('moment_birthdays');
       
       if (savedIds) {
         setRegisteredEventIds(JSON.parse(savedIds));
       }
       if (savedRegs) {
         setUserRegistrations(JSON.parse(savedRegs));
+      }
+      if (savedBirthdays) {
+        setBirthdays(JSON.parse(savedBirthdays));
+      } else {
+        // Демо-данные для тестирования
+        setBirthdays([
+          { id: '1', name: 'Александр', date: '07-15', year: 1990, telegram: '@alex' },
+          { id: '2', name: 'Михаил', date: '07-22', year: 1988, telegram: '@mike' },
+          { id: '3', name: 'Дмитрий', date: '08-03', year: 1992, telegram: '@dima' }
+        ]);
       }
     } catch (err) {
       console.error('Failed to load local storage registrations', err);
@@ -566,7 +578,7 @@ export default function App() {
       {/* BIRTHDAY CALENDAR MODAL */}
       {showBirthdayCalendar && (
         <BirthdayCalendar
-          birthdays={[]} // TODO: Загружать из базы данных
+          birthdays={birthdays}
           onClose={() => setShowBirthdayCalendar(false)}
         />
       )}
