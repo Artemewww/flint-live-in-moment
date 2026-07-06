@@ -43,6 +43,20 @@ export default function App() {
     }
   }, []);
 
+  // Слушаем событие открытия верификации из EventDetailModal
+  useEffect(() => {
+    const handleOpenVerification = (e: any) => {
+      const { eventId, eventTitle } = e.detail;
+      const event = events.find(ev => ev.id === eventId);
+      if (event) {
+        setVerifyingEvent(event);
+      }
+    };
+
+    window.addEventListener('openVerification', handleOpenVerification);
+    return () => window.removeEventListener('openVerification', handleOpenVerification);
+  }, [events]);
+
   // Save registration state to localStorage on update
   const saveToLocalStorage = (ids: string[], regs: Registration[]) => {
     try {

@@ -357,10 +357,24 @@ export default function EventDetailModal({
           ) : (
             /* Open for Registration */
             <>
+              {event.needsOnboarding && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    // Открываем верификацию через App.tsx
+                    window.dispatchEvent(new CustomEvent('openVerification', { detail: { eventId: event.id, eventTitle: event.title } }));
+                  }}
+                  className="flex-1 order-2 sm:order-1 border border-brand/30 py-4.5 rounded-2xl text-xs font-bold uppercase tracking-widest text-brand hover:bg-brand/10 transition-colors cursor-pointer font-mono bg-transparent"
+                >
+                  Пройти верификацию
+                </button>
+              )}
+
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 order-2 sm:order-1 border border-white/10 py-4.5 rounded-2xl text-xs font-bold uppercase tracking-widest text-[#FFF]/60 hover:bg-[#FFF]/5 transition-colors cursor-pointer font-mono bg-transparent"
+                className={`flex-1 order-${event.needsOnboarding ? '3' : '2'} sm:order-${event.needsOnboarding ? '2' : '1'} border border-white/10 py-4.5 rounded-2xl text-xs font-bold uppercase tracking-widest text-[#FFF]/60 hover:bg-[#FFF]/5 transition-colors cursor-pointer font-mono bg-transparent`}
               >
                 Вернуться в каталог
               </button>
@@ -372,7 +386,7 @@ export default function EventDetailModal({
                 }}
                 disabled={spotsFull}
                 className={`
-                  flex-1 order-1 sm:order-2 py-4.5 rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all outline-none border-none cursor-pointer
+                  flex-1 order-${event.needsOnboarding ? '4' : '1'} sm:order-${event.needsOnboarding ? '3' : '2'} py-4.5 rounded-2xl text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all outline-none border-none cursor-pointer
                   ${spotsFull 
                     ? 'bg-white/5 text-white/30 cursor-not-allowed'
                     : 'bg-brand hover:bg-brand-hover text-black shadow-lg shadow-brand/10 active:scale-98'
