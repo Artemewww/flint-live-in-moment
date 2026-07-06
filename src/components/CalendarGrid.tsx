@@ -77,6 +77,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
       break;
     }
   }
+  const daysToNextEvent = nextEventDay ? nextEventDay - todayDayNum : 0;
+  const useCompactMode = daysToNextEvent > 6; // Если больше 6 дней — компактный режим
 
   const handleDayClick = (dayNum: number) => {
     const dayEvents = getEventsForDay(dayNum);
@@ -263,18 +265,18 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                       </div>
                     )}
 
-                    {/* Weekday — скрываем у сжатых дней */}
-                    {!isCompact && (
-                      <span className={`text-[7px] sm:text-[8px] font-mono uppercase tracking-wider ${
-                        isWeekend ? 'text-rose-400/50' : 'text-white/40'
-                      }`}>
+                    {/* Weekday — в компактном режиме всегда показываем, в обычном скрываем у сжатых */}
+                    {(isCompact || !isCompact) && (
+                      <span className={`font-mono uppercase tracking-wider ${
+                        isCompact ? 'text-[6px] sm:text-[7px] text-white/30' : 'text-[7px] sm:text-[8px]'
+                      } ${isWeekend ? 'text-rose-400/50' : 'text-white/40'}`}>
                         {weekday}
                       </span>
                     )}
 
-                    {/* Day number */}
+                    {/* Day number — в компактном режиме тоже видимый, но маленький */}
                     <span className={`font-display font-black leading-none tracking-tight ${
-                      isCompact ? 'text-[8px] sm:text-[10px] text-white/15' : 'text-sm sm:text-xl'
+                      isCompact ? 'text-[10px] sm:text-[11px] text-white/40' : 'text-sm sm:text-xl'
                     } ${isToday ? 'text-white animate-pulse' : isWeekend ? 'text-rose-300/60' : ''}`}>
                       {dayNum}
                     </span>
