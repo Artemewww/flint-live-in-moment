@@ -13,15 +13,21 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
   const [modalActiveMonth, setModalActiveMonth] = useState<number>(0); // 0=June, 1=July, 2=August, 3=September
   const [hoveredEvent, setHoveredEvent] = useState<CommunityEvent | null>(null);
 
-  const daysInJune = 30;
   const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-  // Current simulated date is June 3, 2026
-  const todayDayNum = 3;
+  // Динамическая дата «сегодня»
+  const now = new Date();
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth(); // 0-based
+  const todayDayNum = now.getDate();
+  const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+  const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Окторябрь', 'Ноябрь', 'Декабрь'];
+  const currentMonthName = monthNames[currentMonth];
+  const currentMonthStr = String(currentMonth + 1).padStart(2, '0');
 
-  // Helper to map June day to event(s)
+  // Helper to map current month day to event(s)
   const getEventsForDay = (dayNum: number): CommunityEvent[] => {
-    const formattedDate = `2026-06-${dayNum.toString().padStart(2, '0')}`;
+    const formattedDate = `${currentYear}-${currentMonthStr}-${dayNum.toString().padStart(2, '0')}`;
     return events.filter(evt => {
       if (evt.id === 'isloch-challenges-male') {
         return dayNum >= 26 && dayNum <= 28;
@@ -133,7 +139,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
           <div className="flex items-center gap-2">
             <Calendar className="w-4 h-4 text-brand animate-pulse" />
             <span className="text-[11px] font-mono uppercase tracking-widest text-[#E6FD3A] font-black">
-              Июнь 2026
+              {currentMonthName} {currentYear}
             </span>
           </div>
         </div>
@@ -175,8 +181,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
           </div>
         </button>
 
-        {/* JUNE DAY CARDS */}
-        {Array.from({ length: daysInJune }, (_, idx) => {
+        {/* Текущий месяц — динамические дни */}
+        {Array.from({ length: daysInMonth }, (_, idx) => {
           const dayNum = idx + 1;
           const dayEvents = getEventsForDay(dayNum);
           const hasEvents = dayEvents.length > 0;
