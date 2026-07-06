@@ -580,6 +580,11 @@ export default function App() {
         <BirthdayCalendar
           birthdays={birthdays}
           onClose={() => setShowBirthdayCalendar(false)}
+          onAddBirthday={(newBirthday) => {
+            const updated = [...birthdays, newBirthday];
+            setBirthdays(updated);
+            localStorage.setItem('moment_birthdays', JSON.stringify(updated));
+          }}
         />
       )}
     </div>
