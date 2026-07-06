@@ -78,6 +78,18 @@ export interface Registration {
   phone: string;
   telegram: string;
   registeredAt: string;
+  /** Статус верификации участника */
+  verificationStatus: 'pending' | 'approved' | 'rejected' | 'voting';
+  /** ID голосования в группе (если нужно) */
+  votingMessageId?: string;
+  /** Количество голосов "за" */
+  votesFor?: number;
+  /** Количество голосов "против" */
+  votesAgainst?: number;
+  /** Кто проголосовал (telegram IDs) */
+  voters?: string[];
+  /** Примечания организаторов */
+  adminNotes?: string;
 }
 
 export function getYandexMapsUrl(location: string): string {
