@@ -201,7 +201,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
       {/* Main Horizontal Scroll Container — только сегодня и будущие даты */}
       <div 
         id="calendar-horizontal-scroll" 
-        className="h-[140px] bg-[#121212] border border-white/10 rounded-3xl flex items-center px-4 overflow-x-auto overflow-y-hidden scrollbar-none w-full gap-3 select-none"
+        className="bg-[#121212] border border-white/10 rounded-3xl flex items-center px-3 sm:px-4 overflow-x-auto overflow-y-hidden scrollbar-none w-full gap-1.5 sm:gap-3 select-none"
+        style={{ minHeight: 'fit-content', paddingTop: '10px', paddingBottom: '10px' }}
       >
         {/* Показываем только даты с todayDayNum и до конца месяца */}
         {Array.from({ length: daysInMonth - todayDayNum + 1 }, (_, idx) => {
@@ -213,6 +214,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
           const weekdayIndex = (dayNum - 1) % 7;
           const weekday = weekdays[weekdayIndex];
           const isToday = dayNum === todayDayNum;
+          const isWeekend = weekdayIndex === 5 || weekdayIndex === 6; // Сб или Вс
 
           return (
             <div 
@@ -230,15 +232,17 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                     type="button"
                     onClick={() => handleDayClick(dayNum)}
                     className={`
-                      rounded-2xl border flex flex-col justify-between items-center p-2 transition-all outline-none cursor-pointer relative
-                      ${isCompact ? 'h-[80px] w-[32px]' : 'h-[106px] w-[78px]'}
+                      rounded-2xl border flex flex-col justify-between items-center p-1.5 sm:p-2 transition-all outline-none cursor-pointer relative
+                      ${isCompact ? 'h-[60px] w-[20px] sm:h-[80px] sm:w-[32px]' : 'h-[80px] w-[48px] sm:h-[106px] sm:w-[78px]'}
                       ${isToday
                         ? 'border-white/10 bg-[#161616] text-white'
                         : hasEvents && isSelected
                           ? 'border-brand/50 bg-brand/5 text-white'
                           : hasEvents
                             ? 'border-white/15 hover:border-brand/50 bg-[#161616] text-white hover:bg-[#1E1E1E]'
-                            : 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50'
+                            : isWeekend
+                              ? 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50 bg-white/[0.02]'
+                              : 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50'
                       }
                     `}
                   >
@@ -254,22 +258,24 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
                     {/* Weekday — скрываем у сжатых дней */}
                     {!isCompact && (
-                      <span className="text-[8px] font-mono uppercase tracking-wider text-white/40">
+                      <span className={`text-[7px] sm:text-[8px] font-mono uppercase tracking-wider ${
+                        isWeekend ? 'text-rose-400/50' : 'text-white/40'
+                      }`}>
                         {weekday}
                       </span>
                     )}
 
                     {/* Day number */}
                     <span className={`font-display font-black leading-none tracking-tight ${
-                      isCompact ? 'text-[10px] text-white/15' : 'text-xl'
-                    } ${isToday ? 'text-white animate-pulse' : ''}`}>
+                      isCompact ? 'text-[8px] sm:text-[10px] text-white/15' : 'text-sm sm:text-xl'
+                    } ${isToday ? 'text-white animate-pulse' : isWeekend ? 'text-rose-300/60' : ''}`}>
                       {dayNum}
                     </span>
 
                     {/* Event micro label */}
                     {hasEvents ? (
                       <div className="flex flex-col items-center gap-0.5 w-full">
-                        <span className="text-[8px] font-mono uppercase tracking-widest text-brand/90 font-black block text-center truncate max-w-full">
+                        <span className="text-[6px] sm:text-[8px] font-mono uppercase tracking-widest text-brand/90 font-black block text-center truncate max-w-full">
                           {getShortEventName(primaryEvent.id, primaryEvent.type)}
                           {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
                         </span>
@@ -278,13 +284,13 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                           {dayEvents.map((e, eIdx) => (
                             <span 
                               key={e.id + eIdx} 
-                              className={`w-1 h-1 rounded-full ${getTypeColor(e.type)}`} 
+                              className={`w-0.5 h-0.5 sm:w-1 sm:h-1 rounded-full ${getTypeColor(e.type)}`} 
                             />
                           ))}
                         </div>
                       </div>
                     ) : !isCompact && (
-                      <span className="text-[10px] font-mono text-white/5">ー</span>
+                      <span className="text-[8px] sm:text-[10px] font-mono text-white/5">ー</span>
                     )}
                   </button>
                 );
