@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Info } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
+import { getToday } from '../data';
 
 interface InfoSectionProps {
   events: CommunityEvent[];
@@ -17,16 +18,24 @@ export default function InfoSection({
   onOpenManifesto,
   onOpenDetails
 }: InfoSectionProps) {
-  // Find nearest upcoming event: "banya-flint-weekly" which is 2026-06-04, or any upcoming
-  const featuredEvent = events.find(e => e.id === 'banya-flint-weekly') || events.find(e => e.date >= '2026-06-03') || events[0];
+
+  // Находим ближайшее предстоящее событие (первое не прошедшее)
+  const today = getToday();
+  const featuredEvent = events
+    .filter(e => e.date >= today && e.status !== 'locked')
+    .sort((a, b) => a.date.localeCompare(b.date))[0]
+    || events.find(e => e.id === 'banya-flint-weekly')
+    || events[0];
 
   // Calculated registered slots
   const maxSpots = featuredEvent.maxParticipants || 15;
   const spotsTaken = featuredEvent.participantsCount;
   const percentFull = Math.min(100, Math.floor((spotsTaken / maxSpots) * 100));
 
-  // Target date for countdown (June 4, 2026 at 19:00:00 Minsk timezone format or general)
-  const targetDate = new Date(`${featuredEvent.date}T19:00:00`).getTime();
+  // Определяем время ближайшего события для обратного отсчёта
+  const isToday = featuredEvent.date === today;
+  const eventDateStr = `${featuredEvent.date}T19:00:00`;
+  const targetDate = new Date(eventDateStr).getTime();
   const [timeLeft, setTimeLeft] = useState({ days: '00', hours: '00', minutes: '00', seconds: '00' });
 
   useEffect(() => {

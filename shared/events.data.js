@@ -378,11 +378,17 @@ export const INITIAL_EVENTS = [
   }
 ];
 
-/** Дата «сегодня» в песочнице проекта. */
-export const TODAY = '2026-06-03';
+/** Возвращает сегодняшнюю дату в формате YYYY-MM-DD. */
+export function getToday() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 
 /** Единая точка вычисления фазы мероприятия (сайт + API/бот). */
-export function getEventPhase(event, today = TODAY) {
+export function getEventPhase(event, today = getToday()) {
   if (event.date < today) return 'past';
   if (event.status === 'closed') return 'closed';
   if (event.status === 'locked') return 'locked';
@@ -391,6 +397,6 @@ export function getEventPhase(event, today = TODAY) {
 }
 
 /** Можно ли записаться прямо сейчас. */
-export function isRegistrationOpen(event, today = TODAY) {
+export function isRegistrationOpen(event, today = getToday()) {
   return getEventPhase(event, today) === 'open';
 }

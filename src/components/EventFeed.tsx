@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, History, Sparkles, ChevronRight, Compass, ShieldAlert, ArrowUpRight, Lock
 } from 'lucide-react';
-import { CommunityEvent, EventType, getEventPhase } from '../types';
+import { CommunityEvent, EventType, getEventPhase, getToday } from '../types';
 import EventDetailModal from './EventDetailModal';
 
 interface EventFeedProps {
@@ -23,12 +23,12 @@ export default function EventFeed({
   const [timeTab, setTimeTab] = useState<'upcoming' | 'past'>('upcoming');
   const [activeDetailEvent, setActiveDetailEvent] = useState<CommunityEvent | null>(null);
 
-  // Cut-off date for June 3, 2026
-  const cutOffDate = '2026-06-03';
+  // Динамическая дата «сегодня» — прошедшие события скрыты по умолчанию
+  const today = getToday();
 
   // Split into lists based on date
-  const upcomingEventsRaw = events.filter(e => e.date >= cutOffDate);
-  const pastEventsRaw = events.filter(e => e.date < cutOffDate);
+  const upcomingEventsRaw = events.filter(e => e.date >= today);
+  const pastEventsRaw = events.filter(e => e.date < today);
 
   // Apply filtered view based on time tab
   const currentCategoryEvents = timeTab === 'upcoming' ? upcomingEventsRaw : pastEventsRaw;

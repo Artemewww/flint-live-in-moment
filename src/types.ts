@@ -46,14 +46,20 @@ export interface CommunityEvent {
   lockedHint?: string;
 }
 
-/** Дата «сегодня» в песочнице проекта (используется как точка отсчёта). */
-export const TODAY = '2026-06-03';
+/** Возвращает сегодняшнюю дату в формате YYYY-MM-DD. */
+export function getToday(): string {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 
 /**
  * Единая точка вычисления фазы мероприятия — используется и на сайте,
  * и в API (которое отдаёт данные боту), чтобы состояние совпадало везде.
  */
-export function getEventPhase(event: CommunityEvent, today: string = TODAY): EventPhase {
+export function getEventPhase(event: CommunityEvent, today: string = getToday()): EventPhase {
   if (event.date < today) return 'past';
   if (event.status === 'closed') return 'closed';
   if (event.status === 'locked') return 'locked';
@@ -62,7 +68,7 @@ export function getEventPhase(event: CommunityEvent, today: string = TODAY): Eve
 }
 
 /** Можно ли прямо сейчас записаться на мероприятие через форму сайта. */
-export function isRegistrationOpen(event: CommunityEvent, today: string = TODAY): boolean {
+export function isRegistrationOpen(event: CommunityEvent, today: string = getToday()): boolean {
   return getEventPhase(event, today) === 'open';
 }
 
