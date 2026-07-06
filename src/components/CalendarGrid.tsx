@@ -33,11 +33,12 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const getEventsForDay = (dayNum: number): CommunityEvent[] => {
     const formattedDate = `${currentYear}-${currentMonthStr}-${dayNum.toString().padStart(2, '0')}`;
     return events.filter(evt => {
+      // Мультидневные события только в своём месяце
       if (evt.id === 'isloch-challenges-male') {
-        return dayNum >= 26 && dayNum <= 28;
+        return evt.date.startsWith(`${currentYear}-${currentMonthStr}`) && dayNum >= 26 && dayNum <= 28;
       }
       if (evt.id === 'conscious-fasting') {
-        return dayNum >= 22 && dayNum <= 25;
+        return evt.date.startsWith(`${currentYear}-${currentMonthStr}`) && dayNum >= 22 && dayNum <= 25;
       }
       return evt.date === formattedDate;
     });
@@ -87,8 +88,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
       return;
     }
     
-    // Если несколько — показываем список
-    setSelectedDayEvents(dayEvents);
+    // Если несколько — открываем попап для каждого по очереди (первое сразу)
+    onOpenDetail(dayEvents[0]);
   };
 
   // Mock database for Year round planning
