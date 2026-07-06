@@ -111,17 +111,18 @@ export function getYandexMapsUrl(location: string): string {
 
 /**
  * Динамическое ценообразование для бани.
- * Зависит от:
- * - Количества участников (чем больше, тем дешевле)
- * - Дня недели (выходные дороже)
- * - Времени до события (ранняя регистрация дешевле)
+ * Логика: общая стоимость аренды делится на количество участников.
+ * - Базовая аренда: 500 BYN
+ * - При 10+ человек: ~50 BYN/чел
+ * - Чем больше людей, тем дешевле для каждого
  */
 export function calculateDynamicPrice(event: CommunityEvent, today: string = getToday()): {
   price: number;
   label: string;
   factors: string[];
 } {
-  const basePrice = 500; // Базовая цена в BYN
+  const RENTAL_COST = 500; // Стоимость аренды бани в BYN
+  const MIN_PARTICIPANTS = 10; // Минимум для подтверждения заезда
   const eventDate = new Date(event.date);
   const todayDate = new Date(today);
   const daysUntilEvent = Math.ceil((eventDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
@@ -130,45 +131,40 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   const dayOfWeek = eventDate.getDay();
   const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
   
-  let price = basePrice;
+  // Количество участников (включая текущего пользователя если он зарегистрирован)
+  const currentParticipants = event.participantsCount;
+  
+  // Если нет участников, показываем цену при минимальном количестве
+  const participantsForCalc = currentParticipants > 0 ? currentParticipants : MIN_PARTICIPANTS;
+  
+  // Базовая цена = аренда / участники
+  let price = Math.ceil(RENTAL_COST / participantsForCalc);
   const factors: string[] = [];
   
-  // 1. Цена зависит от заполненности
-  if (event.maxParticipants && event.participantsCount > 0) {
-    const fillRate = event.participantsCount / event.maxParticipants;
-    if (fillRate >= 0.8) {
-      price *= 1.3; // +30% если почти заполнено
-      factors.push('Высокий спрос (+30%)');
-    } else if (fillRate >= 0.5) {
-      price *= 1.1; // +10% если заполнено больше половины
-      factors.push('Средний спрос (+10%)');
-    } else if (fillRate <= 0.3) {
-      price *= 0.85; // -15% если мало людей
-      factors.push('Ранняя регистрация (-15%)');
-    }
-  }
-  
-  // 2. Выходные дороже
-  if (isWeekend) {
-    price *= 1.2; // +20%
-    factors.push('Выходные (+20%)');
-  }
-  
-  // 3. Ранняя регистрация (за 7+ дней) дешевле
+  // 1. Скидка за раннюю регистрацию (за 7+ дней)
   if (daysUntilEvent >= 7) {
-    price *= 0.9; // -10%
+    price = Math.round(price * 0.9); // -10%
     factors.push('Ранняя запись (-10%)');
-  } else if (daysUntilEvent <= 2) {
-    price *= 1.15; // +15% если осталось меньше 2 дней
+  }
+  
+  // 2. Наценка за позднюю регистрацию (за 2 дня)
+  if (daysUntilEvent <= 2 && daysUntilEvent >= 0) {
+    price = Math.round(price * 1.15); // +15%
     factors.push('Поздняя регистрация (+15%)');
   }
   
+  // 3. Выходные дороже
+  if (isWeekend) {
+    price = Math.round(price * 1.2); // +20%
+    factors.push('Выходные (+20%)');
+  }
+  
   // 4. Минимальная и максимальная цена
-  price = Math.max(300, Math.min(price, 800)); // От 300 до 800 BYN
+  price = Math.max(30, Math.min(price, 150)); // От 30 до 150 BYN
   
   return {
-    price: Math.round(price),
-    label: `${Math.round(price)} BYN`,
+    price: price,
+    label: `${price} BYN`,
     factors
   };
 }
