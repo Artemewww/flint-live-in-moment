@@ -43,6 +43,12 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     });
   };
 
+  // Реальный день недели из даты
+  const getWeekdayForDay = (dayNum: number): string => {
+    const date = new Date(currentYear, currentMonth, dayNum);
+    return weekdays[date.getDay() === 0 ? 6 : date.getDay() - 1]; // Пн=0 ... Вс=6
+  };
+
   // Human readable short Russian labels for different events
   const getShortEventName = (eventId: string, type: string): string => {
     if (eventId === 'banya-flint-weekly') return 'Баня';
@@ -211,8 +217,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
           const hasEvents = dayEvents.length > 0;
           const primaryEvent = dayEvents[0];
           const isSelected = primaryEvent && selectedEventId === primaryEvent.id;
-          const weekdayIndex = (dayNum - 1) % 7;
-          const weekday = weekdays[weekdayIndex];
+          const weekday = getWeekdayForDay(dayNum);
+          const weekdayIndex = weekdays.indexOf(weekday);
           const isToday = dayNum === todayDayNum;
           const isWeekend = weekdayIndex === 5 || weekdayIndex === 6; // Сб или Вс
 
