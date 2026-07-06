@@ -15,6 +15,7 @@ import VerificationModal from './components/VerificationModal';
 import BirthdayCalendar from './components/BirthdayCalendar';
 import FeedbackModal from './components/FeedbackModal';
 import UserStats from './components/UserStats';
+import EventPoster from './components/EventPoster';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
+  const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -73,6 +75,20 @@ export default function App() {
 
     window.addEventListener('openVerification', handleOpenVerification);
     return () => window.removeEventListener('openVerification', handleOpenVerification);
+  }, [events]);
+
+  // Слушаем событие открытия постера из EventDetailModal
+  useEffect(() => {
+    const handleOpenPoster = (e: any) => {
+      const { eventId } = e.detail;
+      const event = events.find(ev => ev.id === eventId);
+      if (event) {
+        setPosterEvent(event);
+      }
+    };
+
+    window.addEventListener('openPoster', handleOpenPoster);
+    return () => window.removeEventListener('openPoster', handleOpenPoster);
   }, [events]);
 
   // Save registration state to localStorage on update
@@ -624,6 +640,14 @@ export default function App() {
           registrations={userRegistrations}
           events={events}
           onClose={() => setShowUserStats(false)}
+        />
+      )}
+
+      {/* EVENT POSTER MODAL */}
+      {posterEvent && (
+        <EventPoster
+          event={posterEvent}
+          onClose={() => setPosterEvent(null)}
         />
       )}
     </div>

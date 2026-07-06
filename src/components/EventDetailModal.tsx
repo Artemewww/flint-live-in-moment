@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell
+  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
@@ -302,7 +302,7 @@ export default function EventDetailModal({
         {/* Footer Registration Action Area */}
         <div className="p-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
           {phase === 'past' ? (
-            /* Past event - feedback button */
+            /* Past event - feedback and share */
             <div className="flex flex-col sm:flex-row gap-2.5 items-stretch w-full">
               <button
                 type="button"
@@ -313,6 +313,17 @@ export default function EventDetailModal({
                 className="flex-1 bg-brand/10 border border-brand/30 text-brand py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-brand/20 transition-colors cursor-pointer font-mono"
               >
                 Оставить отзыв
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  window.dispatchEvent(new CustomEvent('openPoster', { detail: { eventId: event.id } }));
+                }}
+                className="flex-1 bg-white/5 border border-white/10 text-white/70 py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-white/10 hover:text-white transition-colors cursor-pointer font-mono flex items-center justify-center gap-2"
+              >
+                <Share2 className="w-4 h-4" />
+                Поделиться
               </button>
               <button
                 type="button"
