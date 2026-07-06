@@ -6,9 +6,10 @@ interface CalendarGridProps {
   events: CommunityEvent[];
   selectedEventId: string | null;
   onSelectEvent: (id: string | null) => void;
+  onOpenDetail: (event: CommunityEvent | null) => void;
 }
 
-export default function CalendarGrid({ events, selectedEventId, onSelectEvent }: CalendarGridProps) {
+export default function CalendarGrid({ events, selectedEventId, onSelectEvent, onOpenDetail }: CalendarGridProps) {
   const [showYearModal, setShowYearModal] = useState(false);
   const [modalActiveMonth, setModalActiveMonth] = useState<number>(0);
   const [selectedDayEvents, setSelectedDayEvents] = useState<CommunityEvent[] | null>(null);
@@ -61,17 +62,22 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
     return 'Дзен';
   };
 
+  // Находим ближайшее событие для сжатия пустых дней
+  let nextEventDay: number | null = null;
+  for (let d = todayDayNum; d <= daysInMonth; d++) {
+    if (getEventsForDay(d).length > 0) {
+      nextEventDay = d;
+      break;
+    }
+  }
+
   const handleDayClick = (dayNum: number) => {
     const dayEvents = getEventsForDay(dayNum);
     if (dayEvents.length === 0) return;
     
-    // Если одно событие — сразу открываем его детали
+    // Если одно событие — сразу открываем Popup с деталями
     if (dayEvents.length === 1) {
-      onSelectEvent(dayEvents[0].id);
-      const targetCard = document.getElementById(`event-card-${dayEvents[0].id}`);
-      if (targetCard) {
-        targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      }
+      onOpenDetail(dayEvents[0]);
       return;
     }
     
@@ -213,65 +219,76 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
               key={dayNum} 
               className="relative flex-shrink-0"
             >
-              <button
-                type="button"
-                onClick={() => handleDayClick(dayNum)}
-                className={`
-                  h-[106px] w-[78px] rounded-2xl border flex flex-col justify-between items-center p-2 transition-all outline-none cursor-pointer relative
-                  ${isToday
-                    ? 'border-white/10 bg-[#161616] text-white'
-                    : hasEvents && isSelected
-                      ? 'border-brand/50 bg-brand/5 text-white'
-                      : hasEvents
-                        ? 'border-white/15 hover:border-brand/50 bg-[#161616] text-white hover:bg-[#1E1E1E]'
-                        : 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50'
-                  }
-                `}
-              >
-                {/* TODAY pulsing dot — единственный акцент */}
-                {isToday && (
-                  <div className="absolute -top-0.5 -right-0.5 flex items-center justify-center" title="Сегодня">
-                    <span className="relative flex h-2 w-2">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
+              {/* Сжатие пустых дней: если день без событий и не сегодня — делаем уже */}
+              {(() => {
+                const isEmpty = !hasEvents && !isToday;
+                const isBeforeNextEvent = nextEventDay !== null && dayNum < nextEventDay;
+                const isCompact = isEmpty && isBeforeNextEvent;
+                
+                return (
+                  <button
+                    type="button"
+                    onClick={() => handleDayClick(dayNum)}
+                    className={`
+                      rounded-2xl border flex flex-col justify-between items-center p-2 transition-all outline-none cursor-pointer relative
+                      ${isCompact ? 'h-[80px] w-[32px]' : 'h-[106px] w-[78px]'}
+                      ${isToday
+                        ? 'border-white/10 bg-[#161616] text-white'
+                        : hasEvents && isSelected
+                          ? 'border-brand/50 bg-brand/5 text-white'
+                          : hasEvents
+                            ? 'border-white/15 hover:border-brand/50 bg-[#161616] text-white hover:bg-[#1E1E1E]'
+                            : 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50'
+                      }
+                    `}
+                  >
+                    {/* TODAY pulsing dot */}
+                    {isToday && (
+                      <div className="absolute -top-0.5 -right-0.5 flex items-center justify-center" title="Сегодня">
+                        <span className="relative flex h-2 w-2">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Weekday — скрываем у сжатых дней */}
+                    {!isCompact && (
+                      <span className="text-[8px] font-mono uppercase tracking-wider text-white/40">
+                        {weekday}
+                      </span>
+                    )}
+
+                    {/* Day number */}
+                    <span className={`font-display font-black leading-none tracking-tight ${
+                      isCompact ? 'text-[10px] text-white/15' : 'text-xl'
+                    } ${isToday ? 'text-white animate-pulse' : ''}`}>
+                      {dayNum}
                     </span>
-                  </div>
-                )}
 
-                {/* Weekday — без акцента */}
-                <span className="text-[8px] font-mono uppercase tracking-wider text-white/40">
-                  {weekday}
-                </span>
-
-                {/* Day number — мягкая пульсация цифры */}
-                <span className={`text-xl font-display font-black leading-none tracking-tight ${
-                  isToday ? 'text-white animate-pulse' : ''
-                }`}>
-                  {dayNum}
-                </span>
-
-                {/* Event micro label */}
-                {hasEvents ? (
-                  <div className="flex flex-col items-center gap-0.5 w-full">
-                    <span className="text-[8px] font-mono uppercase tracking-widest text-brand/90 font-black block text-center truncate max-w-full">
-                      {getShortEventName(primaryEvent.id, primaryEvent.type)}
-                      {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
-                    </span>
-                    
-                    {/* Circle indicators */}
-                    <div className="flex gap-0.5 justify-center items-center h-1 mt-0.5">
-                      {dayEvents.map((e, eIdx) => (
-                        <span 
-                          key={e.id + eIdx} 
-                          className={`w-1 h-1 rounded-full ${getTypeColor(e.type)}`} 
-                        />
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <span className="text-[10px] font-mono text-white/5">ー</span>
-                )}
-              </button>
+                    {/* Event micro label */}
+                    {hasEvents ? (
+                      <div className="flex flex-col items-center gap-0.5 w-full">
+                        <span className="text-[8px] font-mono uppercase tracking-widest text-brand/90 font-black block text-center truncate max-w-full">
+                          {getShortEventName(primaryEvent.id, primaryEvent.type)}
+                          {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
+                        </span>
+                        
+                        <div className="flex gap-0.5 justify-center items-center h-1 mt-0.5">
+                          {dayEvents.map((e, eIdx) => (
+                            <span 
+                              key={e.id + eIdx} 
+                              className={`w-1 h-1 rounded-full ${getTypeColor(e.type)}`} 
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : !isCompact && (
+                      <span className="text-[10px] font-mono text-white/5">ー</span>
+                    )}
+                  </button>
+                );
+              })()}
             </div>
           );
         })}

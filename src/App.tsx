@@ -189,10 +189,11 @@ export default function App() {
         
         {/* Compact Calendar Grid with no headers */}
         <section id="calendar-widget-block" className="pt-2">
-          <CalendarGrid 
-            events={events} 
-            selectedEventId={selectedEventId} 
-            onSelectEvent={setSelectedEventId} 
+          <CalendarGrid
+            events={events}
+            selectedEventId={selectedEventId}
+            onSelectEvent={setSelectedEventId}
+            onOpenDetail={setActiveDetailEvent}
           />
         </section>
 
