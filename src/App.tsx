@@ -13,6 +13,7 @@ import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
 import VerificationModal from './components/VerificationModal';
 import BirthdayCalendar from './components/BirthdayCalendar';
+import FeedbackModal from './components/FeedbackModal';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
+  const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -584,6 +586,20 @@ export default function App() {
             const updated = [...birthdays, newBirthday];
             setBirthdays(updated);
             localStorage.setItem('moment_birthdays', JSON.stringify(updated));
+          }}
+        />
+      )}
+
+      {/* FEEDBACK MODAL */}
+      {feedbackEvent && (
+        <FeedbackModal
+          eventId={feedbackEvent.id}
+          eventTitle={feedbackEvent.title}
+          onClose={() => setFeedbackEvent(null)}
+          onSubmit={(data) => {
+            console.log('Feedback submitted:', data);
+            // TODO: Отправить фидбек в бота
+            setFeedbackEvent(null);
           }}
         />
       )}
