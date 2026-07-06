@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy
 } from 'lucide-react';
 import { INITIAL_EVENTS } from './data';
 import { CommunityEvent, Registration } from './types';
@@ -14,6 +14,7 @@ import CalendarGrid from './components/CalendarGrid';
 import VerificationModal from './components/VerificationModal';
 import BirthdayCalendar from './components/BirthdayCalendar';
 import FeedbackModal from './components/FeedbackModal';
+import UserStats from './components/UserStats';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
+  const [showUserStats, setShowUserStats] = useState<boolean>(false);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -191,6 +193,18 @@ export default function App() {
               <Gift className="w-4 h-4 text-brand" />
               <span className="hidden sm:inline">Дни Рождения</span>
             </button>
+
+            {/* User Stats button */}
+            {registeredEventIds.length > 0 && (
+              <button
+                onClick={() => setShowUserStats(true)}
+                className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+                id="show-user-stats-btn"
+              >
+                <Trophy className="w-4 h-4 text-brand" />
+                <span className="hidden sm:inline">Мой Прогресс</span>
+              </button>
+            )}
 
             {/* Persistent registrations manager */}
             {registeredEventIds.length > 0 && (
@@ -601,6 +615,15 @@ export default function App() {
             // TODO: Отправить фидбек в бота
             setFeedbackEvent(null);
           }}
+        />
+      )}
+
+      {/* USER STATS MODAL */}
+      {showUserStats && (
+        <UserStats
+          registrations={userRegistrations}
+          events={events}
+          onClose={() => setShowUserStats(false)}
         />
       )}
     </div>
