@@ -11,6 +11,7 @@ import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
 import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
+import VerificationModal from './components/VerificationModal';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
@@ -22,6 +23,8 @@ export default function App() {
   const [showMyRegistrationsModal, setShowMyRegistrationsModal] = useState<boolean>(false);
   const [showManifestoModal, setShowManifestoModal] = useState<boolean>(false);
   const [activeDetailEvent, setActiveDetailEvent] = useState<CommunityEvent | null>(null);
+  const [verifyingEvent, setVerifyingEvent] = useState<CommunityEvent | null>(null);
+  const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -515,6 +518,22 @@ export default function App() {
           isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
           onClose={() => setActiveDetailEvent(null)}
           onRegisterClick={(evt) => setRegisteringEvent(evt)}
+        />
+      )}
+
+      {/* VERIFICATION MODAL */}
+      {verifyingEvent && (
+        <VerificationModal
+          eventId={verifyingEvent.id}
+          eventTitle={verifyingEvent.title}
+          requiresOnboarding={verifyingEvent.needsOnboarding || false}
+          onClose={() => setVerifyingEvent(null)}
+          onSubmit={(data) => {
+            setVerificationData(data);
+            // TODO: Отправить данные в бота для верификации
+            console.log('Verification submitted:', data);
+            setVerifyingEvent(null);
+          }}
         />
       )}
     </div>
