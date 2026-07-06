@@ -219,35 +219,33 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent }:
                 className={`
                   h-[106px] w-[78px] rounded-2xl border flex flex-col justify-between items-center p-2 transition-all outline-none cursor-pointer relative
                   ${isToday
-                    ? 'border-brand bg-brand/15 text-white shadow-[0_0_20px_rgba(230,253,58,0.2)]'
+                    ? 'border-white/10 bg-[#161616] text-white'
                     : hasEvents && isSelected
-                      ? 'border-brand bg-brand/10 text-white shadow-[0_0_15px_rgba(230,253,58,0.15)]'
+                      ? 'border-brand/50 bg-brand/5 text-white'
                       : hasEvents
                         ? 'border-white/15 hover:border-brand/50 bg-[#161616] text-white hover:bg-[#1E1E1E]'
                         : 'border-transparent text-white/20 hover:bg-white/5 hover:text-white/50'
                   }
                 `}
               >
-                {/* TODAY pulsing dot */}
+                {/* TODAY pulsing dot — единственный акцент */}
                 {isToday && (
                   <div className="absolute -top-0.5 -right-0.5 flex items-center justify-center" title="Сегодня">
-                    <span className="relative flex h-2.5 w-2.5">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
-                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
                     </span>
                   </div>
                 )}
 
-                {/* Weekday */}
-                <span className={`text-[8px] font-mono uppercase tracking-wider ${
-                  isToday ? 'text-brand font-black' : 'text-white/40'
-                }`}>
+                {/* Weekday — без акцента */}
+                <span className="text-[8px] font-mono uppercase tracking-wider text-white/40">
                   {weekday}
                 </span>
 
-                {/* Day number — сегодня жирно и ярко */}
+                {/* Day number — мягкая пульсация цифры */}
                 <span className={`text-xl font-display font-black leading-none tracking-tight ${
-                  isToday ? 'text-brand drop-shadow-[0_0_8px_rgba(230,253,58,0.3)]' : ''
+                  isToday ? 'text-white animate-pulse' : ''
                 }`}>
                   {dayNum}
                 </span>
