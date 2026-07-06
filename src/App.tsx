@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift
 } from 'lucide-react';
 import { INITIAL_EVENTS } from './data';
 import { CommunityEvent, Registration } from './types';
@@ -12,6 +12,7 @@ import RegistrationModal from './components/RegistrationModal';
 import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
 import VerificationModal from './components/VerificationModal';
+import BirthdayCalendar from './components/BirthdayCalendar';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
@@ -25,6 +26,7 @@ export default function App() {
   const [activeDetailEvent, setActiveDetailEvent] = useState<CommunityEvent | null>(null);
   const [verifyingEvent, setVerifyingEvent] = useState<CommunityEvent | null>(null);
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
+  const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -164,6 +166,16 @@ export default function App() {
             >
               <BookOpen className="w-4 h-4 text-brand" />
               <span className="hidden sm:inline">Манифест</span>
+            </button>
+
+            {/* Birthday Calendar button */}
+            <button
+              onClick={() => setShowBirthdayCalendar(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+              id="show-birthday-calendar-btn"
+            >
+              <Gift className="w-4 h-4 text-brand" />
+              <span className="hidden sm:inline">Дни Рождения</span>
             </button>
 
             {/* Persistent registrations manager */}
@@ -548,6 +560,14 @@ export default function App() {
             console.log('Verification submitted:', data);
             setVerifyingEvent(null);
           }}
+        />
+      )}
+
+      {/* BIRTHDAY CALENDAR MODAL */}
+      {showBirthdayCalendar && (
+        <BirthdayCalendar
+          birthdays={[]} // TODO: Загружать из базы данных
+          onClose={() => setShowBirthdayCalendar(false)}
         />
       )}
     </div>
