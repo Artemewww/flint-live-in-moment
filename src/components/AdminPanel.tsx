@@ -33,62 +33,120 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     {
       title: 'Мужская баня FLINT',
       type: 'male' as const,
-      time: '19:00 - 23:00',
+      time: '19:00',
+      timeEnd: '23:00',
       maxParticipants: 12,
       priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 ₽/чел',
+      priceAmount: 500,
       entryThreshold: 'Только мужчины • 100% трезвость • личный веник',
+      entryType: 'male' as const,
       description: 'Каноническая перезагрузка ума и тела. Профессиональный пар, закалка ледяной купелью, глубокий прогрев дубовыми вениками и честные разговоры по душам у открытого камина.',
-      image: '/assets/images/nano_banya_flint_1780473778276.png'
+      image: '/assets/images/nano_banya_flint_1780473778276.png',
+      program: [
+        '18:30 - Сбор, знакомство',
+        '19:00 - Парилка (дубовые веники)',
+        '20:30 - Перекус, чай',
+        '21:00 - Честные разговоры у камина',
+        '23:00 - Завершение'
+      ]
     },
     {
       title: 'Гиревой вояж у воды',
       type: 'active' as const,
-      time: '10:00 - 12:00',
+      time: '10:00',
+      timeEnd: '12:00',
       maxParticipants: 15,
       priceLabel: 'На совесть',
+      priceAmount: 0,
       entryThreshold: '100% трезвость • спортивная форма',
+      entryType: 'all' as const,
       description: 'Утренняя силовая пробежка у Минского моря. Гири, зарядка, свежий воздух.',
-      image: '/assets/images/kettlebell_walk.png'
+      image: '/assets/images/kettlebell_walk.png',
+      program: [
+        '10:00 - Сбор, разминка',
+        '10:15 - Силовая тренировка',
+        '11:30 - Закалка, купание',
+        '12:00 - Завершение'
+      ]
     },
     {
       title: 'Экзистенциальный Кинотеатр',
       type: 'intellectual' as const,
-      time: '19:30 - 22:00',
+      time: '19:30',
+      timeEnd: '22:00',
       maxParticipants: 20,
       priceLabel: 'На совесть',
+      priceAmount: 0,
       entryThreshold: '100% трезвость',
+      entryType: 'all' as const,
       description: 'Рефлексия и глубокий разбор великих кинокартин. Философские дискуссии после просмотра.',
-      image: '/assets/images/cinema.png'
+      image: '/assets/images/cinema.png',
+      program: [
+        '19:30 - Знакомство',
+        '19:45 - Просмотр фильма',
+        '21:30 - Философская дискуссия',
+        '22:00 - Завершение'
+      ]
     },
     {
       title: 'Читательский круг "Смыслы"',
       type: 'intellectual' as const,
-      time: '16:00 - 19:00',
+      time: '16:00',
+      timeEnd: '19:00',
       maxParticipants: 15,
       priceLabel: 'На совесть',
+      priceAmount: 0,
       entryThreshold: '100% трезвость • книга прочитана',
+      entryType: 'all' as const,
       description: 'Интеллектуальный разбор психологических трудов. Глубокие вопросы и честные ответы.',
-      image: '/assets/images/reading.png'
+      image: '/assets/images/reading.png',
+      program: [
+        '16:00 - Знакомство',
+        '16:15 - Обсуждение книги',
+        '17:30 - Глубокие вопросы',
+        '19:00 - Завершение'
+      ]
     },
     {
       title: 'Лесной поход к Ислочи',
       type: 'active' as const,
-      time: '08:00 - 20:00',
+      time: '08:00',
+      timeEnd: '20:00',
       maxParticipants: 12,
       priceLabel: 'Аренда делится на всех',
+      priceAmount: 300,
       entryThreshold: '100% трезвость • спортивная форма • палатка',
+      entryType: 'all' as const,
       description: 'Проводники, дикий костер и лесные переходы. Полный день на природе.',
-      image: '/assets/images/hiking.png'
+      image: '/assets/images/hiking.png',
+      program: [
+        '08:00 - Сбор, выезд',
+        '10:00 - Начало перехода',
+        '13:00 - Обед у костра',
+        '16:00 - Осмотр достопримечательностей',
+        '18:00 - Возвращение',
+        '20:00 - Завершение'
+      ]
     },
     {
       title: 'Покерный заезд "Трезвый круг"',
       type: 'mixed' as const,
-      time: '18:00 - 23:00',
+      time: '18:00',
+      timeEnd: '23:00',
       maxParticipants: 16,
       priceLabel: 'На совесть',
+      priceAmount: 0,
       entryThreshold: '100% трезвость',
+      entryType: 'all' as const,
       description: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.',
-      image: '/assets/images/poker.png'
+      image: '/assets/images/poker.png',
+      program: [
+        '18:00 - Знакомство, раздача карт',
+        '18:30 - Турнир',
+        '21:00 - Перерыв, угощения',
+        '21:30 - Финальный стол',
+        '23:00 - Завершение'
+      ]
     }
   ];
 
@@ -104,6 +162,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       date: eventDate.toISOString().split('T')[0],
       dateLabel: `Через 7 дней (${eventDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })})`,
       time: template.time,
+      timeEnd: template.timeEnd,
       location: 'Уточняется',
       painPoint: '',
       houseQualities: [],
@@ -113,8 +172,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       telegramBotUrl: 'https://t.me/campsflint_bot',
       priceType: 'conscience',
       priceLabel: template.priceLabel,
+      priceAmount: template.priceAmount,
       entryThreshold: template.entryThreshold,
-      status: 'locked'
+      entryType: template.entryType,
+      status: 'locked',
+      program: template.program,
+      notifications: {
+        reminder7d: true,
+        reminder3d: true,
+        reminder1d: true,
+        reminder3h: true,
+        reminder1h: true
+      }
     };
     onAddEvent(newEvent);
     setShowTemplates(false);
@@ -1004,12 +1073,15 @@ function AddEventModal({ onClose, onAdd }: {
     date: '',
     dateLabel: '',
     time: '',
+    timeEnd: '',
     location: '',
     type: 'mixed' as CommunityEvent['type'],
     maxParticipants: 15,
     description: '',
     priceLabel: 'На совесть',
-    entryThreshold: '100% Трезвость'
+    priceAmount: 0,
+    entryThreshold: '100% Трезвость',
+    entryType: 'all' as 'male' | 'female' | 'all'
   });
 
   const handleAdd = () => {
@@ -1023,6 +1095,7 @@ function AddEventModal({ onClose, onAdd }: {
       date: formData.date,
       dateLabel: formData.dateLabel || formData.date,
       time: formData.time,
+      timeEnd: formData.timeEnd,
       location: formData.location,
       painPoint: '',
       houseQualities: [],
@@ -1032,8 +1105,18 @@ function AddEventModal({ onClose, onAdd }: {
       telegramBotUrl: 'https://t.me/campsflint_bot',
       priceType: 'conscience',
       priceLabel: formData.priceLabel,
+      priceAmount: formData.priceAmount,
       entryThreshold: formData.entryThreshold,
-      status: 'locked'
+      entryType: formData.entryType,
+      status: 'locked',
+      program: [],
+      notifications: {
+        reminder7d: true,
+        reminder3d: true,
+        reminder1d: true,
+        reminder3h: true,
+        reminder1h: true
+      }
     };
 
     onAdd(newEvent);
@@ -1069,9 +1152,27 @@ function AddEventModal({ onClose, onAdd }: {
 
             <input
               type="text"
-              placeholder="Время"
+              placeholder="Время начала (19:00)"
               value={formData.time}
               onChange={(e) => setFormData({...formData, time: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              placeholder="Время окончания (23:00)"
+              value={formData.timeEnd}
+              onChange={(e) => setFormData({...formData, timeEnd: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+            />
+
+            <input
+              type="number"
+              placeholder="Стоимость аренды (₽)"
+              value={formData.priceAmount}
+              onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value)})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
             />
           </div>
@@ -1113,13 +1214,25 @@ function AddEventModal({ onClose, onAdd }: {
             </select>
           </div>
 
-          <input
-            type="text"
-            placeholder="Цена / Оплата"
-            value={formData.priceLabel}
-            onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-          />
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="text"
+              placeholder="Цена / Оплата"
+              value={formData.priceLabel}
+              onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+            />
+
+            <select
+              value={formData.entryType}
+              onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            >
+              <option value="all">Все</option>
+              <option value="male">Только мужчины</option>
+              <option value="female">Только женщины</option>
+            </select>
+          </div>
 
           <input
             type="text"

@@ -27,8 +27,13 @@ export interface CommunityEvent {
   date: string; // YYYY-MM-DD format (e.g., "2026-06-04")
   dateLabel: string; // Readable single day or range, e.g. "4 июня в 19:00"
   time: string; // Weekly scale, e.g. "Каждый четверг в 19:00" or "Пятница - Воскресенье"
+  timeEnd: string; // Время окончания, e.g. "23:00"
   location: string;
   locationDetails?: string;
+  coordinates?: {
+    lat: number;
+    lng: number;
+  };
   painPoint: string; // "Главная боль, которую закрывает"
   houseQualities: HouseQuality[];
   image: string;
@@ -38,12 +43,24 @@ export interface CommunityEvent {
   // Flint system thresholds & prices
   priceType: 'free' | 'conscience' | 'paid';
   priceLabel: string;     // e.g. "50 BYN на аренду"
+  priceAmount: number;    // Основная стоимость аренды (в рублях)
   entryThreshold: string; // e.g. "100% Чистота + Вклад на совесть/веник"
+  entryType: 'male' | 'female' | 'all'; // Кто может участвовать
   needsOnboarding?: boolean; // Фильтр/Табель отбора
   /** Текущий статус набора. По умолчанию — 'open'. */
   status?: EventStatus;
   /** Текст-подсказка для события «под замочком», напр. «Даты уточняются». */
   lockedHint?: string;
+  /** Программа мероприятия */
+  program: string[];
+  /** Уведомления */
+  notifications: {
+    reminder7d: boolean;
+    reminder3d: boolean;
+    reminder1d: boolean;
+    reminder3h: boolean;
+    reminder1h: boolean;
+  };
 }
 
 /** Возвращает сегодняшнюю дату в формате YYYY-MM-DD. */
@@ -73,23 +90,43 @@ export function isRegistrationOpen(event: CommunityEvent, today: string = getTod
 }
 
 export interface Registration {
+  id: string;
   eventId: string;
-  name: string;
-  phone: string;
   telegram: string;
+  name: string;
+  phone?: string;
+  birthday?: string;
+  status: 'pending' | 'confirmed' | 'rejected';
+  paymentStatus: 'pending' | 'paid' | 'free';
+  paymentAmount: number;
+  donationAmount: number;
+  inviter?: string;
+  hasTransport: boolean;
+  transportDetails?: string;
+  transportSeats: number;
+  inventory: string[];
   registeredAt: string;
-  /** Статус верификации участника */
-  verificationStatus: 'pending' | 'approved' | 'rejected' | 'voting';
-  /** ID голосования в группе (если нужно) */
-  votingMessageId?: string;
-  /** Количество голосов "за" */
-  votesFor?: number;
-  /** Количество голосов "против" */
-  votesAgainst?: number;
-  /** Кто проголосовал (telegram IDs) */
-  voters?: string[];
-  /** Примечания организаторов */
-  adminNotes?: string;
+  confirmedAt?: string;
+  notes?: string;
+}
+
+export interface UserProfile {
+  telegram: string;
+  name: string;
+  phone?: string;
+  birthday?: string;
+  achievements: Achievement[];
+  totalEvents: number;
+  totalEventsAttended: number;
+  createdAt: string;
+}
+
+export interface Achievement {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlockedAt: string;
 }
 
 export function getYandexMapsUrl(location: string): string {
