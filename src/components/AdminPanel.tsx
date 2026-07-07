@@ -206,8 +206,26 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     onUpdateEvent({ ...event, participantsCount: count });
   };
 
-  const loadEventStats = (event: CommunityEvent) => {
+  const loadEventStats = async (event: CommunityEvent) => {
     setSelectedEvent(event);
+    
+    try {
+      // Пробуем загрузить из API
+      const res = await fetch(`/api/admin/events/${event.id}/registrations`, {
+        headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+      });
+      
+      if (res.ok) {
+        const data = await res.json();
+        setEventStats(data.stats);
+        setActiveTab('overview');
+        return;
+      }
+    } catch (err) {
+      console.error('Failed to load from API, using localStorage:', err);
+    }
+    
+    // Fallback на localStorage
     const registrations = JSON.parse(localStorage.getItem('event_registrations') || '[]');
     const eventRegs = registrations.filter((r: any) => r.eventId === event.id);
     
@@ -229,8 +247,26 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setBroadcastResult(null);
 
     try {
-      // Получаем всех пользователей из localStorage
-      const registrations: Array<{telegram: string}> = JSON.parse(localStorage.getItem('event_registrations') || '[]');
+      // Получаем всех пользователей из API или localStorage
+      let registrations: Array<{telegram: string}> = [];
+      
+      try {
+        const res = await fetch(`/api/admin/events/${event.id}/registrations`, {
+          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+        });
+        if (res.ok) {
+          const data = await res.json();
+          registrations = data.registrations.map((r: any) => ({ telegram: r.telegram }));
+        }
+      } catch (err) {
+        console.error('Failed to load from API, using localStorage:', err);
+      }
+      
+      // Fallback на localStorage
+      if (registrations.length === 0) {
+        registrations = JSON.parse(localStorage.getItem('event_registrations') || '[]');
+      }
+      
       const uniqueUsers = Array.from(new Map(registrations.map(r => [r.telegram, r])).values()) as Array<{telegram: string}>;
 
       if (uniqueUsers.length === 0) {
@@ -244,7 +280,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       }
 
       // Отправляем уведомление через Telegram Bot API
-      const botToken = '7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A'; // Токен бота @campsflint_bot
+      const botToken = process.env.TELEGRAM_BOT_TOKEN || '7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A';
       
       const results = await Promise.allSettled(
         uniqueUsers.map(async (user: {telegram: string}) => {
@@ -685,11 +721,21 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                   Редактировать
                                 </button>
                                 <button
-                                  onClick={() => {
+                                  onClick={async () => {
                                     if (confirm(`Удалить участника ${reg.name}?`)) {
-                                      const regs = JSON.parse(localStorage.getItem('event_registrations') || '[]');
-                                      const updated = regs.filter((r: any) => r.id !== reg.id);
-                                      localStorage.setItem('event_registrations', JSON.stringify(updated));
+                                      // Пробуем удалить через API
+                                      try {
+                                        await fetch(`/api/admin/registrations/${reg.id}`, {
+                                          method: 'DELETE',
+                                          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+                                        });
+                                      } catch (err) {
+                                        console.error('API delete failed, using localStorage:', err);
+                                        // Fallback на localStorage
+                                        const regs = JSON.parse(localStorage.getItem('event_registrations') || '[]');
+                                        const updated = regs.filter((r: any) => r.id !== reg.id);
+                                        localStorage.setItem('event_registrations', JSON.stringify(updated));
+                                      }
                                       loadEventStats(selectedEvent);
                                     }
                                   }}
