@@ -22,11 +22,9 @@ export default function InfoSection({
   // Находим ближайшее предстоящее событие (первое не прошедшее)
   const today = getToday();
   const featuredEvent = events && events.length > 0
-    ? (events
+    ? events
         .filter(e => e.date >= today && e.status !== 'locked')
         .sort((a, b) => a.date.localeCompare(b.date))[0]
-      || events.find(e => e.id === 'banya-flint-weekly')
-      || events[0])
     : null;
 
   // Если событий нет - ничего не показываем

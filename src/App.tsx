@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
 import InfoSection from './components/InfoSection';
@@ -36,6 +36,7 @@ export default function App() {
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -218,8 +219,17 @@ export default function App() {
             </div>
           </div>
 
-          {/* Core navigation controls / Trigger buttons */}
-          <div className="flex items-center gap-4" id="nav-actions">
+          {/* Mobile hamburger button */}
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="md:hidden p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all cursor-pointer"
+            id="mobile-menu-btn"
+          >
+            {mobileMenuOpen ? <X className="w-5 h-5 text-white" /> : <Menu className="w-5 h-5 text-white" />}
+          </button>
+
+          {/* Desktop nav (hidden on mobile) */}
+          <div className="hidden md:flex items-center gap-4" id="nav-actions">
             
             {/* Manifesto button */}
             <button
@@ -228,7 +238,7 @@ export default function App() {
               id="show-manifesto-header-btn"
             >
               <BookOpen className="w-4 h-4 text-brand" />
-              <span className="hidden sm:inline">Манифест</span>
+              <span>Манифест</span>
             </button>
 
             {/* Birthday Calendar button */}
@@ -238,7 +248,7 @@ export default function App() {
               id="show-birthday-calendar-btn"
             >
               <Gift className="w-4 h-4 text-brand" />
-              <span className="hidden sm:inline">Дни Рождения</span>
+              <span>Дни Рождения</span>
             </button>
 
             {/* User Stats button */}
@@ -249,7 +259,7 @@ export default function App() {
                 id="show-user-stats-btn"
               >
                 <Trophy className="w-4 h-4 text-brand" />
-                <span className="hidden sm:inline">Мой Прогресс</span>
+                <span>Мой Прогресс</span>
               </button>
             )}
 
@@ -261,7 +271,7 @@ export default function App() {
               title="Админ-панель (скрыта)"
             >
               <Shield className="w-4 h-4 text-brand" />
-              <span className="hidden sm:inline">Админ</span>
+              <span>Админ</span>
             </button>
 
             {/* Persistent registrations manager */}
@@ -272,12 +282,11 @@ export default function App() {
                 id="my-regs-btn"
               >
                 <UserCheck className="w-4 h-4 text-brand" />
-                <span className="hidden sm:inline">Мои Участия</span>
+                <span>Мои Участия</span>
                 <span className="bg-brand text-black font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center">
                   {registeredEventIds.length}
                 </span>
                 
-                {/* Micro-dot pulse indicator */}
                 <span className="absolute -top-1 -right-1 flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
@@ -296,6 +305,69 @@ export default function App() {
               <span className="font-mono text-[9px] text-black/50 hidden sm:inline">@campsflint_bot</span>
             </a>
           </div>
+
+          {/* Mobile menu overlay */}
+          {mobileMenuOpen && (
+            <div 
+              className="fixed inset-0 top-20 z-50 bg-[#0A0A0A]/95 backdrop-blur-md md:hidden"
+              onClick={() => setMobileMenuOpen(false)}
+            >
+              <div 
+                className="flex flex-col items-start gap-3 p-6 max-w-sm mx-auto"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  onClick={() => { setShowManifestoModal(true); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                >
+                  <BookOpen className="w-4 h-4 text-brand" />
+                  Манифест
+                </button>
+
+                <button
+                  onClick={() => { setShowBirthdayCalendar(true); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                >
+                  <Gift className="w-4 h-4 text-brand" />
+                  Дни Рождения
+                </button>
+
+                {registeredEventIds.length > 0 && (
+                  <button
+                    onClick={() => { setShowUserStats(true); setMobileMenuOpen(false); }}
+                    className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                  >
+                    <Trophy className="w-4 h-4 text-brand" />
+                    Мой Прогресс ({registeredEventIds.length})
+                  </button>
+                )}
+
+                {registeredEventIds.length > 0 && (
+                  <button
+                    onClick={() => { setShowMyRegistrationsModal(true); setMobileMenuOpen(false); }}
+                    className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-[#151515] hover:bg-white/10 cursor-pointer flex items-center gap-3 font-mono"
+                  >
+                    <UserCheck className="w-4 h-4 text-brand" />
+                    Мои Участия
+                    <span className="bg-brand text-black font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center ml-auto">
+                      {registeredEventIds.length}
+                    </span>
+                  </button>
+                )}
+
+                <a
+                  href="https://t.me/campsflint_bot"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="w-full bg-brand hover:bg-brand-hover text-black px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 font-bold shadow-lg shadow-brand/10"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <span>В Бот</span>
+                  <span className="font-mono text-[9px] text-black/50">@campsflint_bot</span>
+                </a>
+              </div>
+            </div>
+          )}
         </div>
       </header>
 
