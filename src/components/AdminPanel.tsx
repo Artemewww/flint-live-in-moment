@@ -92,8 +92,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       title: template.title,
       description: template.description,
       type: template.type,
-      date: new Date().toISOString().split('T')[0],
-      dateLabel: 'Выберите дату',
+      date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // +7 дней
+      dateLabel: 'Через 7 дней',
       time: template.time,
       location: 'Уточняется',
       painPoint: '',
@@ -997,7 +997,10 @@ function AddEventModal({ onClose, onAdd }: {
     time: '',
     location: '',
     type: 'mixed' as CommunityEvent['type'],
-    maxParticipants: 15
+    maxParticipants: 15,
+    description: '',
+    priceLabel: 'На совесть',
+    entryThreshold: '100% Трезвость'
   });
 
   const handleAdd = () => {
@@ -1006,7 +1009,7 @@ function AddEventModal({ onClose, onAdd }: {
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
       title: formData.title,
-      description: 'Описание будет добавлено позже',
+      description: formData.description || 'Описание будет добавлено позже',
       type: formData.type,
       date: formData.date,
       dateLabel: formData.dateLabel || formData.date,
@@ -1019,8 +1022,9 @@ function AddEventModal({ onClose, onAdd }: {
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
       priceType: 'conscience',
-      priceLabel: 'На совесть',
-      entryThreshold: '100% Трезвость'
+      priceLabel: formData.priceLabel,
+      entryThreshold: formData.entryThreshold,
+      status: 'locked'
     };
 
     onAdd(newEvent);
@@ -1040,26 +1044,28 @@ function AddEventModal({ onClose, onAdd }: {
         <div className="space-y-3">
           <input
             type="text"
-            placeholder="Название"
+            placeholder="Название *"
             value={formData.title}
             onChange={(e) => setFormData({...formData, title: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
 
-          <input
-            type="date"
-            value={formData.date}
-            onChange={(e) => setFormData({...formData, date: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-          />
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="date"
+              value={formData.date}
+              onChange={(e) => setFormData({...formData, date: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            />
 
-          <input
-            type="text"
-            placeholder="Время"
-            value={formData.time}
-            onChange={(e) => setFormData({...formData, time: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-          />
+            <input
+              type="text"
+              placeholder="Время"
+              value={formData.time}
+              onChange={(e) => setFormData({...formData, time: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+            />
+          </div>
 
           <input
             type="text"
@@ -1069,16 +1075,50 @@ function AddEventModal({ onClose, onAdd }: {
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
 
-          <select
-            value={formData.type}
-            onChange={(e) => setFormData({...formData, type: e.target.value as any})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-          >
-            <option value="male">Мужское Братство</option>
-            <option value="mixed">Смешанный Круг</option>
-            <option value="intellectual">Интеллектуальный Клуб</option>
-            <option value="active">Активный Выезд</option>
-          </select>
+          <textarea
+            placeholder="Описание мероприятия"
+            value={formData.description}
+            onChange={(e) => setFormData({...formData, description: e.target.value})}
+            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+            rows={3}
+          />
+
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              type="number"
+              placeholder="Макс. участников"
+              value={formData.maxParticipants}
+              onChange={(e) => setFormData({...formData, maxParticipants: parseInt(e.target.value)})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            />
+
+            <select
+              value={formData.type}
+              onChange={(e) => setFormData({...formData, type: e.target.value as any})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            >
+              <option value="male">Мужское Братство</option>
+              <option value="mixed">Смешанный Круг</option>
+              <option value="intellectual">Интеллектуальный Клуб</option>
+              <option value="active">Активный Выезд</option>
+            </select>
+          </div>
+
+          <input
+            type="text"
+            placeholder="Цена / Оплата"
+            value={formData.priceLabel}
+            onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
+            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+          />
+
+          <input
+            type="text"
+            placeholder="Порог входа"
+            value={formData.entryThreshold}
+            onChange={(e) => setFormData({...formData, entryThreshold: e.target.value})}
+            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+          />
         </div>
 
         <div className="flex gap-2 pt-2">
