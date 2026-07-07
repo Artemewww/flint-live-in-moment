@@ -37,7 +37,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 12,
       priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 ₽/чел',
       entryThreshold: 'Только мужчины • 100% трезвость • личный веник',
-      description: 'Каноническая перезагрузка ума и тела. Профессиональный пар, закалка ледяной купелью, глубокий прогрев дубовыми вениками и честные разговоры по душам у открытого камина.'
+      description: 'Каноническая перезагрузка ума и тела. Профессиональный пар, закалка ледяной купелью, глубокий прогрев дубовыми вениками и честные разговоры по душам у открытого камина.',
+      image: '/assets/images/nano_banya_flint_1780473778276.png'
     },
     {
       title: 'Гиревой вояж у воды',
@@ -46,7 +47,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 15,
       priceLabel: 'На совесть',
       entryThreshold: '100% трезвость • спортивная форма',
-      description: 'Утренняя силовая пробежка у Минского моря. Гири, зарядка, свежий воздух.'
+      description: 'Утренняя силовая пробежка у Минского моря. Гири, зарядка, свежий воздух.',
+      image: '/assets/images/kettlebell_walk.png'
     },
     {
       title: 'Экзистенциальный Кинотеатр',
@@ -55,7 +57,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 20,
       priceLabel: 'На совесть',
       entryThreshold: '100% трезвость',
-      description: 'Рефлексия и глубокий разбор великих кинокартин. Философские дискуссии после просмотра.'
+      description: 'Рефлексия и глубокий разбор великих кинокартин. Философские дискуссии после просмотра.',
+      image: '/assets/images/cinema.png'
     },
     {
       title: 'Читательский круг "Смыслы"',
@@ -64,7 +67,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 15,
       priceLabel: 'На совесть',
       entryThreshold: '100% трезвость • книга прочитана',
-      description: 'Интеллектуальный разбор психологических трудов. Глубокие вопросы и честные ответы.'
+      description: 'Интеллектуальный разбор психологических трудов. Глубокие вопросы и честные ответы.',
+      image: '/assets/images/reading.png'
     },
     {
       title: 'Лесной поход к Ислочи',
@@ -73,7 +77,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 12,
       priceLabel: 'Аренда делится на всех',
       entryThreshold: '100% трезвость • спортивная форма • палатка',
-      description: 'Проводники, дикий костер и лесные переходы. Полный день на природе.'
+      description: 'Проводники, дикий костер и лесные переходы. Полный день на природе.',
+      image: '/assets/images/hiking.png'
     },
     {
       title: 'Покерный заезд "Трезвый круг"',
@@ -82,23 +87,27 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: 16,
       priceLabel: 'На совесть',
       entryThreshold: '100% трезвость',
-      description: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.'
+      description: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.',
+      image: '/assets/images/poker.png'
     }
   ];
 
   const createFromTemplate = (template: typeof eventTemplates[0]) => {
+    const eventDate = new Date();
+    eventDate.setDate(eventDate.getDate() + 7); // +7 дней
+    
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
       title: template.title,
       description: template.description,
       type: template.type,
-      date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], // +7 дней
-      dateLabel: 'Через 7 дней',
+      date: eventDate.toISOString().split('T')[0],
+      dateLabel: `Через 7 дней (${eventDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })})`,
       time: template.time,
       location: 'Уточняется',
       painPoint: '',
       houseQualities: [],
-      image: '/assets/images/default_event.png',
+      image: template.image || '/assets/images/default_event.png',
       maxParticipants: template.maxParticipants,
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
