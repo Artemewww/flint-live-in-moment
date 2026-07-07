@@ -26,7 +26,13 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     hasTransport: false,
     transportDetails: '',
     transportSeats: 0,
-    inventory: ''
+    inventory: '',
+    category: 'male' as 'male' | 'female',
+    dietary: 'omnivore' as 'omnivore' | 'vegetarian' | 'vegan',
+    guestCount: 0,
+    equipment: '',
+    roles: '',
+    source: ''
   });
 
   // Referral flow inputs
@@ -86,7 +92,13 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
       inventory: formData.inventory ? formData.inventory.split(',').map(item => item.trim()).filter(Boolean) : [],
       paymentStatus: 'pending',
       paymentAmount: 0,
-      donationAmount: 0
+      donationAmount: 0,
+      category: formData.category,
+      dietary: formData.dietary,
+      guestCount: formData.guestCount || undefined,
+      equipment: formData.equipment ? formData.equipment.split(',').map(item => item.trim()).filter(Boolean) : undefined,
+      roles: formData.roles ? formData.roles.split(',').map(item => item.trim()).filter(Boolean) : undefined,
+      source: formData.source || undefined
     };
 
     onSuccess(reg);
@@ -410,6 +422,123 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
                         placeholder="Палатка, спальник, каремат, газовка..."
                         rows={2}
+                      />
+                    </div>
+
+                    {/* Категория участника */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                      <label className="text-xs text-white/60 block">Категория участника *</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, category: 'male'} as any)}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                            formData.category === 'male'
+                              ? 'bg-brand text-black'
+                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                          }`}
+                        >
+                          Мужчина
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, category: 'female'} as any)}
+                          className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
+                            formData.category === 'female'
+                              ? 'bg-brand text-black'
+                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                          }`}
+                        >
+                          Женщина
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Пищевые предпочтения */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                      <label className="text-xs text-white/60 block">Пищевые предпочтения</label>
+                      <select
+                        value={formData.dietary}
+                        onChange={(e) => setFormData({...formData, dietary: e.target.value as any})}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
+                      >
+                        <option value="omnivore">Всеядный</option>
+                        <option value="vegetarian">Вегетарианец</option>
+                        <option value="vegan">Веган</option>
+                      </select>
+                    </div>
+
+                    {/* Гости */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                      <label className="text-xs text-white/60 block">Количество гостей (с собой)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        max="5"
+                        value={formData.guestCount}
+                        onChange={(e) => setFormData({...formData, guestCount: parseInt(e.target.value) || 0})}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
+                        placeholder="0"
+                      />
+                    </div>
+
+                    {/* Снаряжение (чек-лист) */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                      <label className="text-xs text-white/60 block">Снаряжение (выберите что есть)</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {['Вилка', 'Ложка', 'Спальник', 'Фонарик', 'Дождевик', 'Аптечка', 'Мусорные пакеты', 'Антисептик', 'Туалетная бумага', 'Лопата'].map((item) => (
+                          <label key={item} className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={(formData.equipment || '').split(',').includes(item)}
+                              onChange={(e) => {
+                                const current = formData.equipment ? formData.equipment.split(',').filter(Boolean) : [];
+                                const updated = e.target.checked
+                                  ? [...current, item]
+                                  : current.filter(i => i !== item);
+                                setFormData({...formData, equipment: updated.join(',')} as any);
+                              }}
+                              className="rounded"
+                            />
+                            {item}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Роли */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                      <label className="text-xs text-white/60 block">Готов помочь с (роли)</label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {['Готовка', 'Уборка', 'Транспорт', 'Фото', 'Музыка', 'Организация'].map((role) => (
+                          <label key={role} className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={(formData.roles || '').split(',').includes(role)}
+                              onChange={(e) => {
+                                const current = formData.roles ? formData.roles.split(',').filter(Boolean) : [];
+                                const updated = e.target.checked
+                                  ? [...current, role]
+                                  : current.filter(i => i !== role);
+                                setFormData({...formData, roles: updated.join(',')} as any);
+                              }}
+                              className="rounded"
+                            />
+                            {role}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Источник */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                      <label className="text-xs text-white/60 block">Откуда узнали о мероприятии?</label>
+                      <input
+                        type="text"
+                        value={formData.source}
+                        onChange={(e) => setFormData({...formData, source: e.target.value})}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
+                        placeholder="Telegram, друг, соцсети..."
                       />
                     </div>
 
