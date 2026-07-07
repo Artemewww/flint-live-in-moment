@@ -43,6 +43,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   const [isDone, setIsDone] = useState(false);
   const [delivered, setDelivered] = useState<boolean | null>(null);
   const [error, setError] = useState('');
+  const [consentGiven, setConsentGiven] = useState(false);
 
   // Определяем реферала (из URL или Telegram start_param) и личность из Telegram.
   useEffect(() => {
@@ -540,6 +541,24 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
                         placeholder="Telegram, друг, соцсети..."
                       />
+                    </div>
+
+                    {/* Согласие на обработку персональных данных */}
+                    <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4 space-y-2">
+                      <label className="flex items-start gap-3 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={consentGiven}
+                          onChange={(e) => setConsentGiven(e.target.checked)}
+                          className="mt-0.5 rounded"
+                          required
+                        />
+                        <span className="text-xs text-white/70 leading-relaxed">
+                          Я согласен на обработку персональных данных в соответствии с{' '}
+                          <a href="#" className="text-brand underline">политикой конфиденциальности</a>
+                          {' '}и даю согласие на участие в мероприятии
+                        </span>
+                      </label>
                     </div>
 
                     {error && (
