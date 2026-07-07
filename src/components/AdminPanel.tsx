@@ -625,17 +625,35 @@ function EditEventModal({ event, onClose, onSave }: {
   onSave: (event: CommunityEvent) => void;
 }) {
   const [formData, setFormData] = useState({
-    participantsCount: event.participantsCount,
+    title: event.title,
+    description: event.description,
+    date: event.date,
+    dateLabel: event.dateLabel,
+    time: event.time || '',
+    location: event.location,
+    locationDetails: event.locationDetails || '',
     maxParticipants: event.maxParticipants,
-    status: event.status || 'open'
+    participantsCount: event.participantsCount,
+    status: event.status || 'open',
+    priceLabel: event.priceLabel || 'На совесть',
+    entryThreshold: event.entryThreshold || ''
   });
 
   const handleSave = () => {
     onSave({
       ...event,
-      participantsCount: formData.participantsCount,
+      title: formData.title,
+      description: formData.description,
+      date: formData.date,
+      dateLabel: formData.dateLabel,
+      time: formData.time,
+      location: formData.location,
+      locationDetails: formData.locationDetails,
       maxParticipants: formData.maxParticipants,
-      status: formData.status
+      participantsCount: formData.participantsCount,
+      status: formData.status,
+      priceLabel: formData.priceLabel,
+      entryThreshold: formData.entryThreshold
     });
   };
 
@@ -650,28 +668,146 @@ function EditEventModal({ event, onClose, onSave }: {
       >
         <h3 className="font-bold text-lg uppercase">Редактировать: {event.title}</h3>
 
-        <div className="space-y-3">
+        <div className="space-y-3 max-h-[60vh] overflow-y-auto">
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Участники
+              Название *
             </label>
             <input
-              type="number"
-              value={formData.participantsCount}
-              onChange={(e) => setFormData({...formData, participantsCount: parseInt(e.target.value)})}
+              type="text"
+              value={formData.title}
+              onChange={(e) => setFormData({...formData, title: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: Мужская баня FLINT"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Дата *
+            </label>
+            <input
+              type="date"
+              value={formData.date}
+              onChange={(e) => setFormData({...formData, date: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
             />
           </div>
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Максимум мест
+              Дата (текст)
             </label>
             <input
-              type="number"
-              value={formData.maxParticipants}
-              onChange={(e) => setFormData({...formData, maxParticipants: parseInt(e.target.value)})}
+              type="text"
+              value={formData.dateLabel}
+              onChange={(e) => setFormData({...formData, dateLabel: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: 9 июля (Четверг), 19:00"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Время
+            </label>
+            <input
+              type="text"
+              value={formData.time}
+              onChange={(e) => setFormData({...formData, time: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: 19:00 - 23:00"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Локация *
+            </label>
+            <input
+              type="text"
+              value={formData.location}
+              onChange={(e) => setFormData({...formData, location: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: Баня «Рыжий кот»"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Детали локации
+            </label>
+            <textarea
+              value={formData.locationDetails}
+              onChange={(e) => setFormData({...formData, locationDetails: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Адрес, как добраться..."
+              rows={2}
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Описание
+            </label>
+            <textarea
+              value={formData.description}
+              onChange={(e) => setFormData({...formData, description: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Полное описание мероприятия..."
+              rows={4}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Участники
+              </label>
+              <input
+                type="number"
+                value={formData.participantsCount}
+                onChange={(e) => setFormData({...formData, participantsCount: parseInt(e.target.value)})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Максимум мест
+              </label>
+              <input
+                type="number"
+                value={formData.maxParticipants}
+                onChange={(e) => setFormData({...formData, maxParticipants: parseInt(e.target.value)})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Цена / Оплата
+            </label>
+            <input
+              type="text"
+              value={formData.priceLabel}
+              onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: На совесть / 500₽"
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Порог входа
+            </label>
+            <input
+              type="text"
+              value={formData.entryThreshold}
+              onChange={(e) => setFormData({...formData, entryThreshold: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: 100% трезвость"
             />
           </div>
 
