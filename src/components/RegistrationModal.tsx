@@ -469,18 +469,38 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       </select>
                     </div>
 
-                    {/* Гости */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
-                      <label className="text-xs text-white/60 block">Количество гостей (с собой)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="5"
-                        value={formData.guestCount}
-                        onChange={(e) => setFormData({...formData, guestCount: parseInt(e.target.value) || 0})}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
-                        placeholder="0"
-                      />
+                    {/* Кнопки «один/с компанией» */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                      <label className="text-xs text-white/60 block">Вы участвуете?</label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, guestCount: 0})}
+                          className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all ${
+                            formData.guestCount === 0
+                              ? 'bg-brand text-black'
+                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                          }`}
+                        >
+                          Один
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setFormData({...formData, guestCount: 1})}
+                          className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all ${
+                            formData.guestCount === 1
+                              ? 'bg-brand text-black'
+                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                          }`}
+                        >
+                          С компанией
+                        </button>
+                      </div>
+                      {formData.guestCount === 1 && (
+                        <p className="text-[10px] text-white/50 italic">
+                          Вы берёте с собой гостя. Взнос оплачивается за двоих.
+                        </p>
+                      )}
                     </div>
 
                     {/* Снаряжение (чек-лист) */}
