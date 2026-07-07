@@ -81,6 +81,17 @@ export function isInsideTelegram(): boolean {
   return getWebApp() !== null;
 }
 
+/**
+ * «Авторизован» ли пользователь.
+ * В контексте сообщества FLINT авторизация = запуск сайта из бота
+ * @campsflint_bot как Mini App: Telegram подтвердил личность пользователя
+ * подписанным initData. В обычном браузере пользователь — гость/новичок,
+ * и ему скрыты приватные данные (точное место сбора, дни рождения резидентов).
+ */
+export function isAuthorized(): boolean {
+  return isInsideTelegram();
+}
+
 export function getTelegramUser(): TelegramUser | null {
   return getWebApp()?.initDataUnsafe.user ?? null;
 }

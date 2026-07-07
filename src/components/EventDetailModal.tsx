@@ -6,7 +6,7 @@ import {
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
-import { haptic } from '../telegram';
+import { haptic, isAuthorized } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 
 // Компонент динамической цены
@@ -56,6 +56,7 @@ export default function EventDetailModal({
   const isLocked = phase === 'locked';
 
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
+  const authorized = isAuthorized();
   const [interestSent, setInterestSent] = useState(false);
   const [interestSending, setInterestSending] = useState(false);
   const handleInterest = async () => {
@@ -173,25 +174,39 @@ export default function EventDetailModal({
                 </div>
               </div>
 
-              <a 
-                href={getYandexMapsUrl(event.location)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="bg-white/5 border border-white/5 hover:border-[#E6FD3A]/40 hover:bg-white/10 rounded-2xl p-4 flex gap-3 items-start transition-all cursor-pointer group"
-                title="Поехать (Открыть в Яндекс Картах)"
-                id="location-yandex-link"
-              >
-                <MapPin className="w-5 h-5 text-brand shrink-0 group-hover:scale-110 transition-transform" />
-                <div className="space-y-1 text-left">
-                  <span className="text-[#E6FD3A] uppercase text-[9px] tracking-wider block font-bold flex items-center gap-1">
-                    ЛОКАЦИЯ И СБОР • Яндекс Карты 🗺️
-                  </span>
-                  <div className="text-white font-bold group-hover:text-brand transition-colors underline decoration-brand/35">{event.location}</div>
-                  {event.locationDetails && (
-                    <div className="text-white/60 text-[10px] italic leading-normal">{event.locationDetails}</div>
-                  )}
+              {authorized ? (
+                <a 
+                  href={getYandexMapsUrl(event.location)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="bg-white/5 border border-white/5 hover:border-[#E6FD3A]/40 hover:bg-white/10 rounded-2xl p-4 flex gap-3 items-start transition-all cursor-pointer group"
+                  title="Поехать (Открыть в Яндекс Картах)"
+                  id="location-yandex-link"
+                >
+                  <MapPin className="w-5 h-5 text-brand shrink-0 group-hover:scale-110 transition-transform" />
+                  <div className="space-y-1 text-left">
+                    <span className="text-[#E6FD3A] uppercase text-[9px] tracking-wider block font-bold flex items-center gap-1">
+                      ЛОКАЦИЯ И СБОР • Яндекс Карты 🗺️
+                    </span>
+                    <div className="text-white font-bold group-hover:text-brand transition-colors underline decoration-brand/35">{event.location}</div>
+                    {event.locationDetails && (
+                      <div className="text-white/60 text-[10px] italic leading-normal">{event.locationDetails}</div>
+                    )}
+                  </div>
+                </a>
+              ) : (
+                <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start opacity-60">
+                  <Lock className="w-5 h-5 text-brand shrink-0" />
+                  <div className="space-y-1 text-left">
+                    <span className="text-white/40 uppercase text-[9px] tracking-wider block font-bold">
+                      ЛОКАЦИЯ СКРЫТА 🔒
+                    </span>
+                    <div className="text-white/50 text-xs italic">
+                      Точное место сбора станет доступно после подтверждения участия
+                    </div>
+                  </div>
                 </div>
-              </a>
+              )}
 
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Tag className="w-5 h-5 text-brand shrink-0" />

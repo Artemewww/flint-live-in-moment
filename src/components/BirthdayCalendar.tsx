@@ -1,6 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Gift, Users, X, Plus } from 'lucide-react';
+import { Calendar, Gift, Users, X, Plus, Lock, Bot } from 'lucide-react';
+import { isAuthorized } from '../telegram';
 
 interface Birthday {
   id: string;
@@ -109,6 +110,7 @@ function AddBirthdayForm({ onAdd }: AddBirthdayFormProps) {
 }
 
 export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: BirthdayCalendarProps) {
+  const authorized = isAuthorized();
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
     return now.getMonth(); // 0-based
@@ -192,6 +194,30 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
             </p>
           </div>
 
+          {!authorized && (
+            <div className="bg-brand/5 border border-brand/20 rounded-2xl p-6 text-center space-y-3">
+              <Lock className="w-10 h-10 text-brand mx-auto" />
+              <div className="space-y-1">
+                <p className="text-sm font-bold text-white uppercase tracking-wider">Доступно только резидентам</p>
+                <p className="text-xs text-white/60 leading-relaxed">
+                  Календарь дней рождения участников сообщества — приватная информация. 
+                  Откройте сайт через бота <strong className="text-brand">@campsflint_bot</strong>, чтобы увидеть дни рождения.
+                </p>
+              </div>
+              <a
+                href="https://t.me/campsflint_bot"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-black px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+              >
+                <Bot className="w-4 h-4" />
+                Открыть в боте
+              </a>
+            </div>
+          )}
+
+          {authorized && (
+          <>
           {/* Month Selector */}
           <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-none">
             {monthNames.map((month, idx) => (
@@ -323,6 +349,8 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
               <Gift className="w-12 h-12 mx-auto mb-2 opacity-30" />
               <p>В этом месяце нет дней рождения</p>
             </div>
+          )}
+          </>
           )}
         </div>
 
