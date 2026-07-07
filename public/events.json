@@ -13,7 +13,7 @@
     "houseQualities": [{"key": "wall"}, {"key": "foundation"}],
     "image": "/assets/images/nano_banya_flint_1780473778276.png",
     "maxParticipants": 12,
-    "participantsCount": 8,
+    "participantsCount": 0,
     "telegramBotUrl": "https://t.me/campsflint_bot",
     "priceType": "conscience",
     "priceLabel": "Аренда делится на всех • при 10+ ≈ 50 ₽/чел • меньше людей — взнос выше",
