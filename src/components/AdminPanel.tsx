@@ -684,7 +684,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                 <button className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all">
                                   Редактировать
                                 </button>
-                                <button className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400">
+                                <button
+                                  onClick={() => {
+                                    if (confirm(`Удалить участника ${reg.name}?`)) {
+                                      const regs = JSON.parse(localStorage.getItem('event_registrations') || '[]');
+                                      const updated = regs.filter((r: any) => r.id !== reg.id);
+                                      localStorage.setItem('event_registrations', JSON.stringify(updated));
+                                      loadEventStats(selectedEvent);
+                                    }
+                                  }}
+                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400"
+                                  title="Принудительно удалить"
+                                >
                                   <UserMinus className="w-3 h-3" />
                                 </button>
                               </div>

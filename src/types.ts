@@ -102,8 +102,8 @@ export interface Registration {
   name: string;
   phone?: string;
   birthday?: string;
-  status: 'pending' | 'confirmed' | 'rejected';
-  paymentStatus: 'pending' | 'paid' | 'free';
+  status: 'pending' | 'confirmed' | 'rejected' | 'cancelled';
+  paymentStatus: 'pending' | 'paid' | 'free' | 'refunded';
   paymentAmount: number;
   donationAmount: number;
   inviter?: string;
@@ -113,6 +113,8 @@ export interface Registration {
   inventory: string[];
   registeredAt: string;
   confirmedAt?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
   notes?: string;
   category?: 'male' | 'female';
   dietary?: 'omnivore' | 'vegetarian' | 'vegan';
