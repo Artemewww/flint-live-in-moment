@@ -24,8 +24,92 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [selectedEvent, setSelectedEvent] = useState<CommunityEvent | null>(null);
   const [eventStats, setEventStats] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'participants' | 'logistics' | 'settings'>('overview');
+  const [showTemplates, setShowTemplates] = useState(false);
 
   const ADMIN_PASSWORD = 'flint-admin-2026';
+
+  // Шаблоны мероприятий
+  const eventTemplates = [
+    {
+      title: 'Мужская баня FLINT',
+      type: 'male' as const,
+      time: '19:00 - 23:00',
+      maxParticipants: 12,
+      priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 ₽/чел',
+      entryThreshold: 'Только мужчины • 100% трезвость • личный веник',
+      description: 'Каноническая перезагрузка ума и тела. Профессиональный пар, закалка ледяной купелью, глубокий прогрев дубовыми вениками и честные разговоры по душам у открытого камина.'
+    },
+    {
+      title: 'Гиревой вояж у воды',
+      type: 'active' as const,
+      time: '10:00 - 12:00',
+      maxParticipants: 15,
+      priceLabel: 'На совесть',
+      entryThreshold: '100% трезвость • спортивная форма',
+      description: 'Утренняя силовая пробежка у Минского моря. Гири, зарядка, свежий воздух.'
+    },
+    {
+      title: 'Экзистенциальный Кинотеатр',
+      type: 'intellectual' as const,
+      time: '19:30 - 22:00',
+      maxParticipants: 20,
+      priceLabel: 'На совесть',
+      entryThreshold: '100% трезвость',
+      description: 'Рефлексия и глубокий разбор великих кинокартин. Философские дискуссии после просмотра.'
+    },
+    {
+      title: 'Читательский круг "Смыслы"',
+      type: 'intellectual' as const,
+      time: '16:00 - 19:00',
+      maxParticipants: 15,
+      priceLabel: 'На совесть',
+      entryThreshold: '100% трезвость • книга прочитана',
+      description: 'Интеллектуальный разбор психологических трудов. Глубокие вопросы и честные ответы.'
+    },
+    {
+      title: 'Лесной поход к Ислочи',
+      type: 'active' as const,
+      time: '08:00 - 20:00',
+      maxParticipants: 12,
+      priceLabel: 'Аренда делится на всех',
+      entryThreshold: '100% трезвость • спортивная форма • палатка',
+      description: 'Проводники, дикий костер и лесные переходы. Полный день на природе.'
+    },
+    {
+      title: 'Покерный заезд "Трезвый круг"',
+      type: 'mixed' as const,
+      time: '18:00 - 23:00',
+      maxParticipants: 16,
+      priceLabel: 'На совесть',
+      entryThreshold: '100% трезвость',
+      description: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.'
+    }
+  ];
+
+  const createFromTemplate = (template: typeof eventTemplates[0]) => {
+    const newEvent: CommunityEvent = {
+      id: `event-${Date.now()}`,
+      title: template.title,
+      description: template.description,
+      type: template.type,
+      date: new Date().toISOString().split('T')[0],
+      dateLabel: 'Выберите дату',
+      time: template.time,
+      location: 'Уточняется',
+      painPoint: '',
+      houseQualities: [],
+      image: '/assets/images/default_event.png',
+      maxParticipants: template.maxParticipants,
+      participantsCount: 0,
+      telegramBotUrl: 'https://t.me/campsflint_bot',
+      priceType: 'conscience',
+      priceLabel: template.priceLabel,
+      entryThreshold: template.entryThreshold,
+      status: 'locked'
+    };
+    onAddEvent(newEvent);
+    setShowTemplates(false);
+  };
 
   const handleLogin = () => {
     if (password === ADMIN_PASSWORD) {
@@ -197,13 +281,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           <div className="w-80 border-r border-white/10 overflow-y-auto p-4 space-y-3">
             <div className="flex items-center justify-between mb-4">
               <span className="text-white/40 text-[10px] uppercase font-mono">Мероприятия: {events.length}</span>
-              <button
-                onClick={() => setShowAddForm(true)}
-                className="bg-brand hover:bg-brand-hover text-black p-2 rounded-lg"
-                title="Добавить мероприятие"
-              >
-                <Plus className="w-4 h-4" />
-              </button>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setShowTemplates(true)}
+                  className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-2 rounded-lg"
+                  title="Шаблоны"
+                >
+                  <FileText className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setShowAddForm(true)}
+                  className="bg-brand hover:bg-brand-hover text-black p-2 rounded-lg"
+                  title="Добавить мероприятие"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
             </div>
 
             {events.map(event => (
@@ -612,6 +705,52 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               setShowAddForm(false);
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Templates Modal */}
+      <AnimatePresence>
+        {showTemplates && (
+          <div className="fixed inset-0 z-60 flex items-center justify-center p-4" id="templates-modal">
+            <div className="absolute inset-0 bg-black/95" onClick={() => setShowTemplates(false)} />
+
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              className="bg-[#121212] rounded-3xl w-full max-w-2xl shadow-2xl relative z-10 border border-white/10 p-6 space-y-4"
+            >
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-display font-black text-xl uppercase">Шаблоны мероприятий</h3>
+                <button
+                  onClick={() => setShowTemplates(false)}
+                  className="p-2 rounded-full bg-white/5 hover:bg-white/10"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <p className="text-xs text-white/60 mb-4">Выберите шаблон для быстрого создания мероприятия</p>
+
+              <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto">
+                {eventTemplates.map((template, idx) => (
+                  <button
+                    key={idx}
+                    onClick={() => createFromTemplate(template)}
+                    className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 hover:border-brand/30 transition-all"
+                  >
+                    <h4 className="font-bold text-sm uppercase mb-2">{template.title}</h4>
+                    <p className="text-[10px] text-white/60 mb-3 line-clamp-2">{template.description}</p>
+                    <div className="flex items-center gap-2 text-[10px] text-white/40">
+                      <Clock className="w-3 h-3" />
+                      <span>{template.time}</span>
+                      <Users className="w-3 h-3 ml-2" />
+                      <span>до {template.maxParticipants}</span>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </div>
