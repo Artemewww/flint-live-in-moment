@@ -37,6 +37,12 @@ export default function App() {
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
 
+  // Находим ближайшее мероприятие для баннера
+  const nextEvent = events
+    .filter(e => e.status === 'open' || e.status === 'locked')
+    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+    .find(e => new Date(e.date) >= new Date(new Date().toISOString().split('T')[0]));
+
   // Загружаем события из JSON файла
   useEffect(() => {
     fetch('/events.json')
@@ -292,6 +298,29 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      {/* Next Event Banner */}
+      {nextEvent && (
+        <div className="bg-gradient-to-r from-brand/90 to-brand/80 backdrop-blur-sm py-3 px-4 relative z-30 border-b border-brand-hover" id="next-event-banner">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="bg-black/20 rounded-full px-3 py-1">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-black/80">Следующее мероприятие</span>
+              </div>
+              <div className="hidden sm:block">
+                <p className="text-sm font-bold text-black">{nextEvent.title}</p>
+                <p className="text-xs text-black/70">{nextEvent.dateLabel} • {nextEvent.location}</p>
+              </div>
+            </div>
+            <button
+              onClick={() => setActiveDetailEvent(nextEvent)}
+              className="bg-black/20 hover:bg-black/30 text-black px-4 py-2 rounded-xl text-xs font-bold uppercase transition-all"
+            >
+              Подробнее
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Central Content Canvas */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-10 relative z-10" id="main-content">
