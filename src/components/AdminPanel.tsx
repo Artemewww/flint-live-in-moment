@@ -621,15 +621,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           </div>
                         ) : (
                           eventStats.registrations.map((reg: any, idx: number) => (
-                            <div key={idx} className="p-3 border-b border-white/5 flex items-center justify-between hover:bg-white/5">
-                              <div className="flex-1">
-                                <p className="text-sm font-bold">{reg.name || 'Гость'}</p>
-                                <p className="text-[10px] text-white/60">@{reg.telegram}</p>
-                                {reg.inviter && (
-                                  <p className="text-[10px] text-brand">Пригласил: {reg.inviter}</p>
-                                )}
-                              </div>
-                              <div className="flex gap-1">
+                            <div key={idx} className="p-3 border-b border-white/5 hover:bg-white/5">
+                              <div className="flex items-center justify-between mb-2">
+                                <div className="flex-1">
+                                  <p className="text-sm font-bold">{reg.name || 'Гость'}</p>
+                                  <p className="text-[10px] text-white/60">@{reg.telegram}</p>
+                                  {reg.inviter && (
+                                    <p className="text-[10px] text-brand">Пригласил: {reg.inviter}</p>
+                                  )}
+                                </div>
                                 <span className={`text-[9px] px-2 py-1 rounded-full font-mono ${
                                   reg.status === 'confirmed' ? 'bg-brand/20 text-brand' :
                                   reg.status === 'pending' ? 'bg-white/10 text-white/40' :
@@ -637,8 +637,55 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                 }`}>
                                   {reg.status === 'confirmed' ? 'Подтвержден' : reg.status === 'pending' ? 'Ожидает' : 'Отклонен'}
                                 </span>
-                                <button className="p-1 rounded bg-white/5 hover:bg-white/10" title="Удалить">
-                                  <UserMinus className="w-3 h-3 text-rose-400" />
+                              </div>
+                              
+                              {/* Транспорт и инвентарь */}
+                              <div className="grid grid-cols-2 gap-2 mt-2">
+                                <div className={`p-2 rounded-lg border ${
+                                  reg.hasTransport ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10'
+                                }`}>
+                                  <div className="flex items-center gap-1 mb-1">
+                                    <Truck className="w-3 h-3 text-brand" />
+                                    <span className="text-[9px] font-bold uppercase">Транспорт</span>
+                                  </div>
+                                  {reg.hasTransport ? (
+                                    <div>
+                                      <p className="text-[10px] text-white/80">{reg.transportDetails || 'Автомобиль'}</p>
+                                      <p className="text-[9px] text-white/60">Мест: {reg.transportSeats || 0}</p>
+                                    </div>
+                                  ) : (
+                                    <p className="text-[9px] text-white/40">Нет транспорта</p>
+                                  )}
+                                </div>
+
+                                <div className={`p-2 rounded-lg border ${
+                                  reg.inventory && reg.inventory.length > 0 ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10'
+                                }`}>
+                                  <div className="flex items-center gap-1 mb-1">
+                                    <Package className="w-3 h-3 text-brand" />
+                                    <span className="text-[9px] font-bold uppercase">Инвентарь</span>
+                                  </div>
+                                  {reg.inventory && reg.inventory.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1">
+                                      {reg.inventory.slice(0, 2).map((item: string, i: number) => (
+                                        <span key={i} className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">{item}</span>
+                                      ))}
+                                      {reg.inventory.length > 2 && (
+                                        <span className="text-[9px] text-white/60">+{reg.inventory.length - 2}</span>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <p className="text-[9px] text-white/40">Нет инвентаря</p>
+                                  )}
+                                </div>
+                              </div>
+
+                              <div className="flex gap-1 mt-2">
+                                <button className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all">
+                                  Редактировать
+                                </button>
+                                <button className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400">
+                                  <UserMinus className="w-3 h-3" />
                                 </button>
                               </div>
                             </div>
@@ -687,6 +734,63 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <p className="text-xs font-bold uppercase">Общее снаряжение</p>
                         <p className="text-[10px] text-white/40 mt-1">Список и статус</p>
                       </button>
+                    </div>
+
+                    {/* Транспортный план */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                        <Truck className="w-4 h-4 text-brand" />
+                        Транспортный план
+                      </h4>
+                      <div className="space-y-2">
+                        {eventStats.registrations.filter((r: any) => r.hasTransport).length === 0 ? (
+                          <p className="text-[10px] text-white/40">Пока нет участников с транспортом</p>
+                        ) : (
+                          eventStats.registrations
+                            .filter((r: any) => r.hasTransport)
+                            .map((reg: any, idx: number) => (
+                              <div key={idx} className="bg-white/5 rounded-lg p-3 flex items-center justify-between">
+                                <div>
+                                  <p className="text-xs font-bold">{reg.name || 'Гость'}</p>
+                                  <p className="text-[10px] text-white/60">{reg.transportDetails || 'Автомобиль'}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs font-bold text-brand">{reg.transportSeats || 0} мест</p>
+                                  <p className="text-[9px] text-white/40">Свободно: {Math.max(0, (reg.transportSeats || 0) - 1)}</p>
+                                </div>
+                              </div>
+                            ))
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Общий инвентарь */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                        <Package className="w-4 h-4 text-brand" />
+                        Общий инвентарь участников
+                      </h4>
+                      <div className="space-y-2">
+                        {(() => {
+                          const allInventory = eventStats.registrations
+                            .filter((r: any) => r.inventory && r.inventory.length > 0)
+                            .flatMap((r: any) => r.inventory);
+                          
+                          if (allInventory.length === 0) {
+                            return <p className="text-[10px] text-white/40">Пока нет заявленного инвентаря</p>;
+                          }
+
+                          const uniqueItems = Array.from(new Set(allInventory)) as string[];
+                          return uniqueItems.map((item, idx: number) => (
+                            <div key={idx} className="bg-white/5 rounded-lg p-2 flex items-center justify-between">
+                              <span className="text-xs">{item}</span>
+                              <span className="text-[10px] text-brand font-mono">
+                                {allInventory.filter((i: string) => i === item).length} шт.
+                              </span>
+                            </div>
+                          ));
+                        })()}
+                      </div>
                     </div>
                   </div>
                 )}
