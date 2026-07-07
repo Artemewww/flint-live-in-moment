@@ -20,11 +20,16 @@ export default function InfoSection({
 }: InfoSectionProps) {
 
   // Находим ближайшее предстоящее событие (первое не прошедшее)
+  // Сначала ищем открытые, потом locked (скоро открытие), потом все подряд
   const today = getToday();
   const featuredEvent = events && events.length > 0
-    ? events
-        .filter(e => e.date >= today && e.status !== 'locked')
+    ? (events
+        .filter(e => e.date >= today && e.status === 'open')
         .sort((a, b) => a.date.localeCompare(b.date))[0]
+      || events
+        .filter(e => e.date >= today)
+        .sort((a, b) => a.date.localeCompare(b.date))[0]
+      || events[0])
     : null;
 
   // Если событий нет - ничего не показываем
