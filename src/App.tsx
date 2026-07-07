@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield
 } from 'lucide-react';
-import { INITIAL_EVENTS } from './data';
+// Данные теперь загружаются из API (Google Sheets)
+// import { INITIAL_EVENTS } from './data';
 import { CommunityEvent, Registration } from './types';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
@@ -16,6 +17,7 @@ import BirthdayCalendar from './components/BirthdayCalendar';
 import FeedbackModal from './components/FeedbackModal';
 import UserStats from './components/UserStats';
 import EventPoster from './components/EventPoster';
+import AdminPanel from './components/AdminPanel';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
