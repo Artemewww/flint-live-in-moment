@@ -247,6 +247,16 @@ export default function EventDetailModal({
               </div>
             </div>
 
+            {/* Detailed Rules & Preparation */}
+            {event.locationDetails && (
+              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2">
+                <span className="text-white/40 text-[10px] tracking-widest font-mono block uppercase">Подробные правила и подготовка</span>
+                <p className="text-xs text-white/70 leading-relaxed font-sans">
+                  {event.locationDetails}
+                </p>
+              </div>
+            )}
+
             {/* Vector Alignment Breakdown ("Дом Личности") */}
             <div className="space-y-3 pt-2">
               <div className="flex items-center gap-1.5">
