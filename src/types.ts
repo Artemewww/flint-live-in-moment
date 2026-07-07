@@ -108,6 +108,12 @@ export interface Registration {
   registeredAt: string;
   confirmedAt?: string;
   notes?: string;
+  category?: 'male' | 'female';
+  dietary?: 'omnivore' | 'vegetarian' | 'vegan';
+  guestCount?: number;
+  equipment?: string[];
+  roles?: string[];
+  source?: string;
 }
 
 export interface UserProfile {
