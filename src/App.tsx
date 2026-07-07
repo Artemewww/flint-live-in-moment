@@ -4,8 +4,6 @@ import {
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield
 } from 'lucide-react';
-// Данные теперь загружаются из API (Google Sheets)
-// import { INITIAL_EVENTS } from './data';
 import { CommunityEvent, Registration } from './types';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
@@ -37,6 +35,27 @@ export default function App() {
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
+  const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
+
+  // Загружаем события из JSON файла
+  useEffect(() => {
+    fetch('/events.json')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.length > 0) {
+          setEvents(data);
+        }
+        setEventsLoading(false);
+      })
+      .catch(err => {
+        console.error('Failed to load events, using fallback:', err);
+        // Fallback на локальные данные
+        import('./data').then(module => {
+          setEvents(module.INITIAL_EVENTS);
+          setEventsLoading(false);
+        });
+      });
+  }, []);
 
   // Load registration state from localStorage on init
   useEffect(() => {
@@ -133,8 +152,11 @@ export default function App() {
       localStorage.removeItem('moment_registered_event_ids');
       localStorage.removeItem('moment_user_registrations');
       
-      // Reset counters to defaults from data.ts
-      setEvents(INITIAL_EVENTS);
+      // Перезагружаем события из JSON
+      fetch('/events.json')
+        .then(res => res.json())
+        .then(data => setEvents(data))
+        .catch(() => {});
       setShowMyRegistrationsModal(false);
     }
   };
@@ -224,6 +246,17 @@ export default function App() {
                 <span className="hidden sm:inline">Мой Прогресс</span>
               </button>
             )}
+
+            {/* Admin Panel button (hidden) */}
+            <button
+              onClick={() => setShowAdminPanel(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10 opacity-10"
+              id="show-admin-panel-btn"
+              title="Админ-панель (скрыта)"
+            >
+              <Shield className="w-4 h-4 text-brand" />
+              <span className="hidden sm:inline">Админ</span>
+            </button>
 
             {/* Persistent registrations manager */}
             {registeredEventIds.length > 0 && (
@@ -349,7 +382,7 @@ export default function App() {
               </div>
               <button 
                 onClick={() => setShowManifestoModal(false)}
-                className="p-1 px-3 py-1.5 rounded-xl text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer border border-white/10 font-mono text-[10px] uppercase font-black"
+                className="p-1 px-3 py-1.5 rounded-xl text-white/40 hover:text-white font-mono uppercase tracking-wider text-xs cursor-pointer border border-white/10"
               >
                 Закрыть
               </button>
@@ -603,7 +636,6 @@ export default function App() {
           onClose={() => setVerifyingEvent(null)}
           onSubmit={(data) => {
             setVerificationData(data);
-            // TODO: Отправить данные в бота для верификации
             console.log('Verification submitted:', data);
             setVerifyingEvent(null);
           }}
@@ -631,7 +663,6 @@ export default function App() {
           onClose={() => setFeedbackEvent(null)}
           onSubmit={(data) => {
             console.log('Feedback submitted:', data);
-            // TODO: Отправить фидбек в бота
             setFeedbackEvent(null);
           }}
         />
@@ -651,6 +682,57 @@ export default function App() {
         <EventPoster
           event={posterEvent}
           onClose={() => setPosterEvent(null)}
+        />
+      )}
+
+      {/* ADMIN PANEL MODAL */}
+      {showAdminPanel && (
+        <AdminPanel
+          events={events}
+          onUpdateEvent={async (updated) => {
+            try {
+              await fetch('/api/admin/events', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer flint-admin-2026'
+                },
+                body: JSON.stringify(updated)
+              });
+            } catch (err) {
+              console.error('API error, using local update:', err);
+            }
+            setEvents(prev => prev.map(e => e.id === updated.id ? updated : e));
+          }}
+          onAddEvent={async (newEvent) => {
+            try {
+              await fetch('/api/admin/events', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer flint-admin-2026'
+                },
+                body: JSON.stringify(newEvent)
+              });
+            } catch (err) {
+              console.error('API error, using local update:', err);
+            }
+            setEvents(prev => [...prev, newEvent]);
+          }}
+          onDeleteEvent={async (eventId) => {
+            try {
+              await fetch(`/api/admin/events?eventId=${eventId}`, {
+                method: 'DELETE',
+                headers: {
+                  'Authorization': 'Bearer flint-admin-2026'
+                }
+              });
+            } catch (err) {
+              console.error('API error, using local update:', err);
+            }
+            setEvents(prev => prev.filter(e => e.id !== eventId));
+          }}
+          onClose={() => setShowAdminPanel(false)}
         />
       )}
     </div>
