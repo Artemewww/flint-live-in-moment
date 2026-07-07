@@ -18,6 +18,7 @@
     "priceType": "conscience",
     "priceLabel": "Аренда делится на всех • при 10+ ≈ 50 ₽/чел • меньше людей — взнос выше",
     "entryThreshold": "Только мужчины • 100% трезвость • личный веник • минимум 10 чел для подтверждения • по желанию — угощение на общий стол",
-    "needsOnboarding": true
+    "needsOnboarding": true,
+    "status": "locked"
   }
 ]
