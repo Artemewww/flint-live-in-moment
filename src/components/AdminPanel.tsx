@@ -847,13 +847,17 @@ function EditEventModal({ event, onClose, onSave }: {
     date: event.date,
     dateLabel: event.dateLabel,
     time: event.time || '',
+    timeEnd: event.timeEnd || '',
     location: event.location,
     locationDetails: event.locationDetails || '',
+    coordinates: event.coordinates || { lat: 0, lng: 0 },
     maxParticipants: event.maxParticipants,
     participantsCount: event.participantsCount,
     status: event.status || 'open',
     priceLabel: event.priceLabel || 'На совесть',
-    entryThreshold: event.entryThreshold || ''
+    priceAmount: event.priceAmount || 0,
+    entryThreshold: event.entryThreshold || '',
+    entryType: event.entryType || 'all'
   });
 
   const handleSave = () => {
@@ -864,13 +868,17 @@ function EditEventModal({ event, onClose, onSave }: {
       date: formData.date,
       dateLabel: formData.dateLabel,
       time: formData.time,
+      timeEnd: formData.timeEnd,
       location: formData.location,
       locationDetails: formData.locationDetails,
+      coordinates: formData.coordinates,
       maxParticipants: formData.maxParticipants,
       participantsCount: formData.participantsCount,
       status: formData.status,
       priceLabel: formData.priceLabel,
-      entryThreshold: formData.entryThreshold
+      priceAmount: formData.priceAmount,
+      entryThreshold: formData.entryThreshold,
+      entryType: formData.entryType
     });
   };
 
@@ -924,17 +932,30 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Время
-            </label>
-            <input
-              type="text"
-              value={formData.time}
-              onChange={(e) => setFormData({...formData, time: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: 19:00 - 23:00"
-            />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Время начала
+              </label>
+              <input
+                type="time"
+                value={formData.time}
+                onChange={(e) => setFormData({...formData, time: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Время окончания
+              </label>
+              <input
+                type="time"
+                value={formData.timeEnd}
+                onChange={(e) => setFormData({...formData, timeEnd: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
           </div>
 
           <div>
@@ -948,6 +969,36 @@ function EditEventModal({ event, onClose, onSave }: {
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
               placeholder="Например: Баня «Рыжий кот»"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Широта (lat)
+              </label>
+              <input
+                type="number"
+                step="0.000001"
+                value={formData.coordinates.lat}
+                onChange={(e) => setFormData({...formData, coordinates: {...formData.coordinates, lat: parseFloat(e.target.value) || 0}})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                placeholder="53.818146"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Долгота (lng)
+              </label>
+              <input
+                type="number"
+                step="0.000001"
+                value={formData.coordinates.lng}
+                onChange={(e) => setFormData({...formData, coordinates: {...formData.coordinates, lng: parseFloat(e.target.value) || 0}})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                placeholder="27.387930"
+              />
+            </div>
           </div>
 
           <div>
@@ -1002,16 +1053,46 @@ function EditEventModal({ event, onClose, onSave }: {
             </div>
           </div>
 
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Стоимость аренды (₽)
+              </label>
+              <input
+                type="number"
+                value={formData.priceAmount}
+                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                placeholder="500"
+              />
+            </div>
+
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Кто может участвовать
+              </label>
+              <select
+                value={formData.entryType}
+                onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              >
+                <option value="all">Все</option>
+                <option value="male">Только мужчины</option>
+                <option value="female">Только женщины</option>
+              </select>
+            </div>
+          </div>
+
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Цена / Оплата
+              Цена / Оплата (текст)
             </label>
             <input
               type="text"
               value={formData.priceLabel}
               onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: На совесть / 500₽"
+              placeholder="Например: Аренда делится на всех"
             />
           </div>
 
@@ -1024,7 +1105,7 @@ function EditEventModal({ event, onClose, onSave }: {
               value={formData.entryThreshold}
               onChange={(e) => setFormData({...formData, entryThreshold: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: 100% трезвость"
+              placeholder="Например: 100% трезвость • личный веник"
             />
           </div>
 
