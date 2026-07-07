@@ -61,6 +61,12 @@ export interface CommunityEvent {
     reminder3h: boolean;
     reminder1h: boolean;
   };
+  /** Голосование за программу */
+  programVoting?: {
+    enabled: boolean;
+    deadline: string; // YYYY-MM-DD
+    options: string[];
+  };
 }
 
 /** Возвращает сегодняшнюю дату в формате YYYY-MM-DD. */

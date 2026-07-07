@@ -64,3 +64,21 @@ export async function submitRegistration(payload: RegisterPayload): Promise<Regi
     return { ok: false, delivered: false, message: (err as Error).message };
   }
 }
+
+/**
+ * Отправляет голос за программу мероприятия.
+ */
+export async function submitVote(eventId: string, option: string): Promise<RegisterResult> {
+  try {
+    const res = await fetch('/api/vote', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventId, option, initData: getInitData() }),
+    });
+    if (!res.ok) return { ok: false, delivered: false, message: `HTTP ${res.status}` };
+    const data = (await res.json()) as Partial<RegisterResult>;
+    return { ok: true, delivered: Boolean(data.delivered), message: data.message };
+  } catch (err) {
+    return { ok: false, delivered: false, message: (err as Error).message };
+  }
+}

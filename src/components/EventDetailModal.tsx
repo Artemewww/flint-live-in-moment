@@ -5,8 +5,9 @@ import {
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
-import { submitInterest } from '../api';
+import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
+import ProgramVoting from './ProgramVoting';
 
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
@@ -256,6 +257,15 @@ export default function EventDetailModal({
                 </p>
               </div>
             )}
+
+            {/* Program Voting */}
+            <ProgramVoting
+              event={event}
+              onVote={(eventId, option) => {
+                submitVote(eventId, option);
+                haptic('success');
+              }}
+            />
 
             {/* Vector Alignment Breakdown ("Дом Личности") */}
             <div className="space-y-3 pt-2">
