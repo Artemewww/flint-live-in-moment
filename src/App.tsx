@@ -19,7 +19,8 @@ import EventPoster from './components/EventPoster';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 export default function App() {
-  const [events, setEvents] = useState<CommunityEvent[]>(INITIAL_EVENTS);
+  const [events, setEvents] = useState<CommunityEvent[]>([]);
+  const [eventsLoading, setEventsLoading] = useState(true);
   const [registeredEventIds, setRegisteredEventIds] = useState<string[]>([]);
   const [userRegistrations, setUserRegistrations] = useState<Registration[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);

@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff } from 'lucide-react';
+import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw } from 'lucide-react';
 import { CommunityEvent } from '../types';
+
+const ADMIN_TOKEN = 'flint-admin-2026';
+const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
 
 interface AdminPanelProps {
   events: CommunityEvent[];
