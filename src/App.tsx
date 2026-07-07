@@ -266,12 +266,12 @@ export default function App() {
               </button>
             )}
 
-            {/* Admin Panel button */}
+            {/* Admin Panel button (hidden для обычных) */}
             <button
               onClick={() => setShowAdminPanel(true)}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10 opacity-10 hover:opacity-100"
               id="show-admin-panel-btn"
-              title="Админ-панель"
+              title="Админ-панель (скрыта)"
             >
               <Shield className="w-4 h-4 text-brand" />
               <span>Админ</span>

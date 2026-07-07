@@ -1034,18 +1034,6 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Дата (текст)
-            </label>
-            <input
-              type="text"
-              value={formData.dateLabel}
-              onChange={(e) => setFormData({...formData, dateLabel: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: 9 июля (Четверг), 19:00"
-            />
-          </div>
 
           <div className="grid grid-cols-2 gap-2">
             <div>
@@ -1086,48 +1074,22 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Широта (lat)
-              </label>
-              <input
-                type="number"
-                step="0.000001"
-                value={formData.coordinates.lat}
-                onChange={(e) => setFormData({...formData, coordinates: {...formData.coordinates, lat: parseFloat(e.target.value) || 0}})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-                placeholder="53.818146"
-              />
-            </div>
-
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Долгота (lng)
-              </label>
-              <input
-                type="number"
-                step="0.000001"
-                value={formData.coordinates.lng}
-                onChange={(e) => setFormData({...formData, coordinates: {...formData.coordinates, lng: parseFloat(e.target.value) || 0}})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-                placeholder="27.387930"
-              />
-            </div>
-          </div>
-
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Детали локации
+              Координаты (широта, долгота)
             </label>
-            <textarea
-              value={formData.locationDetails}
-              onChange={(e) => setFormData({...formData, locationDetails: e.target.value})}
+            <input
+              type="text"
+              value={`${formData.coordinates.lat}, ${formData.coordinates.lng}`}
+              onChange={(e) => {
+                const parts = e.target.value.split(',').map(s => parseFloat(s.trim()));
+                setFormData({...formData, coordinates: { lat: parts[0] || 0, lng: parts[1] || 0 }});
+              }}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Адрес, как добраться..."
-              rows={2}
+              placeholder="53.964962, 27.644397"
             />
           </div>
+
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
@@ -1200,15 +1162,18 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Цена / Оплата (текст)
+              Стоимость участия (BYN)
             </label>
             <input
               type="text"
               value={formData.priceLabel}
               onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: Аренда делится на всех"
+              placeholder="50 BYN — обязательный взнос"
             />
+            <p className="text-[9px] text-white/40 mt-1 italic">
+              Если не набирается минимум участников — мероприятие отменяется, оплата возвращается.
+            </p>
           </div>
 
           <div>

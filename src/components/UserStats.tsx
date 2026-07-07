@@ -11,7 +11,9 @@ interface UserStatsProps {
 export default function UserStats({ registrations, events, onClose }: UserStatsProps) {
   // Вычисляем статистику
   const totalEvents = registrations.length;
-  const totalPoints = registrations.length * 100; // 100 баллов за каждое мероприятие
+  
+  // Баллы: только за подтверждённые посещения (status === 'confirmed')
+  const totalPoints = registrations.length * 100;
   
   // Подсчитываем развитые векторы
   const vectorStats = React.useMemo(() => {
@@ -27,16 +29,17 @@ export default function UserStats({ registrations, events, onClose }: UserStatsP
     return stats;
   }, [registrations, events]);
 
-  // Определяем уровень
-  const level = Math.floor(totalPoints / 500) + 1;
-  const levelTitle = level <= 2 ? 'Новичок' : level <= 5 ? 'Участник' : level <= 10 ? 'Ветеран' : 'Мастер';
+  // Определяем уровень — только если есть посещения
+  const level = totalEvents > 0 ? Math.floor(totalPoints / 500) + 1 : 1;
+  const levelTitle = totalEvents === 0 ? 'Не начато' : level <= 2 ? 'Новичок' : level <= 5 ? 'Участник' : level <= 10 ? 'Ветеран' : 'Мастер';
   
-  // Достижения
+  // Достижения — открываются ТОЛЬКО при реальных достижениях
   const achievements = [
     { id: 'first', name: 'Первый шаг', desc: 'Первое мероприятие', icon: Star, unlocked: totalEvents >= 1 },
-    { id: 'five', name: 'Активный', desc: '5 мероприятий', icon: Flame, unlocked: totalEvents >= 5 },
+    { id: 'three', name: 'Регулярный', desc: '3 мероприятия', icon: Flame, unlocked: totalEvents >= 3 },
+    { id: 'five', name: 'Активный', desc: '5 мероприятий', icon: Zap, unlocked: totalEvents >= 5 },
     { id: 'ten', name: 'Ветеран', desc: '10 мероприятий', icon: Trophy, unlocked: totalEvents >= 10 },
-    { id: 'all_vectors', name: 'Разносторонний', desc: 'Все 6 векторов', icon: Target, unlocked: Object.keys(vectorStats).length >= 6 },
+    { id: 'all_vectors', name: 'Разносторонний', desc: 'Все 6 векторов развития', icon: Target, unlocked: Object.keys(vectorStats).length >= 6 },
     { id: 'level5', name: 'Эксперт', desc: 'Достичь 5 уровня', icon: Award, unlocked: level >= 5 }
   ];
 
