@@ -47,23 +47,36 @@ export default function App() {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .find(e => new Date(e.date) >= new Date(new Date().toISOString().split('T')[0]));
 
-  // Загружаем события из JSON файла
+  // Загружаем события из API (Supabase) или fallback на JSON
   useEffect(() => {
-    fetch('/events.json')
-      .then(res => res.json())
+    fetch('/api/events')
+      .then(res => res.ok ? res.json() : Promise.reject('API not available'))
       .then(data => {
-        if (data && data.length > 0) {
-          setEvents(data);
+        if (data && data.events && data.events.length > 0) {
+          setEvents(data.events);
+        } else {
+          throw new Error('No events from API');
         }
         setEventsLoading(false);
       })
       .catch(err => {
-        console.error('Failed to load events, using fallback:', err);
-        // Fallback на локальные данные
-        import('./data').then(module => {
-          setEvents(module.INITIAL_EVENTS);
-          setEventsLoading(false);
-        });
+        console.log('API not available, loading from JSON:', err);
+        // Fallback на статический JSON
+        fetch('/events.json')
+          .then(res => res.json())
+          .then(data => {
+            if (data && data.length > 0) {
+              setEvents(data);
+            }
+            setEventsLoading(false);
+          })
+          .catch(() => {
+            // Fallback на локальные данные
+            import('./data').then(module => {
+              setEvents(module.INITIAL_EVENTS);
+              setEventsLoading(false);
+            });
+          });
       });
   }, []);
 
