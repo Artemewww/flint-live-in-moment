@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { X, Send, CheckCircle2, ShieldCheck, Bell, Sparkles, Loader2, Bot, Info, Users, Copy, Check } from 'lucide-react';
+import { X, Send, CheckCircle2, ShieldCheck, Bell, Sparkles, Loader2, Bot, Info, Users, Copy, Check, Truck, Package } from 'lucide-react';
 import { CommunityEvent, Registration } from '../types';
 import { isInsideTelegram, getTelegramUser, getStartParam, haptic } from '../telegram';
 import { submitRegistration } from '../api';
@@ -22,6 +22,12 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   const [tgUsername, setTgUsername] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+  const [formData, setFormData] = useState({
+    hasTransport: false,
+    transportDetails: '',
+    transportSeats: 0,
+    inventory: ''
+  });
 
   // Referral flow inputs
   const [inviter, setInviter] = useState('');
@@ -67,11 +73,20 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     });
 
     const reg: Registration = {
+      id: `reg-${Date.now()}`,
       eventId: event.id,
       name,
       phone: phoneVal,
       telegram: tg.startsWith('@') ? tg : `@${tg}`,
+      status: 'pending',
       registeredAt: new Date().toISOString(),
+      hasTransport: formData.hasTransport,
+      transportDetails: formData.hasTransport ? formData.transportDetails : undefined,
+      transportSeats: formData.hasTransport ? formData.transportSeats : 0,
+      inventory: formData.inventory ? formData.inventory.split(',').map(item => item.trim()).filter(Boolean) : [],
+      paymentStatus: 'pending',
+      paymentAmount: 0,
+      donationAmount: 0
     };
 
     onSuccess(reg);
@@ -344,6 +359,57 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         placeholder="+375 (29) 111-22-33"
                         className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
                         disabled={isSubmitting}
+                      />
+                    </div>
+
+                    {/* Транспорт */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="hasTransport"
+                          checked={(formData as any).hasTransport || false}
+                          onChange={(e) => setFormData({...formData, hasTransport: e.target.checked} as any)}
+                        />
+                        <label htmlFor="hasTransport" className="text-xs text-white/60 flex items-center gap-2">
+                          <Truck className="w-4 h-4 text-brand" />
+                          У меня есть транспорт
+                        </label>
+                      </div>
+
+                      {(formData as any).hasTransport && (
+                        <div className="space-y-2 pl-6">
+                          <input
+                            type="text"
+                            value={(formData as any).transportDetails || ''}
+                            onChange={(e) => setFormData({...formData, transportDetails: e.target.value} as any)}
+                            className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
+                            placeholder="Марка/модель авто"
+                          />
+                          <input
+                            type="number"
+                            value={(formData as any).transportSeats || 0}
+                            onChange={(e) => setFormData({...formData, transportSeats: parseInt(e.target.value) || 0} as any)}
+                            className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
+                            placeholder="Количество мест (включая ваше)"
+                            min="1"
+                          />
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Инвентарь */}
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                      <label className="text-xs text-white/60 flex items-center gap-2">
+                        <Package className="w-4 h-4 text-brand" />
+                        Инвентарь (через запятую)
+                      </label>
+                      <textarea
+                        value={(formData as any).inventory || ''}
+                        onChange={(e) => setFormData({...formData, inventory: e.target.value} as any)}
+                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
+                        placeholder="Палатка, спальник, каремат, газовка..."
+                        rows={2}
                       />
                     </div>
 
