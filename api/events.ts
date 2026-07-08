@@ -5,6 +5,44 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+// Маппинг snake_case -> camelCase для фронтенда
+function mapEventToCamelCase(event: any) {
+  if (!event) return null;
+  return {
+    id: event.id,
+    title: event.title,
+    description: event.description,
+    type: event.type,
+    date: event.date,
+    dateLabel: event.date_label,
+    time: event.time,
+    timeEnd: event.time_end,
+    location: event.location,
+    locationDetails: event.location_details,
+    coordinates: {
+      lat: event.coordinates_lat,
+      lng: event.coordinates_lng
+    },
+    painPoint: event.pain_point,
+    image: event.image,
+    maxParticipants: event.max_participants,
+    participantsCount: event.participants_count,
+    telegramBotUrl: event.telegram_bot_url,
+    priceType: event.price_type,
+    priceLabel: event.price_label,
+    priceAmount: event.price_amount,
+    entryThreshold: event.entry_threshold,
+    entryType: event.entry_type,
+    status: event.status,
+    lockedHint: event.locked_hint,
+    program: event.program || [],
+    notifications: event.notifications || {},
+    programVoting: event.program_voting,
+    createdAt: event.created_at,
+    updatedAt: event.updated_at
+  };
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method === 'GET') {
     try {
@@ -18,7 +56,10 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to fetch events' });
       }
 
-      return res.status(200).json({ events });
+      // Маппинг в camelCase для фронтенда
+      const mappedEvents = (events || []).map(mapEventToCamelCase);
+
+      return res.status(200).json({ events: mappedEvents });
     } catch (error) {
       console.error('Error:', error);
       return res.status(500).json({ error: 'Internal server error' });
@@ -73,7 +114,7 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to save event', details: error.message });
       }
 
-      return res.status(200).json({ success: true, event });
+      return res.status(200).json({ success: true, event: mapEventToCamelCase(event) });
     } catch (error) {
       console.error('Error:', error);
       return res.status(500).json({ error: 'Internal server error' });
