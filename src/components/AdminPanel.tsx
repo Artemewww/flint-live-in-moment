@@ -232,7 +232,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   const toggleEventStatus = (event: CommunityEvent) => {
-    const newStatus = event.status === 'locked' ? 'open' : 'locked';
+    const newStatus = event.status === 'open' ? 'locked' : 'open';
     onUpdateEvent({ ...event, status: newStatus });
   };
 
@@ -416,11 +416,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <h3 className="font-bold text-xs uppercase leading-tight">{event.title}</h3>
                   <span className={`text-[9px] px-2 py-0.5 rounded-full font-mono uppercase shrink-0 ${
-                    event.status === 'locked' ? 'bg-white/10 text-white/40' :
+                    event.status === 'open' ? 'bg-brand/20 text-brand' :
                     event.status === 'closed' ? 'bg-rose-500/20 text-rose-400' :
-                    'bg-brand/20 text-brand'
+                    'bg-white/10 text-white/40'
                   }`}>
-                    {event.status === 'locked' ? 'Закрыто' : event.status === 'closed' ? 'Завершено' : 'Открыто'}
+                    {event.status === 'open' ? 'Набор открыт' : event.status === 'closed' ? 'Завершено' : 'Набор закрыт'}
                   </span>
                 </div>
                 
@@ -434,10 +434,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 <div className="flex gap-1">
                   <button
                     onClick={(e) => { e.stopPropagation(); toggleEventStatus(event); }}
-                    className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-1.5 rounded-lg transition-all"
-                    title={event.status === 'locked' ? 'Открыть' : 'Закрыть'}
+                    className={`flex-1 p-1.5 rounded-lg transition-all ${event.status === 'open' ? 'bg-brand/20 text-brand hover:bg-brand/30' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                    title={event.status === 'open' ? 'Набор открыт — нажми, чтобы закрыть' : 'Набор закрыт — нажми, чтобы открыть'}
                   >
-                    {event.status === 'locked' ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
+                    {event.status === 'open' ? <Unlock className="w-3 h-3" /> : <Lock className="w-3 h-3" />}
                   </button>
                   
                   <button
@@ -459,6 +459,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     title="Редактировать"
                   >
                     <Edit className="w-3 h-3" />
+                  </button>
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (window.confirm(`Удалить событие «${event.title}»? Действие необратимо.`)) onDeleteEvent(event.id); }}
+                    className="flex-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 p-1.5 rounded-lg transition-all"
+                    title="Удалить событие"
+                  >
+                    <Trash2 className="w-3 h-3" />
                   </button>
                 </div>
 
@@ -1016,11 +1024,24 @@ function EditEventModal({ event, onClose, onSave }: {
     maxParticipants: event.maxParticipants,
     participantsCount: event.participantsCount,
     status: event.status || 'open',
+    priceType: event.priceType || 'conscience',
     priceLabel: event.priceLabel || 'На совесть',
     priceAmount: event.priceAmount || 0,
     entryThreshold: event.entryThreshold || '',
     entryType: event.entryType || 'all'
   });
+
+  // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
+  const computedPriceLabel = () => {
+    if (formData.priceType === 'free') return 'Бесплатно';
+    if (formData.priceType === 'paid' && formData.priceAmount > 0) {
+      const per = formData.maxParticipants
+        ? ` • при ${formData.maxParticipants} ≈ ${Math.round(formData.priceAmount / formData.maxParticipants)} ₽/чел`
+        : '';
+      return `Аренда ${formData.priceAmount} ₽ — делится поровну на всех${per}`;
+    }
+    return 'На совесть';
+  };
 
   const handleSave = () => {
     onSave({
@@ -1037,8 +1058,9 @@ function EditEventModal({ event, onClose, onSave }: {
       maxParticipants: formData.maxParticipants,
       participantsCount: formData.participantsCount,
       status: formData.status,
-      priceLabel: formData.priceLabel,
-      priceAmount: formData.priceAmount,
+      priceType: formData.priceType,
+      priceLabel: computedPriceLabel(),
+      priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType
     });
@@ -1180,15 +1202,17 @@ function EditEventModal({ event, onClose, onSave }: {
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Стоимость аренды (₽)
+                Тип цены
               </label>
-              <input
-                type="number"
-                value={formData.priceAmount}
-                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
+              <select
+                value={formData.priceType}
+                onChange={(e) => setFormData({...formData, priceType: e.target.value as any})}
                 className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-                placeholder="500"
-              />
+              >
+                <option value="free">Бесплатно</option>
+                <option value="conscience">На совесть</option>
+                <option value="paid">Платно (аренда делится)</option>
+              </select>
             </div>
 
             <div>
@@ -1207,20 +1231,29 @@ function EditEventModal({ event, onClose, onSave }: {
             </div>
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Стоимость участия (BYN)
-            </label>
-            <input
-              type="text"
-              value={formData.priceLabel}
-              onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="50 BYN — обязательный взнос"
-            />
-            <p className="text-[9px] text-white/40 mt-1 italic">
-              Если не набирается минимум участников — мероприятие отменяется, оплата возвращается.
-            </p>
+          {formData.priceType === 'paid' && (
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Сумма аренды (₽) — делится поровну на всех
+              </label>
+              <input
+                type="number"
+                value={formData.priceAmount}
+                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                placeholder="500"
+              />
+            </div>
+          )}
+
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+            <p className="text-[10px] text-white/40 uppercase font-mono mb-1">Как увидят цену участники</p>
+            <p className="text-sm text-brand font-bold">{computedPriceLabel()}</p>
+            {formData.priceType === 'paid' && (
+              <p className="text-[9px] text-white/40 mt-1 italic">
+                Итоговая доля пересчитывается по числу участников. Если не набрался минимум — оплата возвращается.
+              </p>
+            )}
           </div>
 
           <div>
