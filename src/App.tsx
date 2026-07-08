@@ -279,14 +279,14 @@ export default function App() {
               </button>
             )}
 
-            {/* Admin Panel button (hidden для обычных) */}
+            {/* Admin Panel button - всегда виден */}
             <button
               onClick={() => setShowAdminPanel(true)}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10 opacity-10 hover:opacity-100"
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 cursor-pointer flex items-center gap-2 font-mono h-10"
               id="show-admin-panel-btn"
-              title="Админ-панель (скрыта)"
+              title="Админ-панель"
             >
-              <Shield className="w-4 h-4 text-brand" />
+              <Shield className="w-4 h-4" />
               <span>Админ</span>
             </button>
 
@@ -325,7 +325,7 @@ export default function App() {
           {/* Mobile menu overlay */}
           {mobileMenuOpen && (
             <div 
-              className="fixed inset-0 top-20 z-50 bg-[#0A0A0A]/95 backdrop-blur-md md:hidden"
+              className="fixed inset-0 top-20 z-50 bg-[#0A0A0A] backdrop-blur-xl md:hidden"
               onClick={() => setMobileMenuOpen(false)}
             >
               <div 
@@ -346,6 +346,15 @@ export default function App() {
                 >
                   <Gift className="w-4 h-4 text-brand" />
                   Дни Рождения
+                </button>
+
+                {/* Admin button in mobile menu */}
+                <button
+                  onClick={() => { setShowAdminPanel(true); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 cursor-pointer flex items-center gap-3 font-mono"
+                >
+                  <Shield className="w-4 h-4" />
+                  Админ-панель
                 </button>
 
                 {registeredEventIds.length > 0 && (
