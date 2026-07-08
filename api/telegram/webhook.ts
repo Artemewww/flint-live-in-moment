@@ -95,6 +95,12 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
   }
 }
 
+async function updateReg(evId: string, tgId: any, patch: Record<string, unknown>) {
+  await supabase.from('registrations').update(patch).eq('event_id', evId).eq('telegram_id', tgId);
+}
+function kb(rows: any[]) { return { inline_keyboard: rows }; }
+function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
@@ -109,35 +115,103 @@ export default async function handler(req: any, res: any) {
     const site = siteUrl(req);
     const openBtn = { text: '🗓 Открыть афишу', web_app: { url: site } };
 
-    // Нажатие inline-кнопки «Записаться».
+    // Кнопки: запись + пошаговый умный опрос под событие.
     if (update.callback_query) {
       const cq = update.callback_query;
       const data = cq.data || '';
       const chatId = cq.message?.chat?.id;
+      const msgId = cq.message?.message_id;
+      const tgId = cq.from.id;
+
+      const finalConfirm = async (title: string) => {
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ Готово! Ты записан(а) на «<b>${esc(title)}</b>».\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы по событию — прямо в этот чат.`,
+          reply_markup: kb([[openBtn]]),
+        });
+      };
+      const askFood = async (evId: string) => {
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: '🍽 Твоё питание? (учтём в списке закупки)',
+          reply_markup: kb([
+            [{ text: '🍗 Всеядный', callback_data: `rf:${evId}:all` }],
+            [{ text: '🥗 Вегетарианец', callback_data: `rf:${evId}:veg` }],
+            [{ text: '🌱 Веган', callback_data: `rf:${evId}:vegan` }],
+          ]),
+        });
+      };
+
+      // Старт записи с карточки события.
       if (data.startsWith('reg_')) {
         const ev = await getEvent(data.slice(4));
         if (!ev) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено' });
-        } else {
-          const r = await registerFromBot(cq.from, ev);
-          await tg('answerCallbackQuery', {
-            callback_query_id: cq.id,
-            text: r === 'already' ? 'Вы уже записаны' : r === 'ok' ? 'Готово! Вы записаны' : 'Ошибка, попробуйте позже',
-          });
-          if (r !== 'error') {
-            await tg('sendMessage', {
-              chat_id: chatId,
-              parse_mode: 'HTML',
-              text:
-                r === 'already'
-                  ? `Вы уже записаны на «${esc(ev.title)}».`
-                  : `✅ Вы записаны на «<b>${esc(ev.title)}</b>»!\n\nДальше всё автоматически: бот сам пришлёт детали, точную локацию и напоминания перед событием. Любые вопросы по событию задавай прямо здесь — бот подскажет.`,
-              reply_markup: { inline_keyboard: [[openBtn]] },
-            });
-          }
+          return res.status(200).json({ ok: true });
         }
+        const r = await registerFromBot(cq.from, ev);
+        await tg('answerCallbackQuery', {
+          callback_query_id: cq.id,
+          text: r === 'already' ? 'Ты уже записан — уточним детали' : r === 'ok' ? 'Готово! Пара уточнений' : 'Ошибка, попробуйте позже',
+        });
+        if (r === 'error') return res.status(200).json({ ok: true });
+        // Городские/интеллектуальные — без лишних вопросов.
+        if (ev.type === 'intellectual') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Ты записан(а) на «<b>${esc(ev.title)}</b>»!\n\nДетали и напоминания придут в бот. Вопросы — прямо сюда.`,
+            reply_markup: kb([[openBtn]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        // Иначе — умный опрос под событие: транспорт → (места) → питание.
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇\n\n🚗 Как добираешься?`,
+          reply_markup: kb([
+            [{ text: '🚗 Я на авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
+            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
+          ]),
+        });
         return res.status(200).json({ ok: true });
       }
+
+      // Шаги опроса (stateless: событие и ответ закодированы в callback_data).
+      if (data.startsWith('rt:') || data.startsWith('rs:') || data.startsWith('rf:')) {
+        const [action, evId, val] = data.split(':');
+        const ev = await getEvent(evId);
+        const title = ev ? ev.title : 'событие';
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+
+        if (action === 'rt') {
+          if (val === 'car') {
+            await updateReg(evId, tgId, { has_transport: true, transport_details: 'Свой автомобиль' });
+            await tg('editMessageText', {
+              chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+              text: '🚗 Сколько свободных мест можешь взять?',
+              reply_markup: kb([[1, 2, 3, 4].map((n) => ({ text: String(n), callback_data: `rs:${evId}:${n}` }))]),
+            });
+          } else {
+            await updateReg(evId, tgId, { has_transport: false, transport_details: val === 'seek' ? 'Ищет попутку' : null });
+            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
+          }
+          return res.status(200).json({ ok: true });
+        }
+        if (action === 'rs') {
+          await updateReg(evId, tgId, { has_transport: true, transport_seats: Number(val) });
+          if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
+          return res.status(200).json({ ok: true });
+        }
+        if (action === 'rf') {
+          const diet = val === 'veg' ? 'vegetarian' : val === 'vegan' ? 'vegan' : 'all';
+          await supabase.from('members').update({ dietary: diet }).eq('telegram_id', tgId);
+          await updateReg(evId, tgId, { dietary: diet });
+          await finalConfirm(title);
+          return res.status(200).json({ ok: true });
+        }
+      }
+
       await tg('answerCallbackQuery', { callback_query_id: cq.id });
       return res.status(200).json({ ok: true });
     }
