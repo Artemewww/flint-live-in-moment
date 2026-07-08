@@ -280,88 +280,41 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const broadcastEvent = async (event: CommunityEvent) => {
     setBroadcasting(event.id);
     setBroadcastResult(null);
-
     try {
-      // Получаем всех пользователей из API или localStorage
-      let registrations: Array<{telegram: string}> = [];
-      
-      try {
-        const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`, {
-          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
-        });
-        if (res.ok) {
-          const data = await res.json();
-          registrations = (data.registrations || [])
-            .map((r: any) => ({ telegram: r.telegram_id != null ? String(r.telegram_id) : '' }))
-            .filter((r: {telegram: string}) => r.telegram);
-        }
-      } catch (err) {
-        console.error('Failed to load from API, using localStorage:', err);
-      }
-      
-      // Fallback на localStorage
-      if (registrations.length === 0) {
-        registrations = JSON.parse(localStorage.getItem('event_registrations') || '[]');
-      }
-      
-      const uniqueUsers = Array.from(new Map(registrations.map(r => [r.telegram, r])).values()) as Array<{telegram: string}>;
-
-      if (uniqueUsers.length === 0) {
-        setBroadcastResult({
-          eventId: event.id,
-          success: false,
-          message: 'Нет зарегистрированных пользователей'
-        });
-        setBroadcasting(null);
-        return;
-      }
-
-      // Отправляем уведомление через Telegram Bot API
-      const botToken = process.env.TELEGRAM_BOT_TOKEN || '7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A';
-      
-      const results = await Promise.allSettled(
-        uniqueUsers.map(async (user: {telegram: string}) => {
-          const message = `🔔 <b>Новое мероприятие!</b>\n\n` +
-            `📅 <b>${event.title}</b>\n` +
-            `📆 ${event.dateLabel}\n` +
-            `📍 ${event.location}\n\n` +
-            `💰 ${event.priceLabel}\n\n` +
-            `🔗 <a href="https://t.me/campsflint_bot?start=event_${event.id}">Записаться через бота</a>`;
-
-          const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: user.telegram,
-              text: message,
-              parse_mode: 'HTML'
-            })
-          });
-
-          return response.ok;
-        })
-      );
-
-      const successCount = results.filter((r: PromiseSettledResult<boolean>) => r.status === 'fulfilled' && r.value).length;
-      const totalCount = uniqueUsers.length;
-
+      // Рассылка идёт на сервере (токен бота не в браузере, безопасно).
+      const res = await fetch('/api/admin/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify({ eventId: event.id }),
+      });
+      const data = await res.json().catch(() => ({}));
       setBroadcastResult({
         eventId: event.id,
-        success: successCount > 0,
-        message: `Отправлено ${successCount}/${totalCount} пользователям`
+        success: !!data.ok,
+        message: data.ok
+          ? `Отправлено ${data.sent}/${data.total} участникам`
+          : (data.message || data.error || 'Некому слать (нет Telegram-получателей)'),
       });
-
-      // Очищаем результат через 5 секунд
-      setTimeout(() => setBroadcastResult(null), 5000);
+      setTimeout(() => setBroadcastResult(null), 6000);
     } catch (error) {
-      setBroadcastResult({
-        eventId: event.id,
-        success: false,
-        message: 'Ошибка рассылки'
-      });
+      setBroadcastResult({ eventId: event.id, success: false, message: 'Ошибка рассылки' });
     } finally {
       setBroadcasting(null);
     }
+  };
+
+  // Обновить статус/оплату участника и обновить список.
+  const patchRegistration = async (reg: any, patch: Record<string, unknown>) => {
+    try {
+      await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify(patch),
+      });
+    } catch (err) {
+      console.error('Ошибка обновления участника:', err);
+    }
+    if (selectedEvent) loadEventStats(selectedEvent);
   };
 
   if (!isAuthenticated) {
@@ -754,8 +707,19 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               </div>
 
                               <div className="flex gap-1 mt-2">
-                                <button className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all">
-                                  Редактировать
+                                <button
+                                  onClick={() => patchRegistration(reg, { status: reg.status === 'confirmed' ? 'pending' : 'confirmed' })}
+                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${reg.status === 'confirmed' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                                  title="Подтвердить участие"
+                                >
+                                  {reg.status === 'confirmed' ? '✓ Подтверждён' : 'Подтвердить'}
+                                </button>
+                                <button
+                                  onClick={() => patchRegistration(reg, { paymentStatus: reg.paymentStatus === 'paid' ? 'pending' : 'paid' })}
+                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${reg.paymentStatus === 'paid' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                                  title="Отметить оплату"
+                                >
+                                  {reg.paymentStatus === 'paid' ? '✓ Оплачено' : 'Оплата'}
                                 </button>
                                 <button
                                   onClick={async () => {
