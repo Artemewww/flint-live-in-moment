@@ -41,7 +41,38 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'POST') {
     // Создать или обновить событие
     try {
-      const eventData = req.body;
+      const body = req.body;
+
+      // Маппинг camelCase -> snake_case для Supabase
+      const eventData = {
+        id: body.id,
+        title: body.title,
+        description: body.description,
+        type: body.type,
+        date: body.date,
+        date_label: body.dateLabel || body.date,
+        time: body.time || null,
+        time_end: body.timeEnd || null,
+        location: body.location,
+        location_details: body.locationDetails || null,
+        coordinates_lat: body.coordinates?.lat || null,
+        coordinates_lng: body.coordinates?.lng || null,
+        pain_point: body.painPoint || null,
+        image: body.image || null,
+        max_participants: body.maxParticipants || 15,
+        participants_count: body.participantsCount || 0,
+        telegram_bot_url: body.telegramBotUrl || null,
+        price_type: body.priceType || 'conscience',
+        price_label: body.priceLabel || null,
+        price_amount: body.priceAmount || 0,
+        entry_threshold: body.entryThreshold || null,
+        entry_type: body.entryType || 'all',
+        status: body.status || 'locked',
+        locked_hint: body.lockedHint || null,
+        program: body.program || [],
+        notifications: body.notifications || {},
+        program_voting: body.programVoting || null
+      };
 
       const { data: event, error } = await supabase
         .from('events')
@@ -53,7 +84,7 @@ export default async function handler(req: any, res: any) {
 
       if (error) {
         console.error('Event save error:', error);
-        return res.status(500).json({ error: 'Failed to save event' });
+        return res.status(500).json({ error: 'Failed to save event', details: error.message });
       }
 
       return res.status(200).json({ success: true, event });
