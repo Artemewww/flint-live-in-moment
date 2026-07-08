@@ -6,6 +6,40 @@ import { CommunityEvent } from '../types';
 const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
 
+// Приводим заявку из БД (snake_case) к виду, который ждёт интерфейс (camelCase).
+function mapRegistration(r: any) {
+  return {
+    id: r.id,
+    name: r.name || 'Гость',
+    telegram: r.username || (r.telegram_id != null ? String(r.telegram_id) : ''),
+    telegramId: r.telegram_id,
+    phone: r.phone || '',
+    status: r.status || 'pending',
+    paymentStatus: r.payment_status || 'pending',
+    paymentAmount: r.payment_amount || 0,
+    hasTransport: r.has_transport || false,
+    transportDetails: r.transport_details || '',
+    transportSeats: r.transport_seats || 0,
+    inventory: r.inventory || [],
+    inviter: r.inviter || '',
+    category: r.category || '',
+    dietary: r.dietary || '',
+    guestCount: r.guest_count || 0,
+  };
+}
+
+// Считаем статистику по заявкам единообразно на клиенте.
+function buildStats(regs: any[]) {
+  return {
+    total: regs.length,
+    confirmed: regs.filter((r) => r.status === 'confirmed').length,
+    pending: regs.filter((r) => r.status === 'pending').length,
+    payments: regs.filter((r) => r.paymentStatus === 'paid').length,
+    totalAmount: regs.reduce((s, r) => s + (r.paymentAmount || 0), 0),
+    registrations: regs,
+  };
+}
+
 interface AdminPanelProps {
   events: CommunityEvent[];
   onUpdateEvent: (event: CommunityEvent) => void;
@@ -210,14 +244,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setSelectedEvent(event);
     
     try {
-      // Пробуем загрузить из API
-      const res = await fetch(`/api/admin/events/${event.id}/registrations`, {
+      // Загружаем заявки из API (Supabase)
+      const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`, {
         headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
       });
-      
+
       if (res.ok) {
         const data = await res.json();
-        setEventStats(data.stats);
+        const regs = (data.registrations || []).map(mapRegistration);
+        setEventStats(buildStats(regs));
         setActiveTab('overview');
         return;
       }
@@ -251,12 +286,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       let registrations: Array<{telegram: string}> = [];
       
       try {
-        const res = await fetch(`/api/admin/events/${event.id}/registrations`, {
+        const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`, {
           headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
         });
         if (res.ok) {
           const data = await res.json();
-          registrations = data.registrations.map((r: any) => ({ telegram: r.telegram }));
+          registrations = (data.registrations || [])
+            .map((r: any) => ({ telegram: r.telegram_id != null ? String(r.telegram_id) : '' }))
+            .filter((r: {telegram: string}) => r.telegram);
         }
       } catch (err) {
         console.error('Failed to load from API, using localStorage:', err);
@@ -725,7 +762,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                     if (confirm(`Удалить участника ${reg.name}?`)) {
                                       // Пробуем удалить через API
                                       try {
-                                        await fetch(`/api/admin/registrations/${reg.id}`, {
+                                        await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
                                           method: 'DELETE',
                                           headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
                                         });
@@ -753,7 +790,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   </div>
                 )}
 
-                {activeTab === 'logistics' && (
+                {activeTab === 'logistics' && eventStats && (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
                       <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
