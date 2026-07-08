@@ -18,6 +18,41 @@ import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
+// Маппинг snake_case -> camelCase для данных из Supabase
+function mapEventToCamelCase(event: any): CommunityEvent {
+  if (!event) return event;
+  return {
+    id: event.id,
+    title: event.title,
+    description: event.description,
+    type: event.type,
+    date: event.date,
+    dateLabel: event.date_label || event.dateLabel || event.date,
+    time: event.time || '',
+    timeEnd: event.time_end || event.timeEnd || '',
+    location: event.location,
+    locationDetails: event.location_details || event.locationDetails,
+    coordinates: event.coordinates || (event.coordinates_lat ? { lat: event.coordinates_lat, lng: event.coordinates_lng } : undefined),
+    painPoint: event.pain_point || event.painPoint || '',
+    houseQualities: event.house_qualities || event.houseQualities || [],
+    image: event.image,
+    maxParticipants: event.max_participants ?? event.maxParticipants ?? 15,
+    participantsCount: event.participants_count ?? event.participantsCount ?? 0,
+    telegramBotUrl: event.telegram_bot_url || event.telegramBotUrl,
+    priceType: event.price_type || event.priceType || 'conscience',
+    priceLabel: event.price_label || event.priceLabel,
+    priceAmount: event.price_amount ?? event.priceAmount ?? 0,
+    entryThreshold: event.entry_threshold || event.entryThreshold,
+    entryType: event.entry_type || event.entryType || 'all',
+    needsOnboarding: event.needs_onboarding ?? event.needsOnboarding ?? false,
+    status: event.status || 'locked',
+    lockedHint: event.locked_hint || event.lockedHint,
+    program: event.program || [],
+    notifications: event.notifications || {},
+    programVoting: event.program_voting || event.programVoting
+  };
+}
+
 export default function App() {
   const [events, setEvents] = useState<CommunityEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -53,7 +88,8 @@ export default function App() {
       .then(res => res.ok ? res.json() : Promise.reject('API not available'))
       .then(data => {
         if (data && data.events && data.events.length > 0) {
-          setEvents(data.events);
+          const mappedEvents = data.events.map(mapEventToCamelCase);
+          setEvents(mappedEvents);
         } else {
           throw new Error('No events from API');
         }
@@ -66,14 +102,15 @@ export default function App() {
           .then(res => res.json())
           .then(data => {
             if (data && data.length > 0) {
-              setEvents(data);
+              setEvents(data.map(mapEventToCamelCase));
             }
             setEventsLoading(false);
           })
           .catch(() => {
             // Fallback на локальные данные
             import('./data').then(module => {
-              setEvents(module.INITIAL_EVENTS);
+              const localEvents = (module.INITIAL_EVENTS || []).map(mapEventToCamelCase);
+              setEvents(localEvents);
               setEventsLoading(false);
             });
           });
@@ -178,7 +215,7 @@ export default function App() {
       // Перезагружаем события из JSON
       fetch('/events.json')
         .then(res => res.json())
-        .then(data => setEvents(data))
+        .then(data => setEvents(data.map(mapEventToCamelCase)))
         .catch(() => {});
       setShowMyRegistrationsModal(false);
     }
@@ -532,95 +569,24 @@ export default function App() {
                 </div>
 
                 <div className="space-y-3">
-                  {/* Style 0: Foundation */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('foundation', false, 20)}
+                  {[
+                    { key: 'foundation', title: '1. Предназначение (Фундамент) — Вектор жизни', desc: 'Осознание своей жизненной миссии, целей, глубокое понимание своего призвания и ориентиров в жизни.' },
+                    { key: 'wall', title: '2. Воля (Стены) — Мужской Дух', desc: 'Плавление зажимов, баня дубовым веником, ледяная прорубь, честный разговор лицом к лицу без страха осуждений.' },
+                    { key: 'roof', title: '3. Совесть (Крыша) — Интеллект', desc: 'Интеллектуальные дискуссионные баттлы, глубокий разбор прочитанного в читательском клубе, избавление от чужих клише.' },
+                    { key: 'decor', title: '4. Творчество (Декор) — Эстетика', desc: 'Музыкальные джемы у ночного костра, лесные фотосессии, раскрытие природной харизмы и созидательность.' },
+                    { key: 'heat', title: '5. Любовь (Тепло) — Союз', desc: 'Встречи мужчин и женщин в смешанных группах. Зеркало подсознания, построение гармоничных искренних союзов.' },
+                    { key: 'life', title: '6. Счастье (Дзен / Жизнь в доме) — Бытие', desc: 'Медитации в тишине на каяках сплава, лесной трекинг, чистый воздух, слияние с естественными биоритмами Земли.' }
+                  ].map((vec, i) => (
+                    <div key={i} className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
+                      <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
+                        {getVectorIconByKey(vec.key, false, 20)}
+                      </div>
+                      <div className="space-y-1 text-left">
+                        <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">{vec.title}</strong>
+                        <p className="text-[11px] text-white/70 leading-normal font-sans">{vec.desc}</p>
+                      </div>
                     </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        1. Предназначение (Фундамент) — Вектор жизни
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Осознание своей жизненной миссии, целей, глубокое понимание своего призвания и ориентиров в жизни.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Style 1: Wall */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('wall', false, 20)}
-                    </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        2. Воля (Стены) — Мужской Дух
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Плавление зажимов, баня дубовым веником, ледяная прорубь, честный разговор лицом к лицу без страха осуждений.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Style 2: Roof */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('roof', false, 20)}
-                    </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        3. Совесть (Крыша) — Интеллект
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Интеллектуальные дискуссионные баттлы, глубокий разбор прочитанного в читательском клубе, избавление от чужих клише.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Style 3: Decor */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('decor', false, 20)}
-                    </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        4. Творчество (Декор) — Эстетика
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Музыкальные джемы у ночного костра, лесные фотосессии, раскрытие природной харизмы и созидательность.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Style 4: Heat */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('heat', false, 20)}
-                    </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        5. Любовь (Тепло) — Союз
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Встречи мужчин и женщин в смешанных группах. Зеркало подсознания, построение гармоничных искренних союзов.
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Style 5: Life */}
-                  <div className="flex gap-3 p-3.5 rounded-2xl border transition-all bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white">
-                    <div className="p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]">
-                      {getVectorIconByKey('life', false, 20)}
-                    </div>
-                    <div className="space-y-1 text-left">
-                      <strong className="block text-xs uppercase font-mono tracking-wide text-[#E6FD3A]">
-                        6. Счастье (Дзен / Жизнь в доме) — Бытие
-                      </strong>
-                      <p className="text-[11px] text-white/70 leading-normal font-sans">
-                        Медитации в тишине на каяках сплава, лесной трекинг, чистый воздух, слияние с естественными биоритмами Земли.
-                      </p>
-                    </div>
-                  </div>
+                  ))}
                 </div>
               </div>
 
