@@ -117,6 +117,46 @@ export default function App() {
       });
   }, []);
 
+  // Внутри Telegram — подтягиваем свои заявки из БД, чтобы «Мои Участия»
+  // работали на телефоне даже если человек записывался через бота.
+  useEffect(() => {
+    const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
+    if (!initData) return;
+    fetch('/api/my', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initData }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const regs = (d && d.registrations) || [];
+        if (!regs.length) return;
+        setUserRegistrations((prev) => {
+          const map = new Map(prev.map((r) => [r.eventId, r]));
+          regs.forEach((r: any) =>
+            map.set(r.eventId, {
+              id: r.id || r.eventId,
+              eventId: r.eventId,
+              telegram: '',
+              name: r.name || '',
+              phone: r.phone || '',
+              status: r.status || 'pending',
+              paymentStatus: r.paymentStatus || 'pending',
+              paymentAmount: r.paymentAmount || 0,
+              donationAmount: 0,
+              hasTransport: !!r.hasTransport,
+              transportSeats: r.transportSeats || 0,
+              inventory: [],
+              registeredAt: r.registeredAt || new Date().toISOString(),
+            } as Registration)
+          );
+          return Array.from(map.values());
+        });
+        setRegisteredEventIds((prev) => Array.from(new Set([...prev, ...regs.map((r: any) => r.eventId)])));
+      })
+      .catch(() => {});
+  }, []);
+
   // Load registration state from localStorage on init
   useEffect(() => {
     try {

@@ -184,51 +184,33 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   label: string;
   factors: string[];
 } {
-  const RENTAL_COST = 500; // Стоимость аренды бани в BYN
-  const MIN_PARTICIPANTS = 10; // Минимум для подтверждения заезда
-  const eventDate = new Date(event.date);
-  const todayDate = new Date(today);
-  const daysUntilEvent = Math.ceil((eventDate.getTime() - todayDate.getTime()) / (1000 * 60 * 60 * 24));
-  
-  // Определяем день недели (0 = воскресенье, 6 = суббота)
-  const dayOfWeek = eventDate.getDay();
-  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-  
-  // Количество участников (включая текущего пользователя если он зарегистрирован)
-  const currentParticipants = event.participantsCount;
-  
-  // Если нет участников, показываем цену при минимальном количестве
-  const participantsForCalc = currentParticipants > 0 ? currentParticipants : MIN_PARTICIPANTS;
-  
-  // Базовая цена = аренда / участники
-  let price = Math.ceil(RENTAL_COST / participantsForCalc);
-  const factors: string[] = [];
-  
-  // 1. Скидка за раннюю регистрацию (за 7+ дней)
-  if (daysUntilEvent >= 7) {
-    price = Math.round(price * 0.9); // -10%
-    factors.push('Ранняя запись (-10%)');
+  const type = event.priceType || 'conscience';
+
+  // Бесплатно / на совесть — без деления.
+  if (type === 'free') {
+    return { price: 0, label: 'Бесплатно', factors: [] };
   }
-  
-  // 2. Наценка за позднюю регистрацию (за 2 дня)
-  if (daysUntilEvent <= 2 && daysUntilEvent >= 0) {
-    price = Math.round(price * 1.15); // +15%
-    factors.push('Поздняя регистрация (+15%)');
+  const total = Number((event as any).priceAmount) || 0;
+  if (type !== 'paid' || total <= 0) {
+    return { price: 0, label: event.priceLabel || 'На совесть', factors: [] };
   }
-  
-  // 3. Выходные дороже
-  if (isWeekend) {
-    price = Math.round(price * 1.2); // +20%
-    factors.push('Выходные (+20%)');
+
+  // Платно: аренда делится ПОРОВНУ на текущее число участников + прогноз к порогу.
+  const threshold = Number((event as any).minParticipants) || 10;
+  const current = event.participantsCount || 0;
+  const perNow = Math.ceil(total / Math.max(current, 1));
+  const perGoal = Math.ceil(total / threshold);
+
+  const factors: string[] = [
+    `Аренда ${total} ₽ делится поровну на всех`,
+    `Сейчас ${current} чел → ≈ ${perNow} ₽/чел`,
+  ];
+  if (current < threshold) {
+    factors.push(`При ${threshold} участниках — ≈ ${perGoal} ₽/чел. Зови друзей — станет дешевле!`);
+  } else {
+    factors.push(`Порог ${threshold} набран — заезд подтверждён ✅`);
   }
-  
-  // 4. Минимальная и максимальная цена
-  price = Math.max(30, Math.min(price, 150)); // От 30 до 150 BYN
-  
-  return {
-    price: price,
-    label: `${price} BYN`,
-    factors
-  };
+
+  return { price: perNow, label: `≈ ${perNow} ₽/чел`, factors };
 }
 

@@ -169,7 +169,8 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇\n\n🚗 Как добираешься?`,
           reply_markup: kb([
-            [{ text: '🚗 Я на авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
             [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
             [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
           ]),
@@ -192,6 +193,10 @@ export default async function handler(req: any, res: any) {
               text: '🚗 Сколько свободных мест можешь взять?',
               reply_markup: kb([[1, 2, 3, 4].map((n) => ({ text: String(n), callback_data: `rs:${evId}:${n}` }))]),
             });
+          } else if (val === 'carfull') {
+            // Авто есть, но без свободных мест (везёт вещи/заезжает по пути).
+            await updateReg(evId, tgId, { has_transport: true, transport_seats: 0, transport_details: 'Авто без свободных мест' });
+            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
           } else {
             await updateReg(evId, tgId, { has_transport: false, transport_details: val === 'seek' ? 'Ищет попутку' : null });
             if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
