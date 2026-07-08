@@ -364,7 +364,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-6xl shadow-2xl relative z-10 border border-white/10 flex flex-col max-h-[90vh] text-white"
+        className="bg-[#121212] rounded-2xl md:rounded-3xl w-full max-w-6xl shadow-2xl relative z-10 border border-white/10 flex flex-col max-h-[92vh] text-white"
       >
         {/* Header */}
         <div className="p-6 border-b border-white/10 flex items-center justify-between">
@@ -380,9 +380,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           </button>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* Events List Sidebar */}
-          <div className="w-80 border-r border-white/10 overflow-y-auto p-4 space-y-3">
+          <div className="w-full md:w-80 shrink-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 max-h-56 md:max-h-none">
             <div className="flex items-center justify-between mb-4">
               <span className="text-white/40 text-[10px] uppercase font-mono">Мероприятия: {events.length}</span>
               <div className="flex gap-1">
@@ -514,7 +514,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 </div>
 
                 {/* Tabs */}
-                <div className="flex gap-2 border-b border-white/10 pb-3">
+                <div className="flex flex-wrap gap-2 border-b border-white/10 pb-3">
                   <button
                     onClick={() => setActiveTab('overview')}
                     className={`px-4 py-2 rounded-lg text-xs font-bold uppercase transition-all ${

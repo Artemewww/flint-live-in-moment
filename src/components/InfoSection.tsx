@@ -176,7 +176,7 @@ export default function InfoSection({
             <button 
               type="button"
               onClick={() => onOpenDetails(featuredEvent)} 
-              className="flex-1 border border-white/20 hover:border-brand/40 bg-white/5 text-white hover:text-brand px-6 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
+              className="flex-1 border border-white/25 hover:border-brand/50 bg-black/60 backdrop-blur-md text-white hover:text-brand px-6 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               Узнать подробнее
               <Info className="w-4 h-4 text-brand shrink-0" />
@@ -185,7 +185,7 @@ export default function InfoSection({
             <button 
               type="button"
               onClick={onOpenManifesto} 
-              className="border border-white/20 hover:border-brand/40 bg-white/5 text-white hover:text-brand px-5 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
+              className="border border-white/25 hover:border-brand/50 bg-black/60 backdrop-blur-md text-white hover:text-brand px-5 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
             >
               Кодекс сообщества
               <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />

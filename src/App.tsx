@@ -250,13 +250,13 @@ export default function App() {
   };
 
   return (
-    <div id="app-root" className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-brand/35 selection:text-white pb-12 antialiased">
+    <div id="app-root" className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-brand/35 selection:text-white pb-12 antialiased overflow-x-hidden">
       {/* Dynamic Glow Accents */}
       <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute top-1/4 right-1/4 w-80 h-80 bg-brand/5 rounded-full blur-3xl pointer-events-none animate-pulse" />
 
       {/* Navigation Header */}
-      <header className="sticky top-0 z-40 bg-[#0A0A0A]/90 backdrop-blur-md border-b border-white/10" id="main-navigation">
+      <header className="sticky top-0 z-40 bg-[#0A0A0A] border-b border-white/10" id="main-navigation">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
           
           {/* Logo element in Upper-Left corner */}
@@ -361,17 +361,17 @@ export default function App() {
 
           {/* Mobile menu overlay */}
           {mobileMenuOpen && (
-            <div 
-              className="fixed inset-0 top-20 z-50 bg-[#0A0A0A] backdrop-blur-xl md:hidden"
+            <div
+              className="fixed inset-0 top-20 z-50 bg-[#0A0A0A] md:hidden overflow-y-auto"
               onClick={() => setMobileMenuOpen(false)}
             >
-              <div 
+              <div
                 className="flex flex-col items-start gap-3 p-6 max-w-sm mx-auto"
                 onClick={(e) => e.stopPropagation()}
               >
                 <button
                   onClick={() => { setShowManifestoModal(true); setMobileMenuOpen(false); }}
-                  className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                  className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
                 >
                   <BookOpen className="w-4 h-4 text-brand" />
                   Манифест
@@ -379,7 +379,7 @@ export default function App() {
 
                 <button
                   onClick={() => { setShowBirthdayCalendar(true); setMobileMenuOpen(false); }}
-                  className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                  className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
                 >
                   <Gift className="w-4 h-4 text-brand" />
                   Дни Рождения
@@ -397,7 +397,7 @@ export default function App() {
                 {registeredEventIds.length > 0 && (
                   <button
                     onClick={() => { setShowUserStats(true); setMobileMenuOpen(false); }}
-                    className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                    className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
                   >
                     <Trophy className="w-4 h-4 text-brand" />
                     Мой Прогресс ({registeredEventIds.length})
