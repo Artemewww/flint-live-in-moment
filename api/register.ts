@@ -102,6 +102,24 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: 'Failed to create member', details: memberError.message, delivered: false });
     }
 
+    // Реф-система (best-effort): личный ref_code + фиксация пригласившего (однократно).
+    try {
+      if (!(member as any).ref_code) {
+        for (let i = 0; i < 5; i++) {
+          const c = Math.random().toString(36).slice(2, 9);
+          const { error } = await supabase.from('members').update({ ref_code: c }).eq('telegram_id', member.telegram_id);
+          if (!error) break;
+        }
+      }
+      if (body.refCode && !(member as any).referred_by) {
+        const { data: inv } = await supabase.from('members').select('telegram_id').eq('ref_code', body.refCode).maybeSingle();
+        if (inv && inv.telegram_id !== member.telegram_id) {
+          await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', member.telegram_id);
+          await supabase.from('referrals').insert({ ref_code: body.refCode, inviter_id: inv.telegram_id, invited_id: member.telegram_id, event_id: eventId });
+        }
+      }
+    } catch (e) { console.error('referral bind skipped:', e); }
+
     // 2) Анти-дубль: одна активная заявка на событие от одного человека.
     const { data: existingReg } = await supabase
       .from('registrations')

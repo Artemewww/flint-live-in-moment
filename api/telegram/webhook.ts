@@ -62,6 +62,7 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
         { telegram_id: telegramId, username: from.username || null, first_name: from.first_name || null },
         { onConflict: 'telegram_id' }
       );
+    try { await ensureRefCode(telegramId); } catch {}
     const { data: existing } = await supabase
       .from('registrations')
       .select('id')
@@ -97,6 +98,33 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
 
 async function updateReg(evId: string, tgId: any, patch: Record<string, unknown>) {
   await supabase.from('registrations').update(patch).eq('event_id', evId).eq('telegram_id', tgId);
+}
+
+/** Реф-система: выдать участнику личный ref_code (если ещё нет). */
+async function ensureRefCode(tgId: number): Promise<string | null> {
+  const { data } = await supabase.from('members').select('ref_code').eq('telegram_id', tgId).maybeSingle();
+  if (data?.ref_code) return data.ref_code;
+  for (let i = 0; i < 5; i++) {
+    const c = Math.random().toString(36).slice(2, 9);
+    const { error } = await supabase.from('members').update({ ref_code: c }).eq('telegram_id', tgId);
+    if (!error) return c;
+  }
+  return null;
+}
+
+/** Зафиксировать пригласившего по ref-коду (однократно). */
+async function bindReferrer(from: any, code: string) {
+  await supabase.from('members').upsert(
+    { telegram_id: from.id, username: from.username || null, first_name: from.first_name || null },
+    { onConflict: 'telegram_id' }
+  );
+  const { data: me } = await supabase.from('members').select('referred_by').eq('telegram_id', from.id).maybeSingle();
+  if (me && (me as any).referred_by) return;
+  const { data: inv } = await supabase.from('members').select('telegram_id').eq('ref_code', code).maybeSingle();
+  if (inv && inv.telegram_id !== from.id) {
+    await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', from.id);
+    try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch {}
+  }
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
@@ -252,6 +280,10 @@ export default async function handler(req: any, res: any) {
 
       if (text.startsWith('/start')) {
         const payload = text.split(' ')[1] || '';
+        // Реферальная ссылка: фиксируем пригласившего, дальше — обычное приветствие.
+        if (payload.startsWith('ref_')) {
+          try { await bindReferrer(msg.from, payload.slice('ref_'.length)); } catch {}
+        }
         if (payload.startsWith('event_')) {
           const ev = await getEvent(payload.slice('event_'.length));
           if (ev) {
