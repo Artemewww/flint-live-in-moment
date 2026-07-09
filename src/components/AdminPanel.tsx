@@ -1,10 +1,42 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity } from 'lucide-react';
-import { CommunityEvent } from '../types';
+import { CommunityEvent, HouseQuality } from '../types';
+import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 
 const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
+
+/** Кликабельные теги 6 качеств «Дома Личности». Выбранные «горят». */
+function QualityChips({ selected, onChange }: { selected: HouseQuality[]; onChange: (q: HouseQuality[]) => void }) {
+  const keys = new Set<HouseQuality['key']>((selected || []).map(q => q.key));
+  const toggle = (key: HouseQuality['key']) => {
+    const next = new Set(keys);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    onChange(qualitiesFromKeys([...next]));
+  };
+  return (
+    <div>
+      <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Качества «Дома Личности» — что развивает событие</label>
+      <div className="flex flex-wrap gap-2">
+        {HOUSE_QUALITIES.map(q => {
+          const on = keys.has(q.key);
+          return (
+            <button
+              key={q.key}
+              type="button"
+              onClick={() => toggle(q.key)}
+              title={q.description}
+              className={`px-3 py-1.5 rounded-xl text-[11px] font-bold border transition-all cursor-pointer flex items-center gap-1.5 ${on ? 'bg-brand/15 border-brand/40 text-brand shadow-[0_0_10px_rgba(230,253,58,0.15)]' : 'bg-white/5 border-white/10 text-white/40 hover:border-white/25'}`}
+            >
+              <span>{q.emoji}</span>{q.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** Загрузка картинки события файлом (Supabase Storage). Превью + удаление + drag&drop. */
 function ImageUploadField({ value, onChange }: { value: string; onChange: (url: string) => void }) {
@@ -1108,7 +1140,8 @@ function EditEventModal({ event, onClose, onSave }: {
     priceLabel: event.priceLabel || 'Бесплатно',
     priceAmount: event.priceAmount || 0,
     entryThreshold: event.entryThreshold || '',
-    entryType: event.entryType || 'all'
+    entryType: event.entryType || 'all',
+    houseQualities: (event.houseQualities || []) as HouseQuality[]
   });
 
   // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
@@ -1145,7 +1178,8 @@ function EditEventModal({ event, onClose, onSave }: {
       priceLabel: computedPriceLabel(),
       priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
-      entryType: formData.entryType
+      entryType: formData.entryType,
+      houseQualities: formData.houseQualities
     });
   };
 
@@ -1285,6 +1319,8 @@ function EditEventModal({ event, onClose, onSave }: {
               placeholder="Например: перезагрузка тела и ума, честный мужской круг"
             />
           </div>
+
+          <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -1438,7 +1474,8 @@ function AddEventModal({ onClose, onAdd }: {
     priceLabel: 'Свободный вход',
     priceAmount: 0,
     entryThreshold: '100% Трезвость',
-    entryType: 'all' as 'male' | 'female' | 'all'
+    entryType: 'all' as 'male' | 'female' | 'all',
+    houseQualities: [] as HouseQuality[]
   });
 
   const handleAdd = () => {
@@ -1456,7 +1493,7 @@ function AddEventModal({ onClose, onAdd }: {
       timeEnd: formData.timeEnd,
       location: formData.location,
       painPoint: formData.painPoint,
-      houseQualities: [],
+      houseQualities: formData.houseQualities,
       image: formData.image || '',
       maxParticipants: formData.maxParticipants,
       participantsCount: 0,
@@ -1620,6 +1657,8 @@ function AddEventModal({ onClose, onAdd }: {
               <option value="female">Только женщины</option>
             </select>
           </div>
+
+          <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
           <input
             type="text"

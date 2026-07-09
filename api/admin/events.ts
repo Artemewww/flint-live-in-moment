@@ -41,6 +41,7 @@ function mapEventToCamelCase(event: any) {
     priceAmount: event.price_amount,
     entryThreshold: event.entry_threshold,
     entryType: event.entry_type,
+    houseQualities: event.house_qualities || [],
     status: event.status,
     lockedHint: event.locked_hint,
     program: event.program || [],
@@ -115,8 +116,9 @@ export default async function handler(req: any, res: any) {
         notifications: body.notifications || {},
         program_voting: body.programVoting || null
       };
-      // date_end шлём только если задан (колонка может отсутствовать до миграции).
+      // date_end / house_qualities шлём только если заданы (колонки могли отсутствовать до миграции).
       if (body.dateEnd) (eventData as any).date_end = body.dateEnd;
+      if (body.houseQualities) (eventData as any).house_qualities = body.houseQualities;
 
       const { data: event, error } = await supabase
         .from('events')
