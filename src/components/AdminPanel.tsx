@@ -47,6 +47,21 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
   );
 }
 
+/** Реквизиты оплаты события (ЕРИП / карта / способ) — показывается для платных. */
+function PaymentDetailsEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value || {};
+  const set = (k: string, val: any) => onChange({ ...v, [k]: val });
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+      <label className="text-[10px] text-white/40 uppercase font-mono block">💳 Реквизиты оплаты</label>
+      <input value={v.erip || ''} onChange={(e) => set('erip', e.target.value)} placeholder="ЕРИП / номер услуги" className={inp} />
+      <input value={v.card || ''} onChange={(e) => set('card', e.target.value)} placeholder="Номер карты" className={inp} />
+      <input value={v.method || ''} onChange={(e) => set('method', e.target.value)} placeholder="Способ / комментарий (напр. перевод по номеру телефона)" className={inp} />
+    </div>
+  );
+}
+
 /** Структурный редактор логистики события (точка/время выезда, бензин, обратная дорога). */
 function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
   const v = value || {};
@@ -1202,6 +1217,7 @@ function EditEventModal({ event, onClose, onSave }: {
     entryType: event.entryType || 'all',
     program: (event.program || []) as string[],
     logistics: (event.logistics || {}) as Record<string, any>,
+    paymentDetails: (event.paymentDetails || {}) as Record<string, any>,
     houseQualities: (event.houseQualities || []) as HouseQuality[]
   });
 
@@ -1242,6 +1258,7 @@ function EditEventModal({ event, onClose, onSave }: {
       entryType: formData.entryType,
       program: formData.program,
       logistics: formData.logistics,
+      paymentDetails: formData.paymentDetails,
       houseQualities: formData.houseQualities
     });
   };
@@ -1356,6 +1373,10 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <div>
             <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
+
+          {formData.priceType === 'paid' && (
+            <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
+          )}
           </div>
 
 
@@ -1547,6 +1568,7 @@ function AddEventModal({ onClose, onAdd }: {
     entryType: 'all' as 'male' | 'female' | 'all',
     program: [] as string[],
     logistics: {} as Record<string, any>,
+    paymentDetails: {} as Record<string, any>,
     houseQualities: [] as HouseQuality[]
   });
 
@@ -1580,6 +1602,7 @@ function AddEventModal({ onClose, onAdd }: {
       status: 'locked',
       program: formData.program,
       logistics: formData.logistics,
+      paymentDetails: formData.paymentDetails,
       notifications: {
         reminder7d: true,
         reminder3d: true,
@@ -1688,6 +1711,10 @@ function AddEventModal({ onClose, onAdd }: {
           />
 
           <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
+
+          {formData.priceType === 'paid' && (
+            <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
+          )}
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
 

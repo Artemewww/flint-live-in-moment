@@ -39,6 +39,12 @@ export interface CommunityEvent {
     returnInfo?: string;      // обратная дорога
     notes?: string;           // как добраться / доп. инфо
   };
+  /** Реквизиты оплаты (для платных событий): ЕРИП / карта / способ. */
+  paymentDetails?: {
+    erip?: string;
+    card?: string;
+    method?: string;
+  };
   coordinates?: {
     lat: number;
     lng: number;

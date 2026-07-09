@@ -12,6 +12,18 @@ function checkAdminAuth(req: any): boolean {
   return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
 }
 
+/** Начисление баллов участнику (read+update, без RPC). Best-effort. */
+async function bumpPoints(tgId: number, n: number) {
+  try {
+    const { data } = await supabase.from('members').select('points').eq('telegram_id', tgId).maybeSingle();
+    const cur = (data as any)?.points || 0;
+    await supabase.from('members').update({ points: cur + n }).eq('telegram_id', tgId);
+  } catch { /* колонка points могла отсутствовать до миграции */ }
+}
+
+const POINTS_ATTEND = 100;   // за подтверждённое участие
+const POINTS_REFERRAL = 150; // рефереру за первого приведённого
+
 export default async function handler(req: any, res: any) {
   // Проверяем авторизацию
   if (!checkAdminAuth(req)) {
@@ -113,6 +125,13 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ error: 'Missing registrationId' });
       }
 
+      // Текущее состояние — чтобы поймать переход pending→confirmed (для баллов).
+      const { data: before } = await supabase
+        .from('registrations')
+        .select('status,telegram_id')
+        .eq('id', registrationId)
+        .single();
+
       const updateData: any = {};
       if (status) updateData.status = status;
       if (paymentStatus) updateData.payment_status = paymentStatus;
@@ -128,6 +147,29 @@ export default async function handler(req: any, res: any) {
       if (error) {
         console.error('Registration update error:', error);
         return res.status(500).json({ error: 'Failed to update registration' });
+      }
+
+      // Баллы — ТОЛЬКО за достижение: подтверждённое участие (переход в confirmed).
+      if (status === 'confirmed' && before && before.status !== 'confirmed' && before.telegram_id) {
+        const memberId = Number(before.telegram_id);
+        await bumpPoints(memberId, POINTS_ATTEND);
+        try {
+          // Первое подтверждённое событие участника → награда пригласившему.
+          const { count } = await supabase
+            .from('registrations')
+            .select('id', { count: 'exact', head: true })
+            .eq('telegram_id', memberId)
+            .eq('status', 'confirmed')
+            .neq('id', registrationId);
+          if (!count) {
+            const { data: m } = await supabase.from('members').select('referred_by').eq('telegram_id', memberId).maybeSingle();
+            const inviter = (m as any)?.referred_by;
+            if (inviter) {
+              await bumpPoints(Number(inviter), POINTS_REFERRAL);
+              await supabase.from('referrals').update({ rewarded: true }).eq('invited_id', memberId).eq('inviter_id', inviter);
+            }
+          }
+        } catch { /* реф-награда best-effort */ }
       }
 
       return res.status(200).json({ success: true, registration });

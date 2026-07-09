@@ -37,6 +37,7 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     painPoint: event.pain_point || event.painPoint || '',
     houseQualities: event.house_qualities || event.houseQualities || [],
     logistics: event.logistics || {},
+    paymentDetails: event.payment_details || event.paymentDetails || {},
     image: event.image,
     maxParticipants: event.max_participants ?? event.maxParticipants ?? 15,
     participantsCount: event.participants_count ?? event.participantsCount ?? 0,

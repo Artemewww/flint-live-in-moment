@@ -166,11 +166,16 @@ export default async function handler(req: any, res: any) {
       const msgId = cq.message?.message_id;
       const tgId = cq.from.id;
 
-      const finalConfirm = async (title: string) => {
+      const payRow = (ev: any) => (ev?.price_type === 'paid' ? [{ text: '💳 Оплатить участие', callback_data: `pay_${ev.id}` }] : null);
+      const finalKb = (ev: any) => { const rows: any[] = []; const p = payRow(ev); if (p) rows.push(p); rows.push([openBtn]); return kb(rows); };
+      const finalConfirm = async (ev: any) => {
+        const paid = ev?.price_type === 'paid';
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ Готово! Ты записан(а) на «<b>${esc(title)}</b>».\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы по событию — прямо в этот чат.`,
-          reply_markup: kb([[openBtn]]),
+          text: `✅ Готово! Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>».` +
+            (paid ? '\n\n💳 Осталось оплатить участие — кнопка ниже.' : '') +
+            `\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы по событию — прямо в этот чат.`,
+          reply_markup: finalKb(ev),
         });
       };
       const askFood = async (evId: string) => {
@@ -238,6 +243,64 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Оплата: показать реквизиты + кнопку «Я оплатил».
+      if (data.startsWith('pay_')) {
+        const ev = await getEvent(data.slice(4));
+        if (!ev) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const pd = ev.payment_details || {};
+        const lines = ['💳 <b>Оплата участия</b>', ''];
+        if (ev.price_label) lines.push(esc(ev.price_label));
+        if (pd.card) lines.push(`💳 Карта: <code>${esc(pd.card)}</code>`);
+        if (pd.erip) lines.push(`🏦 ЕРИП: ${esc(pd.erip)}`);
+        if (pd.method) lines.push(`ℹ️ ${esc(pd.method)}`);
+        if (!pd.card && !pd.erip && !pd.method) lines.push('<i>Реквизиты уточняются у организатора.</i>');
+        lines.push('', 'После перевода нажми кнопку ниже — организатор подтвердит.');
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: lines.join('\n'), reply_markup: kb([[{ text: '✅ Я оплатил', callback_data: `paid_${ev.id}` }], [openBtn]]) });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Пользователь заявил об оплате → модерация организатору.
+      if (data.startsWith('paid_')) {
+        const evId = data.slice(5);
+        const ev = await getEvent(evId);
+        await updateReg(evId, tgId, { payment_status: 'submitted', payment_submitted_at: new Date().toISOString() });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отправлено на проверку' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '⏳ Оплата отправлена на проверку организатору. Как подтвердит — уведомим здесь.' });
+        if (ADMIN_CHAT_ID) {
+          await tg('sendMessage', {
+            chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+            text: `💰 <b>Оплата заявлена</b>\n${esc(ev?.title || evId)}\n${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''} (id ${tgId})`,
+            reply_markup: kb([[
+              { text: '✅ Подтвердить', callback_data: `payok_${evId}_${tgId}` },
+              { text: '❌ Отклонить', callback_data: `payno_${evId}_${tgId}` },
+            ]]),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Модерация оплаты (только костяк). Отклонил → у юзера снова горит «Оплатить».
+      if (data.startsWith('payok_') || data.startsWith('payno_')) {
+        if (!(await isCore(cq.from.id))) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждать может только организатор' }); return res.status(200).json({ ok: true }); }
+        const ok = data.startsWith('payok_');
+        const rest = data.slice(6);
+        const idx = rest.lastIndexOf('_');
+        const evId = rest.slice(0, idx);
+        const targetId = Number(rest.slice(idx + 1));
+        await updateReg(evId, targetId, { payment_status: ok ? 'paid' : 'pending' });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: ok ? 'Оплата подтверждена' : 'Отклонено' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `${ok ? '✅ Оплата подтверждена' : '❌ Оплата отклонена'} (id ${targetId}) — ${esc(cq.from.first_name || 'организатор')}` });
+        try {
+          if (ok) {
+            await tg('sendMessage', { chat_id: targetId, parse_mode: 'HTML', text: '✅ Твоя оплата подтверждена. Спасибо, ты в деле!' });
+          } else {
+            await tg('sendMessage', { chat_id: targetId, parse_mode: 'HTML', text: '❌ Оплата не подтверждена. Проверь перевод и попробуй снова.', reply_markup: kb([[{ text: '💳 Оплатить участие', callback_data: `pay_${evId}` }], [openBtn]]) });
+          }
+        } catch { /* пользователь мог не начинать чат */ }
+        return res.status(200).json({ ok: true });
+      }
+
       // Старт записи с карточки события.
       if (data.startsWith('reg_')) {
         if (gateOn() && !(await isApproved(tgId))) {
@@ -296,16 +359,16 @@ export default async function handler(req: any, res: any) {
           } else if (val === 'carfull') {
             // Авто есть, но без свободных мест (везёт вещи/заезжает по пути).
             await updateReg(evId, tgId, { has_transport: true, transport_seats: 0, transport_details: 'Авто без свободных мест' });
-            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
+            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
           } else {
             await updateReg(evId, tgId, { has_transport: false, transport_details: val === 'seek' ? 'Ищет попутку' : null });
-            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
+            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
           }
           return res.status(200).json({ ok: true });
         }
         if (action === 'rs') {
           await updateReg(evId, tgId, { has_transport: true, transport_seats: Number(val) });
-          if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(title);
+          if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
           return res.status(200).json({ ok: true });
         }
         if (action === 'rf') {
@@ -323,8 +386,9 @@ export default async function handler(req: any, res: any) {
             text:
               `✅ Готово! Ты записан(а) на «<b>${esc(title)}</b>»` +
               (guests > 0 ? ` +${guests} гост${guests === 1 ? 'ь' : 'я'}.\n<i>Напомним: за гостя отвечаешь и оплачиваешь ты.</i>` : '.') +
+              (ev?.price_type === 'paid' ? '\n\n💳 Осталось оплатить участие — кнопка ниже.' : '') +
               `\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы — прямо в этот чат.`,
-            reply_markup: kb([[openBtn]]),
+            reply_markup: finalKb(ev),
           });
           return res.status(200).json({ ok: true });
         }

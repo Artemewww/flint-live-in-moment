@@ -21,6 +21,7 @@ function mapEventToCamelCase(event: any) {
     location: event.location,
     locationDetails: event.location_details,
     logistics: event.logistics || {},
+    paymentDetails: event.payment_details || {},
     coordinates: {
       lat: event.coordinates_lat,
       lng: event.coordinates_lng
@@ -107,6 +108,7 @@ export default async function handler(req: any, res: any) {
       if (body.dateEnd) (eventData as any).date_end = body.dateEnd;
       if (body.houseQualities) (eventData as any).house_qualities = body.houseQualities;
       if (body.logistics) (eventData as any).logistics = body.logistics;
+      if (body.paymentDetails) (eventData as any).payment_details = body.paymentDetails;
 
       const { data: event, error } = await supabase
         .from('events')
