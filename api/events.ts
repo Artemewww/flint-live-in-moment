@@ -20,6 +20,7 @@ function mapEventToCamelCase(event: any) {
     timeEnd: event.time_end,
     location: event.location,
     locationDetails: event.location_details,
+    logistics: event.logistics || {},
     coordinates: {
       lat: event.coordinates_lat,
       lng: event.coordinates_lng
@@ -105,6 +106,7 @@ export default async function handler(req: any, res: any) {
       // date_end / house_qualities шлём только если заданы (колонки могли отсутствовать до миграции).
       if (body.dateEnd) (eventData as any).date_end = body.dateEnd;
       if (body.houseQualities) (eventData as any).house_qualities = body.houseQualities;
+      if (body.logistics) (eventData as any).logistics = body.logistics;
 
       const { data: event, error } = await supabase
         .from('events')

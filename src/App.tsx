@@ -35,6 +35,7 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     coordinates: event.coordinates || (event.coordinates_lat ? { lat: event.coordinates_lat, lng: event.coordinates_lng } : undefined),
     painPoint: event.pain_point || event.painPoint || '',
     houseQualities: event.house_qualities || event.houseQualities || [],
+    logistics: event.logistics || {},
     image: event.image,
     maxParticipants: event.max_participants ?? event.maxParticipants ?? 15,
     participantsCount: event.participants_count ?? event.participantsCount ?? 0,

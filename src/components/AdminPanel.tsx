@@ -47,6 +47,25 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
   );
 }
 
+/** Структурный редактор логистики события (точка/время выезда, бензин, обратная дорога). */
+function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value || {};
+  const set = (k: string, val: any) => onChange({ ...v, [k]: val });
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+      <label className="text-[10px] text-white/40 uppercase font-mono block">🚗 Логистика / как добраться</label>
+      <input value={v.assemblyPoint || ''} onChange={(e) => set('assemblyPoint', e.target.value)} placeholder="Точка сбора / выезда (напр. м. Каменная Горка)" className={inp} />
+      <div className="grid grid-cols-2 gap-2">
+        <input value={v.departureTime || ''} onChange={(e) => set('departureTime', e.target.value)} placeholder="Время выезда (18:30)" className={inp} />
+        <input type="number" value={v.fuelCost || ''} onChange={(e) => set('fuelCost', parseInt(e.target.value) || 0)} placeholder="Бензин ₽/чел" className={inp} />
+      </div>
+      <input value={v.returnInfo || ''} onChange={(e) => set('returnInfo', e.target.value)} placeholder="Обратная дорога (напр. ~22:00 обратно к метро)" className={inp} />
+      <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
+    </div>
+  );
+}
+
 /** Кликабельные теги 6 качеств «Дома Личности». Выбранные «горят». */
 function QualityChips({ selected, onChange }: { selected: HouseQuality[]; onChange: (q: HouseQuality[]) => void }) {
   const keys = new Set<HouseQuality['key']>((selected || []).map(q => q.key));
@@ -1182,6 +1201,7 @@ function EditEventModal({ event, onClose, onSave }: {
     entryThreshold: event.entryThreshold || '',
     entryType: event.entryType || 'all',
     program: (event.program || []) as string[],
+    logistics: (event.logistics || {}) as Record<string, any>,
     houseQualities: (event.houseQualities || []) as HouseQuality[]
   });
 
@@ -1221,6 +1241,7 @@ function EditEventModal({ event, onClose, onSave }: {
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType,
       program: formData.program,
+      logistics: formData.logistics,
       houseQualities: formData.houseQualities
     });
   };
@@ -1331,6 +1352,10 @@ function EditEventModal({ event, onClose, onSave }: {
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
               placeholder="53.964962, 27.644397"
             />
+          </div>
+
+          <div>
+            <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
           </div>
 
 
@@ -1521,6 +1546,7 @@ function AddEventModal({ onClose, onAdd }: {
     entryThreshold: '100% Трезвость',
     entryType: 'all' as 'male' | 'female' | 'all',
     program: [] as string[],
+    logistics: {} as Record<string, any>,
     houseQualities: [] as HouseQuality[]
   });
 
@@ -1553,6 +1579,7 @@ function AddEventModal({ onClose, onAdd }: {
       entryType: formData.entryType,
       status: 'locked',
       program: formData.program,
+      logistics: formData.logistics,
       notifications: {
         reminder7d: true,
         reminder3d: true,
@@ -1659,6 +1686,8 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, location: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
+
+          <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
 

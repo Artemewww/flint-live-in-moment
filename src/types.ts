@@ -31,6 +31,14 @@ export interface CommunityEvent {
   timeEnd: string; // Время окончания, e.g. "23:00"
   location: string;
   locationDetails?: string;
+  /** Структурированная логистика (точка/время выезда, бензин, обратная дорога). */
+  logistics?: {
+    assemblyPoint?: string;   // точка сбора / выезда
+    departureTime?: string;   // время выезда
+    fuelCost?: number;        // взнос на бензин, ₽ (с человека)
+    returnInfo?: string;      // обратная дорога
+    notes?: string;           // как добраться / доп. инфо
+  };
   coordinates?: {
     lat: number;
     lng: number;
