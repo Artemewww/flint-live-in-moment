@@ -380,7 +380,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
       {/* FULL-SCREEN YEAR MODAL */}
       {showYearModal && (
-        <div className="fixed inset-0 z-55 flex items-center justify-center p-3 sm:p-4 bg-black/95 backdrop-blur-md" id="all-year-plan-modal">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-3 sm:p-4 bg-black/95 backdrop-blur-md" id="all-year-plan-modal">
           <div className="absolute inset-0" onClick={() => setShowYearModal(false)} />
           
           <div 

@@ -102,7 +102,25 @@ export default async function handler(req: any, res: any) {
       return res.status(500).json({ error: 'Failed to create member', details: memberError.message, delivered: false });
     }
 
-    // 2) Заявка (белый список колонок).
+    // 2) Анти-дубль: одна активная заявка на событие от одного человека.
+    const { data: existingReg } = await supabase
+      .from('registrations')
+      .select('id')
+      .eq('event_id', eventId)
+      .eq('telegram_id', member.telegram_id)
+      .neq('status', 'cancelled')
+      .maybeSingle();
+    if (existingReg) {
+      return res.status(200).json({
+        success: true,
+        ok: true,
+        alreadyRegistered: true,
+        delivered: false,
+        message: 'Вы уже записаны на это мероприятие.',
+      });
+    }
+
+    // 3) Заявка (белый список колонок).
     const registration: Record<string, unknown> = {
       id: `reg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       event_id: eventId,

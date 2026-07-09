@@ -542,7 +542,7 @@ export default function App() {
 
       {/* CUSTOM POPUP MODAL 1: Community Core Manifesto & House of Persona Vectors */}
       {showManifestoModal && (
-        <div className="fixed inset-0 z-55 flex items-center justify-center p-4" id="manifesto-modal-root">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" id="manifesto-modal-root">
           <div className="absolute inset-0 bg-black/85 backdrop-blur-md" onClick={() => setShowManifestoModal(false)} />
           
           <div className="bg-[#121212] rounded-3xl w-full max-w-2xl shadow-2xl relative z-10 border border-white/10 max-h-[85vh] overflow-y-auto flex flex-col text-white">
@@ -663,7 +663,7 @@ export default function App() {
 
       {/* CUSTOM: User Registrations Manager Modal */}
       {showMyRegistrationsModal && (
-        <div className="fixed inset-0 z-55 flex items-center justify-center p-4" id="regs-modal-root">
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" id="regs-modal-root">
           <div className="absolute inset-0 bg-black/85 backdrop-blur-sm" onClick={() => setShowMyRegistrationsModal(false)} />
           
           <div className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-5 text-white">

@@ -138,7 +138,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   };
 
   return (
-    <div className="fixed inset-0 z-55 flex items-center justify-center p-4 shadow-2xl" id="reg-modal-root">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 shadow-2xl" id="reg-modal-root">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}

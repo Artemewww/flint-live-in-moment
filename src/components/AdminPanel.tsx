@@ -959,7 +959,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       {/* Templates Modal */}
       <AnimatePresence>
         {showTemplates && (
-          <div className="fixed inset-0 z-60 flex items-center justify-center p-4" id="templates-modal">
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="templates-modal">
             <div className="absolute inset-0 bg-black/95" onClick={() => setShowTemplates(false)} />
 
             <motion.div
@@ -1021,6 +1021,8 @@ function EditEventModal({ event, onClose, onSave }: {
     location: event.location,
     locationDetails: event.locationDetails || '',
     coordinates: event.coordinates || { lat: 0, lng: 0 },
+    image: event.image || '',
+    painPoint: event.painPoint || '',
     maxParticipants: event.maxParticipants,
     participantsCount: event.participantsCount,
     status: event.status || 'open',
@@ -1055,6 +1057,8 @@ function EditEventModal({ event, onClose, onSave }: {
       location: formData.location,
       locationDetails: formData.locationDetails,
       coordinates: formData.coordinates,
+      image: formData.image,
+      painPoint: formData.painPoint,
       maxParticipants: formData.maxParticipants,
       participantsCount: formData.participantsCount,
       status: formData.status,
@@ -1067,7 +1071,7 @@ function EditEventModal({ event, onClose, onSave }: {
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center p-4" id="edit-event-modal">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="edit-event-modal">
       <div className="absolute inset-0 bg-black/95" onClick={onClose} />
 
       <motion.div
@@ -1170,6 +1174,35 @@ function EditEventModal({ event, onClose, onSave }: {
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
               placeholder="Полное описание мероприятия..."
               rows={4}
+            />
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Картинка события (ссылка на изображение)
+            </label>
+            <input
+              type="text"
+              value={formData.image}
+              onChange={(e) => setFormData({...formData, image: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="/assets/images/... или https://..."
+            />
+            {formData.image && (
+              <img src={formData.image} alt="" className="mt-2 w-full h-28 object-cover rounded-xl border border-white/10" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+            )}
+          </div>
+
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Решаемая проблема / смысл (что закрывает событие)
+            </label>
+            <input
+              type="text"
+              value={formData.painPoint}
+              onChange={(e) => setFormData({...formData, painPoint: e.target.value})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              placeholder="Например: перезагрузка тела и ума, честный мужской круг"
             />
           </div>
 
@@ -1364,7 +1397,7 @@ function AddEventModal({ onClose, onAdd }: {
   };
 
   return (
-    <div className="fixed inset-0 z-60 flex items-center justify-center p-4" id="add-event-modal">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="add-event-modal">
       <div className="absolute inset-0 bg-black/95" onClick={onClose} />
 
       <motion.div

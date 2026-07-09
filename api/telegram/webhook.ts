@@ -141,6 +141,17 @@ export default async function handler(req: any, res: any) {
           ]),
         });
       };
+      const askGuest = async (evId: string) => {
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: '👥 Берёшь кого-то с собой?\n<i>За гостя отвечаешь и оплачиваешь его долю ты. Он не проходит регистрацию отдельно.</i>',
+          reply_markup: kb([
+            [{ text: 'Я один', callback_data: `rg:${evId}:0` }],
+            [{ text: '+1 гость', callback_data: `rg:${evId}:1` }],
+            [{ text: '+2 гостя', callback_data: `rg:${evId}:2` }],
+          ]),
+        });
+      };
 
       // Старт записи с карточки события.
       if (data.startsWith('reg_')) {
@@ -179,7 +190,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Шаги опроса (stateless: событие и ответ закодированы в callback_data).
-      if (data.startsWith('rt:') || data.startsWith('rs:') || data.startsWith('rf:')) {
+      if (data.startsWith('rt:') || data.startsWith('rs:') || data.startsWith('rf:') || data.startsWith('rg:')) {
         const [action, evId, val] = data.split(':');
         const ev = await getEvent(evId);
         const title = ev ? ev.title : 'событие';
@@ -212,7 +223,20 @@ export default async function handler(req: any, res: any) {
           const diet = val === 'veg' ? 'vegetarian' : val === 'vegan' ? 'vegan' : 'all';
           await supabase.from('members').update({ dietary: diet }).eq('telegram_id', tgId);
           await updateReg(evId, tgId, { dietary: diet });
-          await finalConfirm(title);
+          await askGuest(evId);
+          return res.status(200).json({ ok: true });
+        }
+        if (action === 'rg') {
+          const guests = Number(val) || 0;
+          await updateReg(evId, tgId, { guest_count: guests });
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text:
+              `✅ Готово! Ты записан(а) на «<b>${esc(title)}</b>»` +
+              (guests > 0 ? ` +${guests} гост${guests === 1 ? 'ь' : 'я'}.\n<i>Напомним: за гостя отвечаешь и оплачиваешь ты.</i>` : '.') +
+              `\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы — прямо в этот чат.`,
+            reply_markup: kb([[openBtn]]),
+          });
           return res.status(200).json({ ok: true });
         }
       }
