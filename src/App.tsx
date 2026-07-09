@@ -16,6 +16,7 @@ import FeedbackModal from './components/FeedbackModal';
 import UserStats from './components/UserStats';
 import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
+import GateScreen from './components/GateScreen';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 
 // Маппинг snake_case -> camelCase для данных из Supabase
@@ -73,6 +74,12 @@ export default function App() {
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // Шлюз закрытого клуба (за флагом VITE_GATE_ENABLED, по умолчанию выключен).
+  const gateEnabled = import.meta.env.VITE_GATE_ENABLED === '1';
+  const [gatePassed, setGatePassed] = useState<boolean>(() => {
+    if (!gateEnabled) return true;
+    try { return localStorage.getItem('flint_gate_ok') === '1'; } catch { return false; }
+  });
   const isAuthorizedUser = (() => {
     try { return typeof window !== 'undefined' && !!window.Telegram?.WebApp?.initDataUnsafe?.user; } catch { return false; }
   })();
@@ -289,6 +296,10 @@ export default function App() {
       }
     }
   };
+
+  if (gateEnabled && !gatePassed) {
+    return <GateScreen onPass={() => setGatePassed(true)} />;
+  }
 
   return (
     <div id="app-root" className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-brand/35 selection:text-white pb-12 antialiased overflow-x-hidden">
