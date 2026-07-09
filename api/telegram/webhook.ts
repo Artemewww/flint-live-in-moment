@@ -144,6 +144,31 @@ async function isCore(tgId: number): Promise<boolean> {
   return !!m && m.is_core === true;
 }
 
+// --- Сессии диалога (для пошагового ввода текста) ---
+async function getSession(tgId: number): Promise<{ state: string; context: any } | null> {
+  const { data } = await supabase.from('bot_sessions').select('state,context').eq('telegram_id', tgId).maybeSingle();
+  return data ? { state: (data as any).state, context: (data as any).context || {} } : null;
+}
+async function setSession(tgId: number, state: string, context: any) {
+  await supabase.from('bot_sessions').upsert(
+    { telegram_id: tgId, state, context, updated_at: new Date().toISOString() },
+    { onConflict: 'telegram_id' }
+  );
+}
+async function clearSession(tgId: number) {
+  await supabase.from('bot_sessions').delete().eq('telegram_id', tgId);
+}
+
+// --- Машины (участник-driven логистика) ---
+function rideLine(r: any): string {
+  const taken = r.seats_taken || 0;
+  const free = Math.max(0, (r.seats_total || 0) - taken);
+  const fuel = r.fuel_cost ? `⛽ ${r.fuel_cost} ₽/чел` : '⛽ бесплатно';
+  return `🚗 <b>${esc(r.driver_name || 'Водитель')}</b>\n` +
+    `📍 ${esc(r.from_point || '—')}  🕐 ${esc(r.depart_text || '—')}\n` +
+    `Мест свободно: ${free}/${r.seats_total || 0}  ${fuel}`;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
@@ -167,7 +192,14 @@ export default async function handler(req: any, res: any) {
       const tgId = cq.from.id;
 
       const payRow = (ev: any) => (ev?.price_type === 'paid' ? [{ text: '💳 Оплатить участие', callback_data: `pay_${ev.id}` }] : null);
-      const finalKb = (ev: any) => { const rows: any[] = []; const p = payRow(ev); if (p) rows.push(p); rows.push([openBtn]); return kb(rows); };
+      const finalKb = (ev: any) => {
+        const rows: any[] = [];
+        const p = payRow(ev);
+        if (p) rows.push(p);
+        if (ev && ev.type !== 'intellectual') rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+        rows.push([openBtn]);
+        return kb(rows);
+      };
       const finalConfirm = async (ev: any) => {
         const paid = ev?.price_type === 'paid';
         await tg('editMessageText', {
@@ -394,6 +426,142 @@ export default async function handler(req: any, res: any) {
         }
       }
 
+      // === Логистика (участник-driven): меню ===
+      if (data.startsWith('logi_')) {
+        const evId = data.slice('logi_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🚗 <b>Логистика и брони</b>\n\nЗдесь всё по инициативе участников: кто едет — сам предлагает места, кому нужно — ищет попутку.',
+          reply_markup: kb([
+            [{ text: '🚗 Еду на машине — предложить места', callback_data: `ridenew_${evId}` }],
+            [{ text: '👀 Кто едет / занять место', callback_data: `rides_${evId}` }],
+            [{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }],
+          ]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Водитель заявляет поездку — пошаговый ввод через сессию.
+      if (data.startsWith('ridenew_')) {
+        const evId = data.slice('ridenew_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'ride_point', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📍 Откуда выезжаешь? Напиши точку сбора (напр. «м. Каменная Горка, стоянка»).' });
+        return res.status(200).json({ ok: true });
+      }
+      // Кол-во мест (из сессии).
+      if (data.startsWith('rseats_')) {
+        const n = Number(data.split('_')[1]) || 0;
+        const s = await getSession(tgId);
+        if (!s || s.state !== 'ride_seats') { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        await setSession(tgId, 'ride_fuel', { ...s.context, seats: n });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: '⛽ Взнос на бензин с человека?',
+          reply_markup: kb([[
+            { text: 'Бесплатно', callback_data: 'rfuel_0' },
+            { text: '5 ₽', callback_data: 'rfuel_5' },
+            { text: '10 ₽', callback_data: 'rfuel_10' },
+          ]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Бензин → создать поездку.
+      if (data.startsWith('rfuel_')) {
+        const fuel = Number(data.split('_')[1]) || 0;
+        const s = await getSession(tgId);
+        if (!s || s.state !== 'ride_fuel') { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        const { evId, from, depart, seats } = s.context;
+        await supabase.from('rides').insert({
+          event_id: evId, driver_id: tgId, driver_name: cq.from.first_name || cq.from.username || 'Водитель',
+          from_point: from, depart_text: depart, seats_total: seats, fuel_cost: fuel,
+        });
+        await clearSession(tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка добавлена!' });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ Готово! Твоя поездка добавлена:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' ₽/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
+          reply_markup: kb([[openBtn]]),
+        });
+        // Уведомить тех, кто искал попутку.
+        const { data: reqs } = await supabase.from('ride_requests').select('passenger_id').eq('event_id', evId).eq('active', true);
+        for (const r of (reqs || [])) {
+          try { await tg('sendMessage', { chat_id: (r as any).passenger_id, parse_mode: 'HTML', text: `🚗 Появилась машина на событие! ${esc(cq.from.first_name || 'Водитель')} едет из «${esc(from)}» (${esc(depart)}). Открой «Кто едет», чтобы занять место.`, reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]) }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Список машин + бронь места.
+      if (data.startsWith('rides_')) {
+        const evId = data.slice('rides_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: rides } = await supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at');
+        if (!rides || rides.length === 0) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Пока никто не заявил машину. Будь первым — «🚗 Еду на машине», или оставь заявку «🚶 Нужна попутка».', reply_markup: kb([[{ text: '🚗 Еду на машине', callback_data: `ridenew_${evId}` }], [{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }]]) });
+          return res.status(200).json({ ok: true });
+        }
+        for (const r of rides) {
+          const taken = (r as any).seats_taken || 0;
+          const free = Math.max(0, ((r as any).seats_total || 0) - taken);
+          const mine = (r as any).driver_id === tgId;
+          const rows: any[] = [];
+          if (mine) rows.push([{ text: '❌ Отменить мою поездку', callback_data: `ridecancel_${(r as any).id}` }]);
+          else if (free > 0) rows.push([{ text: `✅ Занять место (${free} своб.)`, callback_data: `ridebook_${(r as any).id}` }]);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: rideLine(r), reply_markup: rows.length ? kb(rows) : undefined });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Бронь места в машине.
+      if (data.startsWith('ridebook_')) {
+        const rideId = Number(data.slice('ridebook_'.length));
+        const { data: ride } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        if (!ride || !(ride as any).active) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка недоступна' }); return res.status(200).json({ ok: true }); }
+        const taken = (ride as any).seats_taken || 0;
+        if (taken >= ((ride as any).seats_total || 0)) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Мест уже нет' }); return res.status(200).json({ ok: true }); }
+        const { error: bookErr } = await supabase.from('ride_bookings').insert({ ride_id: rideId, passenger_id: tgId, passenger_name: cq.from.first_name || cq.from.username || 'Пассажир' });
+        if (bookErr) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ты уже в этой машине' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('rides').update({ seats_taken: taken + 1 }).eq('id', rideId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место забронировано ✅' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `✅ Ты занял место у ${esc((ride as any).driver_name || 'водителя')}.\n📍 ${esc((ride as any).from_point)}  🕐 ${esc((ride as any).depart_text)}\nВодитель свяжется по деталям.` });
+        try { await tg('sendMessage', { chat_id: (ride as any).driver_id, parse_mode: 'HTML', text: `🧍 К тебе в машину сел ${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''}. Свяжись по сбору.` }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Отмена своей поездки — уведомить пассажиров.
+      if (data.startsWith('ridecancel_')) {
+        const rideId = Number(data.slice('ridecancel_'.length));
+        const { data: ride } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        if (!ride || (ride as any).driver_id !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это не твоя поездка' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('rides').update({ active: false }).eq('id', rideId);
+        const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').eq('ride_id', rideId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка отменена' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Твоя поездка отменена. Пассажиры уведомлены.' });
+        for (const p of (pax || [])) {
+          try { await tg('sendMessage', { chat_id: (p as any).passenger_id, text: '⚠️ Водитель отменил поездку, на которую ты записался. Поищи другую машину в «Кто едет».' }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // «Нужна попутка» — заявка + уведомление водителей.
+      if (data.startsWith('rideseek_')) {
+        const evId = data.slice('rideseek_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await supabase.from('ride_requests').upsert(
+          { event_id: evId, passenger_id: tgId, passenger_name: cq.from.first_name || cq.from.username || 'Пассажир', active: true },
+          { onConflict: 'event_id,passenger_id' }
+        );
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🚶 Заявка «нужна попутка» принята. Как только кто-то заявит машину — пришлю сюда. Можешь и сам заглянуть в «Кто едет».', reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]) });
+        const { data: drivers } = await supabase.from('rides').select('driver_id').eq('event_id', evId).eq('active', true);
+        const uniq = [...new Set((drivers || []).map((d: any) => d.driver_id))];
+        for (const did of uniq) {
+          try { await tg('sendMessage', { chat_id: did, parse_mode: 'HTML', text: `🚶 ${esc(cq.from.first_name || 'Участник')} ищет попутку на событие. Если есть место — напиши ему или добавь мест.` }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       await tg('answerCallbackQuery', { callback_query_id: cq.id });
       return res.status(200).json({ ok: true });
     }
@@ -402,6 +570,21 @@ export default async function handler(req: any, res: any) {
     if (msg && typeof msg.text === 'string') {
       const chatId = msg.chat.id;
       const text = msg.text.trim();
+
+      // Пошаговый ввод (заявка поездки) — если активна сессия и это не команда.
+      if (!text.startsWith('/')) {
+        const sess = await getSession(msg.from.id);
+        if (sess && sess.state === 'ride_point') {
+          await setSession(msg.from.id, 'ride_depart', { ...sess.context, from: text.slice(0, 120) });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🕐 Когда выезжаешь? Напиши дату и время (напр. «5 июля, 17:00»).' });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'ride_depart') {
+          await setSession(msg.from.id, 'ride_seats', { ...sess.context, depart: text.slice(0, 80) });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '💺 Сколько свободных мест можешь взять?', reply_markup: kb([[1, 2, 3, 4].map((n) => ({ text: String(n), callback_data: `rseats_${n}` }))]) });
+          return res.status(200).json({ ok: true });
+        }
+      }
 
       if (text.startsWith('/start')) {
         const payload = text.split(' ')[1] || '';
