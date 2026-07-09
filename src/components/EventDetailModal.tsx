@@ -8,6 +8,7 @@ import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic, isAuthorized } from '../telegram';
 import ProgramVoting from './ProgramVoting';
+import { getEventGuide } from '../eventGuide';
 
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
@@ -54,6 +55,7 @@ export default function EventDetailModal({
   const percentFull = Math.min(100, Math.floor((totalRegistered / maxSpots) * 100));
   const phase = getEventPhase(event);
   const isLocked = phase === 'locked';
+  const guide = getEventGuide(event);
 
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
   const authorized = isAuthorized();
@@ -250,6 +252,45 @@ export default function EventDetailModal({
               <p className="font-sans text-sm text-white/80 leading-relaxed whitespace-pre-wrap">
                 {event.description}
               </p>
+            </div>
+
+            {/* Программа по времени */}
+            {guide.program.length > 0 && (
+              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-3">
+                <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
+                  <Clock className="w-3.5 h-3.5" /> Программа
+                </span>
+                <ol className="space-y-2">
+                  {guide.program.map((step, i) => (
+                    <li key={i} className="flex gap-3 text-xs text-white/80">
+                      <span className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand font-bold flex items-center justify-center text-[10px]">{i + 1}</span>
+                      <span className="leading-relaxed pt-0.5">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+
+            {/* Что взять с собой */}
+            <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2.5">
+              <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
+                <Check className="w-3.5 h-3.5" /> Что взять с собой
+              </span>
+              <div className="flex flex-wrap gap-2">
+                {guide.bring.map((item, i) => (
+                  <span key={i} className="text-[11px] text-white/80 bg-white/5 border border-white/10 rounded-lg px-2.5 py-1.5">
+                    {item}
+                  </span>
+                ))}
+              </div>
+              <p className="text-[9px] text-white/40 font-mono uppercase tracking-wider pt-1">По-дружески и по желанию — без обязаловки. Главное: 100% трезвость и открытость.</p>
+            </div>
+
+            {/* Вектор «Дома Личности» — зачем это */}
+            <div className="bg-brand/5 border border-brand/20 p-4 rounded-2xl space-y-1">
+              <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold">Дом Личности · зачем это</span>
+              <div className="text-sm font-bold text-white">{guide.vector.title}</div>
+              <p className="text-xs text-white/70 leading-relaxed">{guide.vector.text}</p>
             </div>
 
             {/* Hard Entry Threshold */}
