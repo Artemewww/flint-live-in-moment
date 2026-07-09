@@ -21,6 +21,19 @@ async function aiProgram(ev: any): Promise<string[] | null> {
   } catch { return null; }
 }
 
+/** ИИ-автозаполнение всего события по названию (Gemini). null при ошибке/без ключа. */
+async function aiAutofill(ev: any): Promise<any | null> {
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ task: 'autofill', event: ev }),
+    });
+    const j = await res.json();
+    return j.draft || null;
+  } catch { return null; }
+}
+
 /** Редактор списка (программа / порог входа): генерация, правка, ↑↓, удаление, добавление. */
 function ListEditor({ label, items, onChange, onGenerate, placeholder, aiHint }: {
   label: string; items: string[]; onChange: (v: string[]) => void; onGenerate: () => void | Promise<void>; placeholder?: string; aiHint?: boolean;
@@ -1629,6 +1642,7 @@ function AddEventModal({ onClose, onAdd }: {
   onClose: () => void;
   onAdd: (event: CommunityEvent) => void;
 }) {
+  const [autoFilling, setAutoFilling] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -1715,6 +1729,33 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, title: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
+
+          <button
+            type="button"
+            disabled={autoFilling || !formData.title.trim()}
+            onClick={async () => {
+              setAutoFilling(true);
+              const d = await aiAutofill({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd });
+              if (d) {
+                setFormData((f) => ({
+                  ...f,
+                  type: d.type || f.type,
+                  description: d.description || f.description,
+                  painPoint: d.painPoint || f.painPoint,
+                  program: (d.program && d.program.length) ? d.program : f.program,
+                  entryThreshold: d.entryThreshold || f.entryThreshold,
+                  houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
+                }));
+              } else {
+                alert('ИИ недоступен — проверь GEMINI_API_KEY в Vercel.');
+              }
+              setAutoFilling(false);
+            }}
+            className="w-full bg-brand/15 border border-brand/40 text-brand font-bold text-sm py-3 rounded-xl cursor-pointer hover:bg-brand/25 transition-colors disabled:opacity-50"
+          >
+            {autoFilling ? '⏳ ИИ придумывает событие…' : '🤖 Заполнить всё за меня'}
+          </button>
+          <p className="text-[9px] text-white/35 font-mono -mt-1">Введи название — ИИ придумает тип, описание, смысл, программу, порог и качества. Останется проверить.</p>
 
           <div className="grid grid-cols-2 gap-2">
             <div>

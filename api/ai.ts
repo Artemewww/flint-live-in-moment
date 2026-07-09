@@ -36,6 +36,51 @@ export default async function handler(req: any, res: any) {
     const typeRu = TYPE_RU[ev.type] || 'встреча сообщества';
     const days = ev.dateEnd && ev.dateEnd !== ev.date ? `многодневное (${ev.date} — ${ev.dateEnd})` : 'однодневное';
 
+    if (task === 'autofill') {
+      const prompt =
+        `Ты — опытный организатор трезвого мужского/семейного сообщества «Живи в моменте» (Минск). ` +
+        `По короткому названию придумай ПОЛНОЕ наполнение события — живо, вдохновляюще, по-русски, без алкоголя.\n` +
+        `Название: «${ev.title || 'Событие'}».` + (ev.date ? ` Дата: ${ev.date}${ev.dateEnd && ev.dateEnd !== ev.date ? ` — ${ev.dateEnd}` : ''}.` : '') + `\n` +
+        `Верни JSON с полями:\n` +
+        `- type: один из male|mixed|intellectual|active (male=мужское, mixed=смешанное/семейное, intellectual=интеллект, active=активный выезд);\n` +
+        `- description: 2–4 живых предложения о сути и атмосфере;\n` +
+        `- painPoint: одна фраза — какую боль/запрос закрывает событие;\n` +
+        `- program: 5–9 пунктов программы (короткие строки, можно со временем);\n` +
+        `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
+        `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
+        `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье).`;
+      const resp = await ai.models.generateContent({
+        model: MODEL, contents: prompt,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING },
+              description: { type: Type.STRING },
+              painPoint: { type: Type.STRING },
+              program: { type: Type.ARRAY, items: { type: Type.STRING } },
+              entryThreshold: { type: Type.STRING },
+              houseQualities: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+          },
+        },
+      });
+      const p = JSON.parse(resp.text || '{}');
+      const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
+      const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
+      return res.status(200).json({
+        draft: {
+          type: allowedTypes.includes(p.type) ? p.type : 'mixed',
+          description: p.description || '',
+          painPoint: p.painPoint || '',
+          program: Array.isArray(p.program) ? p.program : [],
+          entryThreshold: p.entryThreshold || '',
+          houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],
+        },
+      });
+    }
+
     if (task === 'shopping') {
       const prompt =
         `Ты — помощник организатора трезвого сообщества «Живи в моменте» (Минск, Беларусь). ` +
