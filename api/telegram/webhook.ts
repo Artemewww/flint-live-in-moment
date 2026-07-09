@@ -169,6 +169,16 @@ function rideLine(r: any): string {
     `Мест свободно: ${free}/${r.seats_total || 0}  ${fuel}`;
 }
 
+// --- Организация: чек-листы снаряжения и ролей (мультивыбор, stateless по registration) ---
+const EQUIP = ['Вилка', 'Ложка', 'Спальник', 'Фонарик', 'Дождевик', 'Аптечка', 'Мешки для мусора', 'Антисептик', 'Туалетная бумага', 'Лопата', 'Запасное одеяло', 'Тетра-пакеты'];
+const ROLES = ['Готовка', 'Костёр', 'Фото', 'Музыка', 'Аптечка', 'Логистика'];
+function checklistKb(prefix: string, evId: string, items: string[], selected: string[]) {
+  const sel = new Set(selected);
+  const rows = items.map((it, i) => [{ text: `${sel.has(it) ? '✅' : '▫️'} ${it}`, callback_data: `${prefix}_${evId}_${i}` }]);
+  rows.push([{ text: '⬅️ Назад', callback_data: `org_${evId}` }]);
+  return { inline_keyboard: rows };
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
@@ -196,7 +206,10 @@ export default async function handler(req: any, res: any) {
         const rows: any[] = [];
         const p = payRow(ev);
         if (p) rows.push(p);
-        if (ev && ev.type !== 'intellectual') rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+        if (ev && ev.type !== 'intellectual') {
+          rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+          rows.push([{ text: '📋 Организация (снаряжение, роли)', callback_data: `org_${ev.id}` }]);
+        }
         rows.push([openBtn]);
         return kb(rows);
       };
@@ -210,6 +223,19 @@ export default async function handler(req: any, res: any) {
           reply_markup: finalKb(ev),
         });
       };
+      const finishReg = async (ev: any, guests: number, children: number) => {
+        const extras: string[] = [];
+        if (guests > 0) extras.push(`+${guests} гост${guests === 1 ? 'ь' : 'я'}`);
+        if (children > 0) extras.push(`+${children} ${children === 1 ? 'ребёнок' : 'детей'}`);
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ Готово! Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>»` +
+            (extras.length ? ` (${extras.join(', ')}).\n<i>За гостей отвечаешь и оплачиваешь ты.</i>` : '.') +
+            (ev?.price_type === 'paid' ? '\n\n💳 Осталось оплатить участие — кнопка ниже.' : '') +
+            `\n\nСнаряжение и «чем буду полезен» — кнопка «📋 Организация». Вопросы — прямо сюда.`,
+          reply_markup: finalKb(ev),
+        });
+      };
       const askFood = async (evId: string) => {
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
@@ -218,6 +244,7 @@ export default async function handler(req: any, res: any) {
             [{ text: '🍗 Всеядный', callback_data: `rf:${evId}:all` }],
             [{ text: '🥗 Вегетарианец', callback_data: `rf:${evId}:veg` }],
             [{ text: '🌱 Веган', callback_data: `rf:${evId}:vegan` }],
+            [{ text: '🥡 Привезу своё — без общей еды', callback_data: `rf:${evId}:own` }],
           ]),
         });
       };
@@ -333,6 +360,30 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Регистрация + старт опроса (после согласия ПД).
+      const beginReg = async (ev: any) => {
+        const r = await registerFromBot(cq.from, ev);
+        if (r === 'error') { await tg('sendMessage', { chat_id: chatId, text: 'Ошибка записи, попробуйте позже.' }); return; }
+        if (ev.type === 'intellectual') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Ты записан(а) на «<b>${esc(ev.title)}</b>»!\n\nДетали и напоминания придут в бот. Вопросы — прямо сюда.`,
+            reply_markup: finalKb(ev),
+          });
+          return;
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇\n\n🚗 Как добираешься?`,
+          reply_markup: kb([
+            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
+            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
+            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
+          ]),
+        });
+      };
+
       // Старт записи с карточки события.
       if (data.startsWith('reg_')) {
         if (gateOn() && !(await isApproved(tgId))) {
@@ -344,32 +395,30 @@ export default async function handler(req: any, res: any) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено' });
           return res.status(200).json({ ok: true });
         }
-        const r = await registerFromBot(cq.from, ev);
-        await tg('answerCallbackQuery', {
-          callback_query_id: cq.id,
-          text: r === 'already' ? 'Ты уже записан — уточним детали' : r === 'ok' ? 'Готово! Пара уточнений' : 'Ошибка, попробуйте позже',
-        });
-        if (r === 'error') return res.status(200).json({ ok: true });
-        // Городские/интеллектуальные — без лишних вопросов.
-        if (ev.type === 'intellectual') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Явный первый шаг — согласие на обработку ПД (РБ), если ещё не давал.
+        const mem = await memberOf(tgId) as any;
+        const agreed = mem && mem.agreed_pd;
+        if (!agreed) {
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: `✅ Ты записан(а) на «<b>${esc(ev.title)}</b>»!\n\nДетали и напоминания придут в бот. Вопросы — прямо сюда.`,
-            reply_markup: kb([[openBtn]]),
+            text: '📋 <b>Согласие на обработку персональных данных</b>\n\nДля участия нужно согласие на обработку твоих персональных данных (имя, контакт, предпочтения) организаторами — в соответствии с законодательством РБ. Данные используются только для организации события.',
+            reply_markup: kb([[{ text: '✅ Согласен, продолжить', callback_data: `pd_${ev.id}` }]]),
           });
           return res.status(200).json({ ok: true });
         }
-        // Иначе — умный опрос под событие: транспорт → (места) → питание.
-        await tg('sendMessage', {
-          chat_id: chatId, parse_mode: 'HTML',
-          text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇\n\n🚗 Как добираешься?`,
-          reply_markup: kb([
-            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
-            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
-            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
-            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
-          ]),
-        });
+        await beginReg(ev);
+        return res.status(200).json({ ok: true });
+      }
+
+      // Согласие ПД дано → регистрируем.
+      if (data.startsWith('pd_')) {
+        const ev = await getEvent(data.slice(3));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо!' });
+        if (!ev) return res.status(200).json({ ok: true });
+        await supabase.from('members').update({ agreed_pd: true }).eq('telegram_id', tgId);
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ Согласие получено. Продолжаем запись 👇' });
+        await beginReg(ev);
         return res.status(200).json({ ok: true });
       }
 
@@ -404,26 +453,89 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         if (action === 'rf') {
-          const diet = val === 'veg' ? 'vegetarian' : val === 'vegan' ? 'vegan' : 'all';
-          await supabase.from('members').update({ dietary: diet }).eq('telegram_id', tgId);
-          await updateReg(evId, tgId, { dietary: diet });
+          if (val === 'own') {
+            await updateReg(evId, tgId, { food_optout: true, dietary: null });
+          } else {
+            const diet = val === 'veg' ? 'vegetarian' : val === 'vegan' ? 'vegan' : 'all';
+            await supabase.from('members').update({ dietary: diet }).eq('telegram_id', tgId);
+            await updateReg(evId, tgId, { dietary: diet, food_optout: false });
+          }
           await askGuest(evId);
           return res.status(200).json({ ok: true });
         }
         if (action === 'rg') {
           const guests = Number(val) || 0;
           await updateReg(evId, tgId, { guest_count: guests });
-          await tg('editMessageText', {
-            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-            text:
-              `✅ Готово! Ты записан(а) на «<b>${esc(title)}</b>»` +
-              (guests > 0 ? ` +${guests} гост${guests === 1 ? 'ь' : 'я'}.\n<i>Напомним: за гостя отвечаешь и оплачиваешь ты.</i>` : '.') +
-              (ev?.price_type === 'paid' ? '\n\n💳 Осталось оплатить участие — кнопка ниже.' : '') +
-              `\n\nДальше всё автоматически: детали, точная локация и напоминания придут сюда. Вопросы — прямо в этот чат.`,
-            reply_markup: finalKb(ev),
-          });
+          // Семейные (mixed) — спросим про детей, чтобы учесть их в еде.
+          if (ev?.type === 'mixed') {
+            await tg('editMessageText', {
+              chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+              text: '👶 Дети с тобой? (учтём в еде — детская порция)',
+              reply_markup: kb([[
+                { text: 'Без детей', callback_data: `rc:${evId}:0` },
+                { text: '1 ребёнок', callback_data: `rc:${evId}:1` },
+                { text: '2+', callback_data: `rc:${evId}:2` },
+              ]]),
+            });
+            return res.status(200).json({ ok: true });
+          }
+          await finishReg(ev, guests, 0);
           return res.status(200).json({ ok: true });
         }
+        if (action === 'rc') {
+          const children = Number(val) || 0;
+          await updateReg(evId, tgId, { children_count: children });
+          const { data: rr } = await supabase.from('registrations').select('guest_count').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+          await finishReg(ev, (rr as any)?.guest_count || 0, children);
+          return res.status(200).json({ ok: true });
+        }
+      }
+
+      // === Организация: снаряжение / роли (мультивыбор) ===
+      if (data.startsWith('org_')) {
+        const evId = data.slice('org_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '📋 <b>Организация</b>\nОтметь, что берёшь и чем можешь помочь — так всем проще подготовиться.',
+          reply_markup: kb([
+            [{ text: '🎒 Снаряжение', callback_data: `equip_${evId}` }],
+            [{ text: '🙌 Чем буду полезен', callback_data: `role_${evId}` }],
+          ]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('equip_')) {
+        const evId = data.slice('equip_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: reg } = await supabase.from('registrations').select('equipment').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🎒 Что берёшь с собой? Жми, чтобы отметить:', reply_markup: checklistKb('eqt', evId, EQUIP, ((reg as any)?.equipment) || []) });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('role_')) {
+        const evId = data.slice('role_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: reg } = await supabase.from('registrations').select('roles').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🙌 Чем можешь быть полезен? Жми, чтобы отметить:', reply_markup: checklistKb('rlt', evId, ROLES, ((reg as any)?.roles) || []) });
+        return res.status(200).json({ ok: true });
+      }
+      // Тоггл пункта чек-листа (снаряжение eqt / роли rlt).
+      if (data.startsWith('eqt_') || data.startsWith('rlt_')) {
+        const isEquip = data.startsWith('eqt_');
+        const rest = data.slice(4);
+        const idx = rest.lastIndexOf('_');
+        const evId = rest.slice(0, idx);
+        const i = Number(rest.slice(idx + 1));
+        const list = isEquip ? EQUIP : ROLES;
+        const item = list[i];
+        const col = isEquip ? 'equipment' : 'roles';
+        const { data: reg } = await supabase.from('registrations').select(col).eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        let sel: string[] = ((reg as any)?.[col]) || [];
+        sel = sel.includes(item) ? sel.filter((x) => x !== item) : [...sel, item];
+        await updateReg(evId, tgId, { [col]: sel });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: checklistKb(isEquip ? 'eqt' : 'rlt', evId, list, sel) });
+        return res.status(200).json({ ok: true });
       }
 
       // === Логистика (участник-driven): меню ===
