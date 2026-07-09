@@ -42,7 +42,7 @@ export interface CommunityEvent {
   participantsCount: number;
   telegramBotUrl?: string;
   // Flint system thresholds & prices
-  priceType: 'free' | 'conscience' | 'paid';
+  priceType: 'free' | 'paid';
   priceLabel: string;     // e.g. "50 BYN на аренду"
   priceAmount: number;    // Основная стоимость аренды (в рублях)
   entryThreshold: string; // e.g. "100% Чистота + Вклад на совесть/веник"
@@ -186,15 +186,10 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   label: string;
   factors: string[];
 } {
-  const type = event.priceType || 'conscience';
-
-  // Бесплатно / на совесть — без деления.
-  if (type === 'free') {
-    return { price: 0, label: 'Бесплатно', factors: [] };
-  }
+  // Бесплатно — либо явно free, либо платно без суммы (или легаси-значения).
   const total = Number((event as any).priceAmount) || 0;
-  if (type !== 'paid' || total <= 0) {
-    return { price: 0, label: event.priceLabel || 'На совесть', factors: [] };
+  if (event.priceType !== 'paid' || total <= 0) {
+    return { price: 0, label: 'Бесплатно', factors: [] };
   }
 
   // Платно: аренда делится ПОРОВНУ на текущее число участников + прогноз к порогу.

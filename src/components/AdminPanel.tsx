@@ -1,10 +1,69 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity } from 'lucide-react';
 import { CommunityEvent } from '../types';
 
 const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
+
+/** Загрузка картинки события файлом (Supabase Storage). Превью + удаление + drag&drop. */
+function ImageUploadField({ value, onChange }: { value: string; onChange: (url: string) => void }) {
+  const [uploading, setUploading] = useState(false);
+  const [err, setErr] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = async (file: File) => {
+    if (!file) return;
+    setErr('');
+    setUploading(true);
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(new Error('Не удалось прочитать файл'));
+        r.readAsDataURL(file);
+      });
+      const res = await fetch('/api/admin/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify({ dataUrl, filename: file.name.replace(/\.[^.]+$/, '') }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || 'Ошибка загрузки');
+      onChange(json.url);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div>
+      <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Картинка события</label>
+      {value ? (
+        <div className="relative">
+          <img src={value} alt="" className="w-full h-32 object-cover rounded-xl border border-white/10" onError={(e) => { (e.target as HTMLImageElement).style.opacity = '0.3'; }} />
+          <button type="button" onClick={() => onChange('')} className="absolute top-2 right-2 bg-black/70 hover:bg-red-500/80 text-white rounded-lg px-2 py-1 text-xs cursor-pointer border-none" title="Удалить картинку">✕ Удалить</button>
+          <button type="button" onClick={() => inputRef.current?.click()} className="absolute bottom-2 right-2 bg-black/70 hover:bg-brand/80 hover:text-black text-white rounded-lg px-2 py-1 text-[10px] cursor-pointer border-none" title="Заменить">Заменить</button>
+        </div>
+      ) : (
+        <div
+          onClick={() => inputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => { e.preventDefault(); const f = e.dataTransfer.files?.[0]; if (f) handleFile(f); }}
+          className="w-full h-32 rounded-xl border-2 border-dashed border-white/15 hover:border-brand/40 bg-white/5 flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors text-white/40"
+        >
+          <span className="text-2xl">🖼️</span>
+          <span className="text-[11px] font-mono">{uploading ? 'Загрузка…' : 'Нажми или перетащи файл'}</span>
+          <span className="text-[9px] text-white/25">PNG / JPG / WEBP, до 6 МБ</span>
+        </div>
+      )}
+      <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ''; }} />
+      {err && <p className="text-[10px] text-red-400 mt-1">{err}</p>}
+    </div>
+  );
+}
 
 // Приводим заявку из БД (snake_case) к виду, который ждёт интерфейс (camelCase).
 function mapRegistration(r: any) {
@@ -108,7 +167,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       time: '10:00',
       timeEnd: '12:00',
       maxParticipants: 15,
-      priceLabel: 'На совесть',
+      priceLabel: 'Свободный вход',
       priceAmount: 0,
       entryThreshold: '100% трезвость • спортивная форма',
       entryType: 'all' as const,
@@ -127,7 +186,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       time: '19:30',
       timeEnd: '22:00',
       maxParticipants: 20,
-      priceLabel: 'На совесть',
+      priceLabel: 'Свободный вход',
       priceAmount: 0,
       entryThreshold: '100% трезвость',
       entryType: 'all' as const,
@@ -146,7 +205,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       time: '16:00',
       timeEnd: '19:00',
       maxParticipants: 15,
-      priceLabel: 'На совесть',
+      priceLabel: 'Свободный вход',
       priceAmount: 0,
       entryThreshold: '100% трезвость • книга прочитана',
       entryType: 'all' as const,
@@ -186,7 +245,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       time: '18:00',
       timeEnd: '23:00',
       maxParticipants: 16,
-      priceLabel: 'На совесть',
+      priceLabel: 'Свободный вход',
       priceAmount: 0,
       entryThreshold: '100% трезвость',
       entryType: 'all' as const,
@@ -222,7 +281,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       maxParticipants: template.maxParticipants,
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
-      priceType: 'conscience',
+      priceType: template.priceAmount > 0 ? 'paid' : 'free',
       priceLabel: template.priceLabel,
       priceAmount: template.priceAmount,
       entryThreshold: template.entryThreshold,
@@ -1045,8 +1104,8 @@ function EditEventModal({ event, onClose, onSave }: {
     maxParticipants: event.maxParticipants,
     participantsCount: event.participantsCount,
     status: event.status || 'open',
-    priceType: event.priceType || 'conscience',
-    priceLabel: event.priceLabel || 'На совесть',
+    priceType: (event.priceType === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
+    priceLabel: event.priceLabel || 'Бесплатно',
     priceAmount: event.priceAmount || 0,
     entryThreshold: event.entryThreshold || '',
     entryType: event.entryType || 'all'
@@ -1061,7 +1120,7 @@ function EditEventModal({ event, onClose, onSave }: {
         : '';
       return `Аренда ${formData.priceAmount} ₽ — делится поровну на всех${per}`;
     }
-    return 'На совесть';
+    return 'Бесплатно';
   };
 
   const handleSave = () => {
@@ -1212,21 +1271,7 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Картинка события (ссылка на изображение)
-            </label>
-            <input
-              type="text"
-              value={formData.image}
-              onChange={(e) => setFormData({...formData, image: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="/assets/images/... или https://..."
-            />
-            {formData.image && (
-              <img src={formData.image} alt="" className="mt-2 w-full h-28 object-cover rounded-xl border border-white/10" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-            )}
-          </div>
+          <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
@@ -1278,7 +1323,6 @@ function EditEventModal({ event, onClose, onSave }: {
                 className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
               >
                 <option value="free">Бесплатно</option>
-                <option value="conscience">На совесть</option>
                 <option value="paid">Платно (аренда делится)</option>
               </select>
             </div>
@@ -1390,8 +1434,8 @@ function AddEventModal({ onClose, onAdd }: {
     type: 'mixed' as CommunityEvent['type'],
     maxParticipants: 15,
     description: '',
-    priceType: 'conscience' as 'free' | 'conscience' | 'paid',
-    priceLabel: 'На совесть',
+    priceType: 'free' as 'free' | 'paid',
+    priceLabel: 'Свободный вход',
     priceAmount: 0,
     entryThreshold: '100% Трезвость',
     entryType: 'all' as 'male' | 'female' | 'all'
@@ -1418,8 +1462,10 @@ function AddEventModal({ onClose, onAdd }: {
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
       priceType: formData.priceType,
-      priceLabel: formData.priceLabel,
-      priceAmount: formData.priceAmount,
+      priceLabel: formData.priceType === 'paid' && formData.priceAmount > 0
+        ? `Аренда ${formData.priceAmount} ₽ — делится поровну на всех`
+        : 'Бесплатно',
+      priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType,
       status: 'locked',
@@ -1496,13 +1542,32 @@ function AddEventModal({ onClose, onAdd }: {
             />
           </div>
 
-          <input
-            type="number"
-            placeholder="Стоимость аренды (₽)"
-            value={formData.priceAmount}
-            onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value)})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-          />
+          <div className="grid grid-cols-2 gap-2">
+            <select
+              value={formData.priceType}
+              onChange={(e) => setFormData({...formData, priceType: e.target.value as 'free' | 'paid'})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            >
+              <option value="free">Бесплатно</option>
+              <option value="paid">Платно (аренда делится)</option>
+            </select>
+            {formData.priceType === 'paid' ? (
+              <input
+                type="number"
+                placeholder="Сумма аренды (₽)"
+                value={formData.priceAmount || ''}
+                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+              />
+            ) : (
+              <div className="flex items-center px-3 text-[11px] text-white/40 font-mono">Свободное участие</div>
+            )}
+          </div>
+          {formData.priceType === 'paid' && formData.priceAmount > 0 && (
+            <p className="text-[10px] text-brand font-mono">
+              Аренда {formData.priceAmount} ₽ делится поровну — при {formData.maxParticipants} ≈ {Math.round(formData.priceAmount / (formData.maxParticipants || 1))} ₽/чел
+            </p>
+          )}
 
           <input
             type="text"
@@ -1512,16 +1577,7 @@ function AddEventModal({ onClose, onAdd }: {
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
 
-          <input
-            type="text"
-            placeholder="Ссылка на картинку события (https://... или /assets/images/...)"
-            value={formData.image}
-            onChange={(e) => setFormData({...formData, image: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-          />
-          {formData.image && (
-            <img src={formData.image} alt="" className="w-full h-24 object-cover rounded-xl border border-white/10" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
-          )}
+          <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
 
           <textarea
             placeholder="Описание мероприятия"
@@ -1552,15 +1608,8 @@ function AddEventModal({ onClose, onAdd }: {
             </select>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="text"
-              placeholder="Цена / Оплата"
-              value={formData.priceLabel}
-              onChange={(e) => setFormData({...formData, priceLabel: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-            />
-
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Кто может участвовать</label>
             <select
               value={formData.entryType}
               onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}

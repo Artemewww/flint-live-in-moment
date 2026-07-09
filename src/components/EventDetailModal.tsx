@@ -54,8 +54,7 @@ function DynamicPrice({ event }: { event: CommunityEvent }) {
     <div className="space-y-1">
       <div className="text-brand font-black text-lg">{label}</div>
       <div className="text-white/50 text-[10px]">
-        {event.priceType === 'free' ? 'Полностью свободное участие' :
-         event.priceType === 'conscience' ? 'Взнос на личное усмотрение' : 'Взнос на организационные расходы'}
+        {event.priceType === 'free' ? 'Полностью свободное участие' : 'Взнос на аренду — делится поровну на всех'}
       </div>
       {factors.length > 0 && (
         <div className="space-y-0.5 mt-1.5">

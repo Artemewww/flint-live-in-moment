@@ -90,7 +90,7 @@ export default async function handler(req: any, res: any) {
         max_participants: body.maxParticipants || 15,
         participants_count: body.participantsCount || 0,
         telegram_bot_url: body.telegramBotUrl || null,
-        price_type: body.priceType || 'conscience',
+        price_type: body.priceType === 'paid' ? 'paid' : 'free',
         price_label: body.priceLabel || null,
         price_amount: body.priceAmount || 0,
         entry_threshold: body.entryThreshold || null,
