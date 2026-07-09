@@ -8,10 +8,24 @@ import { generateProgram, generateThreshold } from '../eventGuide';
 const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
 
+/** ИИ-генерация программы (Gemini). Возвращает null при ошибке/без ключа — тогда фолбэк на локальный генератор. */
+async function aiProgram(ev: any): Promise<string[] | null> {
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+      body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants }),
+    });
+    const j = await res.json();
+    return Array.isArray(j.program) && j.program.length ? j.program : null;
+  } catch { return null; }
+}
+
 /** Редактор списка (программа / порог входа): генерация, правка, ↑↓, удаление, добавление. */
-function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
-  label: string; items: string[]; onChange: (v: string[]) => void; onGenerate: () => void; placeholder?: string;
+function ListEditor({ label, items, onChange, onGenerate, placeholder, aiHint }: {
+  label: string; items: string[]; onChange: (v: string[]) => void; onGenerate: () => void | Promise<void>; placeholder?: string; aiHint?: boolean;
 }) {
+  const [gen, setGen] = useState(false);
   const upd = (i: number, val: string) => { const c = [...items]; c[i] = val; onChange(c); };
   const del = (i: number) => onChange(items.filter((_, x) => x !== i));
   const move = (i: number, d: number) => {
@@ -25,8 +39,8 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
     <div>
       <div className="flex items-center justify-between mb-1">
         <label className="text-[10px] text-white/40 uppercase font-mono">{label}</label>
-        <button type="button" onClick={onGenerate} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 transition-colors">
-          ⚡ {items.length ? 'Перегенерировать' : 'Сгенерировать'}
+        <button type="button" disabled={gen} onClick={async () => { setGen(true); try { await onGenerate(); } finally { setGen(false); } }} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-60">
+          {gen ? '⏳ Генерирую…' : `${aiHint ? '🤖' : '⚡'} ${items.length ? 'Перегенерировать' : 'Сгенерировать'}`}
         </button>
       </div>
       <div className="space-y-1.5">
@@ -43,6 +57,54 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
           ＋ Добавить пункт
         </button>
       </div>
+    </div>
+  );
+}
+
+/** ИИ-список закупки: по числу участников и раскладке по питанию (Gemini). */
+function ShoppingGenerator({ event, registrations }: { event: any; registrations: any[] }) {
+  const [items, setItems] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const people = registrations.length || event.maxParticipants || 10;
+  const diet = {
+    vegan: registrations.filter((r) => r.dietary === 'vegan').length,
+    vegetarian: registrations.filter((r) => r.dietary === 'vegetarian').length,
+    children: registrations.reduce((s, r) => s + (r.childrenCount || 0), 0),
+  };
+  const gen = async () => {
+    setLoading(true); setErr('');
+    try {
+      const res = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify({ task: 'shopping', event, people, diet }),
+      });
+      const j = await res.json();
+      if (j.error) setErr(j.error); else setItems(j.items || []);
+    } catch (e) { setErr((e as Error).message); }
+    setLoading(false);
+  };
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-xs font-bold uppercase flex items-center gap-2"><ShoppingCart className="w-4 h-4 text-brand" /> Список закупки (ИИ) · {people} чел</h4>
+        <button type="button" onClick={gen} disabled={loading} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 disabled:opacity-60 shrink-0">
+          {loading ? '⏳ Считаю…' : '🤖 Сгенерировать'}
+        </button>
+      </div>
+      <p className="text-[9px] text-white/35 font-mono">Веган: {diet.vegan} · вегет.: {diet.vegetarian} · детей: {diet.children}. Пересчитывается под текущее число участников.</p>
+      {err && <p className="text-[11px] text-red-400">{err}</p>}
+      {items.length > 0 && (
+        <div className="space-y-1">
+          {items.map((it, i) => (
+            <div key={i} className="flex justify-between gap-3 text-xs border-b border-white/5 py-1">
+              <span className="text-white/85">{it.item}</span>
+              <span className="text-white/45 font-mono text-right shrink-0">{it.qty}{it.note ? ` · ${it.note}` : ''}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -825,6 +887,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         ))}
                       </div>
                     </div>
+
+                    {selectedEvent.type !== 'intellectual' && (
+                      <ShoppingGenerator event={selectedEvent} registrations={eventStats.registrations || []} />
+                    )}
                   </div>
                 )}
 
@@ -1507,11 +1573,12 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
 
           <ListEditor
-            label="Программа события"
+            label="Программа события (🤖 ИИ)"
             placeholder="Шаг программы"
             items={formData.program}
+            aiHint
             onChange={(v) => setFormData({...formData, program: v})}
-            onGenerate={() => setFormData({...formData, program: generateProgram({ ...formData, type: event.type })})}
+            onGenerate={async () => { const ctx = { ...formData, type: event.type }; const ai = await aiProgram(ctx); setFormData({...formData, program: ai || generateProgram(ctx)}); }}
           />
 
           <ListEditor
@@ -1775,11 +1842,12 @@ function AddEventModal({ onClose, onAdd }: {
           <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
           <ListEditor
-            label="Программа события"
+            label="Программа события (🤖 ИИ)"
             placeholder="Шаг программы"
             items={formData.program}
+            aiHint
             onChange={(v) => setFormData({...formData, program: v})}
-            onGenerate={() => setFormData({...formData, program: generateProgram(formData)})}
+            onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }}
           />
 
           <ListEditor
