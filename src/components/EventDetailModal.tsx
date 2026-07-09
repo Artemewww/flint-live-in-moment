@@ -6,9 +6,45 @@ import {
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
-import { haptic, isAuthorized } from '../telegram';
+import { haptic } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 import { getEventGuide } from '../eventGuide';
+
+// --- .ics (self-contained, data-URI) ---
+const pad = (n: number) => String(n).padStart(2, '0');
+const icsEscape = (s: string) =>
+  String(s || '').replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+function icsAddDayCompact(ymd: string): string {
+  const dt = new Date(`${ymd}T00:00:00`);
+  dt.setDate(dt.getDate() + 1);
+  return `${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}`;
+}
+/** Собирает .ics data-URI из даты/времени события. Точную локацию кладём только зарегистрированным. */
+function buildIcsDataUri(event: CommunityEvent, includeLocation: boolean): string {
+  const start = (event.date || '').replace(/-/g, '');
+  // Время берём только для однодневных (у диапазона — событие «на весь день»).
+  const m = !event.dateEnd ? `${event.time} ${event.dateLabel}`.match(/(\d{1,2}):(\d{2})/) : null;
+  let dtStart: string, dtEnd: string;
+  if (m) {
+    const sh = Number(m[1]);
+    const sm = m[2];
+    dtStart = `DTSTART:${start}T${pad(sh)}${sm}00`;
+    const me = (event.timeEnd || '').match(/(\d{1,2}):(\d{2})/);
+    dtEnd = `DTEND:${start}T${me ? pad(Number(me[1])) + me[2] : pad((sh + 3) % 24) + sm}00`;
+  } else {
+    dtStart = `DTSTART;VALUE=DATE:${start}`;
+    dtEnd = `DTEND;VALUE=DATE:${icsAddDayCompact(event.dateEnd || event.date)}`;
+  }
+  const lines = [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//FLINT//RU', 'CALSCALE:GREGORIAN',
+    'BEGIN:VEVENT', `UID:${event.id}@flint`, dtStart, dtEnd,
+    `SUMMARY:${icsEscape(event.title)}`,
+    `DESCRIPTION:${icsEscape(`${event.painPoint || ''}\nБот: https://t.me/campsflint_bot?start=event_${event.id}`)}`,
+    includeLocation && event.location ? `LOCATION:${icsEscape(event.location)}` : '',
+    'END:VEVENT', 'END:VCALENDAR',
+  ].filter(Boolean);
+  return `data:text/calendar;charset=utf-8,${encodeURIComponent(lines.join('\r\n'))}`;
+}
 
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
@@ -58,7 +94,6 @@ export default function EventDetailModal({
   const guide = getEventGuide(event);
 
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
-  const authorized = isAuthorized();
   const [interestSent, setInterestSent] = useState(false);
   const [interestSending, setInterestSending] = useState(false);
   const handleInterest = async () => {
@@ -173,11 +208,22 @@ export default function EventDetailModal({
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">ДАТА И ВРЕМЯ проведения</span>
                   <div className="text-white font-bold">{event.dateLabel}</div>
                   <div className="text-white/60 text-[10px]">{event.time}</div>
+                  {phase !== 'past' && (
+                    <a
+                      href={buildIcsDataUri(event, isRegistered)}
+                      download={`flint-${event.id}.ics`}
+                      onClick={() => haptic('success')}
+                      className="inline-flex items-center gap-1 text-[10px] text-brand/80 hover:text-brand mt-1.5 font-mono uppercase tracking-wider transition-colors"
+                      title="Добавить в календарь (.ics)"
+                    >
+                      <Calendar className="w-3 h-3" /> В календарь
+                    </a>
+                  )}
                 </div>
               </div>
 
-              {authorized ? (
-                <a 
+              {isRegistered ? (
+                <a
                   href={getYandexMapsUrl(event.location)}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -201,10 +247,13 @@ export default function EventDetailModal({
                   <Lock className="w-5 h-5 text-brand shrink-0" />
                   <div className="space-y-1 text-left">
                     <span className="text-white/40 uppercase text-[9px] tracking-wider block font-bold">
-                      ЛОКАЦИЯ СКРЫТА 🔒
+                      РАЙОН · точка сбора скрыта 🔒
                     </span>
-                    <div className="text-white/50 text-xs italic">
-                      Точное место сбора станет доступно после подтверждения участия
+                    {event.location && (
+                      <div className="text-white/70 text-xs font-bold">{event.location}</div>
+                    )}
+                    <div className="text-white/50 text-[10px] italic">
+                      Точное место сбора и карта откроются после подтверждения участия
                     </div>
                   </div>
                 </div>
@@ -304,8 +353,8 @@ export default function EventDetailModal({
               </div>
             </div>
 
-            {/* Detailed Rules & Preparation */}
-            {event.locationDetails && (
+            {/* Detailed Rules & Preparation — только зарегистрированным (гейтинг локации) */}
+            {isRegistered && event.locationDetails && (
               <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2">
                 <span className="text-white/40 text-[10px] tracking-widest font-mono block uppercase">Подробные правила и подготовка</span>
                 <p className="text-xs text-white/70 leading-relaxed font-sans">
