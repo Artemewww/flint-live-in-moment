@@ -352,23 +352,6 @@ export default function EventDetailModal({
               </div>
             </div>
 
-            {/* Логистика — только зарегистрированным */}
-            {isRegistered && event.logistics && (event.logistics.assemblyPoint || event.logistics.departureTime || event.logistics.fuelCost || event.logistics.returnInfo || event.logistics.notes) && (
-              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2">
-                <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
-                  <MapPin className="w-3.5 h-3.5" /> Логистика · как добраться
-                </span>
-                <div className="space-y-1.5 text-xs text-white/80">
-                  {event.logistics.assemblyPoint && <div>📍 <b className="text-white">Сбор:</b> {event.logistics.assemblyPoint}</div>}
-                  {event.logistics.departureTime && <div>🕐 <b className="text-white">Выезд:</b> {event.logistics.departureTime}</div>}
-                  {event.logistics.fuelCost ? <div>⛽ <b className="text-white">Бензин:</b> ~{event.logistics.fuelCost} ₽/чел</div> : null}
-                  {event.logistics.returnInfo && <div>↩️ <b className="text-white">Обратно:</b> {event.logistics.returnInfo}</div>}
-                  {event.logistics.notes && <div className="text-white/60 italic pt-0.5">{event.logistics.notes}</div>}
-                </div>
-                <p className="text-[9px] text-white/35 font-mono uppercase tracking-wider pt-1">Брони мест в машине — в Telegram-боте события.</p>
-              </div>
-            )}
-
             {/* Detailed Rules & Preparation — только зарегистрированным (гейтинг локации) */}
             {isRegistered && event.locationDetails && (
               <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2">

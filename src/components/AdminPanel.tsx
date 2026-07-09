@@ -112,31 +112,49 @@ function QualityChips({ selected, onChange }: { selected: HouseQuality[]; onChan
   );
 }
 
-/** Загрузка картинки события файлом (Supabase Storage). Превью + удаление + drag&drop. */
+/** Загрузка картинки файлом: сжатие в браузере → data-URL прямо в поле (без Storage/RLS). */
 function ImageUploadField({ value, onChange }: { value: string; onChange: (url: string) => void }) {
   const [uploading, setUploading] = useState(false);
   const [err, setErr] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  /** Читает файл, ужимает до макс. 1280px и JPEG q0.82 — обычно <200 КБ. */
+  const compress = (file: File): Promise<string> => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('Не удалось открыть изображение'));
+      img.onload = () => {
+        const max = 1280;
+        let { width, height } = img;
+        if (width > max || height > max) {
+          const k = Math.min(max / width, max / height);
+          width = Math.round(width * k);
+          height = Math.round(height * k);
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return reject(new Error('Canvas недоступен'));
+        ctx.drawImage(img, 0, 0, width, height);
+        // SVG/прозрачность → оставляем как есть; иначе JPEG для лёгкости.
+        const out = file.type === 'image/svg+xml' ? String(reader.result) : canvas.toDataURL('image/jpeg', 0.82);
+        resolve(out);
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 
   const handleFile = async (file: File) => {
     if (!file) return;
     setErr('');
     setUploading(true);
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const r = new FileReader();
-        r.onload = () => resolve(String(r.result));
-        r.onerror = () => reject(new Error('Не удалось прочитать файл'));
-        r.readAsDataURL(file);
-      });
-      const res = await fetch('/api/admin/upload', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
-        body: JSON.stringify({ dataUrl, filename: file.name.replace(/\.[^.]+$/, '') }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || 'Ошибка загрузки');
-      onChange(json.url);
+      const dataUrl = await compress(file);
+      onChange(dataUrl);
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -1371,13 +1389,9 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div>
-            <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
-
           {formData.priceType === 'paid' && (
             <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
           )}
-          </div>
 
 
           <div>
@@ -1622,7 +1636,7 @@ function AddEventModal({ onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4"
+        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
       >
         <h3 className="font-bold text-lg uppercase">Новое мероприятие</h3>
 
@@ -1709,8 +1723,6 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, location: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
-
-          <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({...formData, logistics: v})} />
 
           {formData.priceType === 'paid' && (
             <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
