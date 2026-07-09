@@ -51,7 +51,7 @@ export async function submitRegistration(payload: RegisterPayload): Promise<Regi
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...payload, initData: getInitData() }),
+      body: JSON.stringify({ ...payload, initData: getInitData(), refCode: (() => { try { return localStorage.getItem('flint_ref') || undefined; } catch { return undefined; } })() }),
     });
 
     if (!res.ok) {

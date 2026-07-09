@@ -122,10 +122,11 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     e.preventDefault();
     setError('');
     if (!fullName.trim()) return setError('Пожалуйста, введите Ваше имя');
-    if (!tgUsername.trim()) return setError('Пожалуйста, укажите логин Telegram');
+    if (!phone.trim()) return setError('Пожалуйста, укажите телефон для связи');
     if (!inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
 
-    finishSuccess(fullName, tgUsername, phone);
+    // Вне Telegram идентификатор — телефон с префиксом (уходит в отрицательный id, без коллизий с реальными TG).
+    finishSuccess(fullName, `web-${phone.replace(/\D/g, '')}`, phone);
   };
 
   // Copy referral link to share with friends
@@ -326,24 +327,6 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         required
                         disabled={isSubmitting}
                       />
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50 mb-1.5">
-                        Ваш никнейм Telegram *
-                      </label>
-                      <div className="relative">
-                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-white/40 text-xs font-semibold">@</span>
-                        <input
-                          type="text"
-                          value={tgUsername.replace(/^@/, '')}
-                          onChange={(e) => setTgUsername(e.target.value)}
-                          placeholder="username"
-                          className="w-full pl-8 pr-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
-                          required
-                          disabled={isSubmitting}
-                        />
-                      </div>
                     </div>
 
                     <div>

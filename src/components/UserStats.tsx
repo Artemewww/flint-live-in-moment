@@ -1,6 +1,67 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { X, Trophy, Flame, Star, Target, Zap, Award } from 'lucide-react';
+import { X, Trophy, Flame, Star, Target, Zap, Award, Users, Copy, Check, RefreshCw } from 'lucide-react';
+import { getInitData, haptic } from '../telegram';
+
+/** Личная реферальная ссылка участника (только внутри Telegram Mini App). */
+function ReferralSection() {
+  const [data, setData] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [rotating, setRotating] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const load = async (action?: string) => {
+    const initData = getInitData();
+    if (!initData) { setLoading(false); return; }
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData, action }),
+      });
+      const j = await res.json();
+      if (j.ok) setData(j.profile);
+    } catch { /* no-op */ }
+    setLoading(false);
+    setRotating(false);
+  };
+
+  useEffect(() => { load(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+
+  if (loading) return null;
+  if (!data || !data.refLink) {
+    return (
+      <div className="bg-white/5 border border-white/10 rounded-2xl p-4 text-center text-[11px] text-white/40 font-mono">
+        Реферальная ссылка доступна внутри Telegram — открой афишу из бота @campsflint_bot.
+      </div>
+    );
+  }
+
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(data.refLink); setCopied(true); haptic('success'); setTimeout(() => setCopied(false), 1500); } catch { /* no-op */ }
+  };
+
+  return (
+    <div className="bg-brand/5 border border-brand/20 rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <span className="text-brand text-[10px] uppercase font-mono font-bold tracking-widest flex items-center gap-1.5">
+          <Users className="w-3.5 h-3.5" /> Твоя реф-ссылка
+        </span>
+        <span className="text-[10px] text-white/50 font-mono">Приглашено: <b className="text-brand">{data.referralsCount}</b></span>
+      </div>
+      <div className="flex gap-2">
+        <input readOnly value={data.refLink} className="flex-1 bg-black/30 border border-white/10 rounded-lg p-2 text-white/80 text-[11px] font-mono truncate outline-none" />
+        <button onClick={copy} className="shrink-0 bg-brand hover:bg-brand-hover text-black rounded-lg px-3 flex items-center justify-center cursor-pointer border-none" title="Копировать">
+          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+        </button>
+      </div>
+      <button onClick={() => { setRotating(true); load('rotate'); }} disabled={rotating} className="text-[10px] text-white/50 hover:text-white font-mono flex items-center gap-1.5 cursor-pointer bg-transparent border-none disabled:opacity-50">
+        <RefreshCw className={`w-3 h-3 ${rotating ? 'animate-spin' : ''}`} /> Сгенерировать новую ссылку
+      </button>
+      <p className="text-[9px] text-white/40 font-mono leading-relaxed">Приглашай своих. За друга, прошедшего первое событие, начислим баллы.</p>
+    </div>
+  );
+}
 
 interface UserStatsProps {
   registrations: Array<{eventId: string, registeredAt: string}>;
@@ -112,6 +173,9 @@ export default function UserStats({ registrations, events, onClose }: UserStatsP
               </div>
             </div>
           </div>
+
+          {/* Реферальная ссылка */}
+          <ReferralSection />
 
           {/* Stats Grid */}
           <div className="grid grid-cols-2 gap-3">
