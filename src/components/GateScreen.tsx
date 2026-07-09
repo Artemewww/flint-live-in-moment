@@ -26,10 +26,10 @@ export default function GateScreen({ onPass }: { onPass: () => void }) {
 
   const validate = async (ref: string): Promise<boolean> => {
     try {
-      const res = await fetch('/api/gate', {
+      const res = await fetch('/api/club', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ref, initData: getInitData() }),
+        body: JSON.stringify({ action: 'gate', ref, initData: getInitData() }),
       });
       const json = await res.json();
       if (json.valid) {
