@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2
 } from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
@@ -66,6 +66,57 @@ function DynamicPrice({ event }: { event: CommunityEvent }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// --- Погода (open-meteo, без ключа, запрос из браузера) ---
+const WMO: Record<number, { icon: string; label: string }> = {
+  0: { icon: '☀️', label: 'Ясно' }, 1: { icon: '🌤', label: 'Малооблачно' },
+  2: { icon: '⛅️', label: 'Облачно' }, 3: { icon: '☁️', label: 'Пасмурно' },
+  45: { icon: '🌫', label: 'Туман' }, 48: { icon: '🌫', label: 'Изморозь' },
+  51: { icon: '🌦', label: 'Морось' }, 53: { icon: '🌦', label: 'Морось' }, 55: { icon: '🌦', label: 'Морось' },
+  61: { icon: '🌧', label: 'Дождь' }, 63: { icon: '🌧', label: 'Дождь' }, 65: { icon: '🌧', label: 'Ливень' },
+  71: { icon: '🌨', label: 'Снег' }, 73: { icon: '🌨', label: 'Снег' }, 75: { icon: '❄️', label: 'Снегопад' },
+  80: { icon: '🌦', label: 'Ливни' }, 81: { icon: '🌧', label: 'Ливни' }, 82: { icon: '⛈', label: 'Ливни' },
+  95: { icon: '⛈', label: 'Гроза' }, 96: { icon: '⛈', label: 'Гроза' }, 99: { icon: '⛈', label: 'Гроза с градом' },
+};
+function WeatherBlock({ event }: { event: CommunityEvent }) {
+  const [data, setData] = useState<any>(null);
+  const lat = event.coordinates?.lat;
+  const lng = event.coordinates?.lng;
+  useEffect(() => {
+    if (!lat || !lng) return;
+    const start = event.date;
+    const end = event.dateEnd || event.date;
+    const today = getToday();
+    if (!start || start < today) return;
+    const daysAhead = (new Date(`${start}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000;
+    if (daysAhead > 15) return; // open-meteo прогноз ~16 дней
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weathercode&timezone=auto&start_date=${start}&end_date=${end}`;
+    fetch(url).then((r) => r.json()).then(setData).catch(() => {});
+  }, [lat, lng, event.date, event.dateEnd]);
+
+  if (!data?.daily?.time?.length) return null;
+  const d = data.daily;
+  const maxRain = Math.max(...((d.precipitation_probability_max as number[]) || [0]));
+  return (
+    <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2.5">
+      <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold">🌦 Погода на даты</span>
+      <div className="flex gap-2 overflow-x-auto scrollbar-none">
+        {(d.time as string[]).map((t, i) => {
+          const w = WMO[d.weathercode[i]] || { icon: '🌡', label: '' };
+          return (
+            <div key={t} className="shrink-0 bg-black/25 border border-white/5 rounded-xl px-3 py-2 text-center min-w-[74px]">
+              <div className="text-[10px] text-white/50">{new Date(`${t}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</div>
+              <div className="text-xl leading-tight my-0.5" title={w.label}>{w.icon}</div>
+              <div className="text-xs font-bold text-white">{Math.round(d.temperature_2m_max[i])}°<span className="text-white/40">/{Math.round(d.temperature_2m_min[i])}°</span></div>
+              <div className="text-[9px] text-sky-300/80">💧 {d.precipitation_probability_max[i]}%</div>
+            </div>
+          );
+        })}
+      </div>
+      {maxRain >= 60 && <p className="text-[11px] text-amber-400">☔️ Высокая вероятность дождя — возьми дождевик.</p>}
     </div>
   );
 }
@@ -280,6 +331,9 @@ export default function EventDetailModal({
                 </div>
               </div>
             </div>
+
+            {/* Погода на даты (open-meteo) */}
+            <WeatherBlock event={event} />
 
             {/* Pain Point Solution Panel (PAIN) */}
             <div className="bg-white/5 border border-white/10 p-4.5 rounded-2xl flex items-start gap-3.5" id={`detail-pain-block-${event.id}`}>
