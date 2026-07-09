@@ -129,6 +129,21 @@ async function bindReferrer(from: any, code: string) {
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
 
+// --- Закрытый клуб (за флагом GATE_ENABLED) ---
+function gateOn(): boolean { return process.env.GATE_ENABLED === '1'; }
+async function memberOf(tgId: number): Promise<{ status?: string; is_core?: boolean } | null> {
+  const { data } = await supabase.from('members').select('status,is_core').eq('telegram_id', tgId).maybeSingle();
+  return (data as any) || null;
+}
+async function isApproved(tgId: number): Promise<boolean> {
+  const m = await memberOf(tgId);
+  return !!m && (m.status === 'approved' || m.is_core === true);
+}
+async function isCore(tgId: number): Promise<boolean> {
+  const m = await memberOf(tgId);
+  return !!m && m.is_core === true;
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
@@ -181,8 +196,54 @@ export default async function handler(req: any, res: any) {
         });
       };
 
+      // Согласие ПД + подача заявки в клуб.
+      if (data === 'verify_consent') {
+        await supabase.from('members').update({ agreed_pd: true, status: 'pending_review' }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Заявка отправлена!' });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: '✅ Заявка отправлена костяку клуба. Как только одобрят — открою доступ к событиям и пришлю сюда.',
+        });
+        if (ADMIN_CHAT_ID) {
+          await tg('sendMessage', {
+            chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+            text: `🚪 <b>Заявка в клуб</b>\n${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''} (id ${tgId})`,
+            reply_markup: kb([[
+              { text: '✅ Принять', callback_data: `approve_${tgId}` },
+              { text: '❌ Отклонить', callback_data: `reject_${tgId}` },
+            ]]),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Модерация заявки костяком.
+      if (data.startsWith('approve_') || data.startsWith('reject_')) {
+        if (!(await isCore(cq.from.id))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решать может только костяк клуба' });
+          return res.status(200).json({ ok: true });
+        }
+        const approve = data.startsWith('approve_');
+        const targetId = Number(data.split('_')[1]);
+        await supabase.from('members').update({ status: approve ? 'approved' : 'blocked', approved_by: cq.from.id }).eq('telegram_id', targetId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: approve ? 'Принят ✅' : 'Отклонён' });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `${approve ? '✅ Принят в клуб' : '❌ Отклонён'} (id ${targetId}) — решил ${esc(cq.from.first_name || 'костяк')}`,
+        });
+        try {
+          if (approve) await tg('sendMessage', { chat_id: targetId, parse_mode: 'HTML', text: '🎉 Добро пожаловать в клуб! Двери открыты. Нажми /start — покажу события.', reply_markup: kb([[openBtn]]) });
+          else await tg('sendMessage', { chat_id: targetId, text: 'К сожалению, заявка в клуб отклонена.' });
+        } catch { /* пользователь мог не начинать чат */ }
+        return res.status(200).json({ ok: true });
+      }
+
       // Старт записи с карточки события.
       if (data.startsWith('reg_')) {
+        if (gateOn() && !(await isApproved(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала пройди верификацию — нажми /start' });
+          return res.status(200).json({ ok: true });
+        }
         const ev = await getEvent(data.slice(4));
         if (!ev) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено' });
@@ -284,6 +345,28 @@ export default async function handler(req: any, res: any) {
         if (payload.startsWith('ref_')) {
           try { await bindReferrer(msg.from, payload.slice('ref_'.length)); } catch {}
         }
+
+        // Закрытый клуб: незнакомец не видит события — сначала согласие ПД + заявка костяку.
+        if (gateOn() && !(await isApproved(msg.from.id))) {
+          await supabase.from('members').upsert(
+            { telegram_id: msg.from.id, username: msg.from.username || null, first_name: msg.from.first_name || null },
+            { onConflict: 'telegram_id' }
+          );
+          const m = await memberOf(msg.from.id);
+          if (m?.status === 'pending_review') {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⏳ Твоя заявка в клуб на рассмотрении у костяка. Как только одобрят — пришлю доступ сюда.' });
+          } else if (m?.status === 'blocked') {
+            await tg('sendMessage', { chat_id: chatId, text: 'Доступ в клуб закрыт.' });
+          } else {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '🔒 <b>«Живи в моменте» — закрытый клуб.</b>\n\nДоступ к событиям — после короткой верификации. Подтверди согласие на обработку персональных данных (по законодательству РБ) и подай заявку — костяк клуба её рассмотрит.',
+              reply_markup: kb([[{ text: '✅ Согласен, подать заявку', callback_data: 'verify_consent' }]]),
+            });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
         if (payload.startsWith('event_')) {
           const ev = await getEvent(payload.slice('event_'.length));
           if (ev) {
