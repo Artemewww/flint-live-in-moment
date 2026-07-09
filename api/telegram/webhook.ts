@@ -179,6 +179,34 @@ function checklistKb(prefix: string, evId: string, items: string[], selected: st
   return { inline_keyboard: rows };
 }
 
+// --- Даты участия (для многодневных событий) ---
+const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+function eventDays(ev: any): { date: string; label: string }[] {
+  const start = ev?.date;
+  const end = ev?.date_end || ev?.date;
+  if (!start) return [];
+  const out: { date: string; label: string }[] = [];
+  const d = new Date(`${start}T00:00:00`);
+  const endD = new Date(`${end}T00:00:00`);
+  let guard = 0;
+  while (d <= endD && guard < 31) {
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    out.push({ date: iso, label: `${d.getDate()} ${RU_MON[d.getMonth()]}` });
+    d.setDate(d.getDate() + 1);
+    guard++;
+  }
+  return out;
+}
+function isMultiDay(ev: any): boolean {
+  return !!(ev?.date_end && ev.date_end !== ev.date);
+}
+function daysKb(evId: string, days: { date: string; label: string }[], selected: string[]) {
+  const sel = new Set(selected);
+  const rows = days.map((day, i) => [{ text: `${sel.has(day.date) ? '✅' : '▫️'} ${day.label}`, callback_data: `dt_${evId}_${i}` }]);
+  rows.push([{ text: '➡️ Дальше', callback_data: `dtdone_${evId}` }]);
+  return { inline_keyboard: rows };
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
@@ -361,6 +389,19 @@ export default async function handler(req: any, res: any) {
       }
 
       // Регистрация + старт опроса (после согласия ПД).
+      // Опрос транспорта (общий шаг). Для многодневных — сначала выбор дат.
+      const askTransport = async (ev: any) => {
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🚗 Как добираешься?',
+          reply_markup: kb([
+            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
+            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
+            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
+          ]),
+        });
+      };
       const beginReg = async (ev: any) => {
         const r = await registerFromBot(cq.from, ev);
         if (r === 'error') { await tg('sendMessage', { chat_id: chatId, text: 'Ошибка записи, попробуйте позже.' }); return; }
@@ -372,16 +413,19 @@ export default async function handler(req: any, res: any) {
           });
           return;
         }
-        await tg('sendMessage', {
-          chat_id: chatId, parse_mode: 'HTML',
-          text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇\n\n🚗 Как добираешься?`,
-          reply_markup: kb([
-            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
-            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
-            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
-            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
-          ]),
-        });
+        // Многодневное — сначала выбор конкретных дней участия.
+        if (isMultiDay(ev)) {
+          const days = eventDays(ev);
+          await updateReg(ev.id, tgId, { days: days.map((d) => d.date) }); // по умолчанию все дни
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Записал на «<b>${esc(ev.title)}</b>». В какие дни будешь? (по умолчанию — все, сними лишние)`,
+            reply_markup: daysKb(ev.id, days, days.map((d) => d.date)),
+          });
+          return;
+        }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Записал тебя на «<b>${esc(ev.title)}</b>». Пара быстрых уточнений 👇` });
+        await askTransport(ev);
       };
 
       // Старт записи с карточки события.
@@ -489,6 +533,37 @@ export default async function handler(req: any, res: any) {
           await finishReg(ev, (rr as any)?.guest_count || 0, children);
           return res.status(200).json({ ok: true });
         }
+      }
+
+      // === Выбор дат участия (многодневные) ===
+      if (data.startsWith('dt_')) {
+        const rest = data.slice(3);
+        const idx = rest.lastIndexOf('_');
+        const evId = rest.slice(0, idx);
+        const i = Number(rest.slice(idx + 1));
+        const ev = await getEvent(evId);
+        const days = eventDays(ev);
+        const day = days[i];
+        if (!day) { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        const { data: reg } = await supabase.from('registrations').select('days').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        let sel: string[] = ((reg as any)?.days) || [];
+        sel = sel.includes(day.date) ? sel.filter((x) => x !== day.date) : [...sel, day.date];
+        await updateReg(evId, tgId, { days: sel });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: daysKb(evId, days, sel) });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('dtdone_')) {
+        const evId = data.slice('dtdone_'.length);
+        const ev = await getEvent(evId);
+        const { data: reg } = await supabase.from('registrations').select('days').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        const sel: string[] = ((reg as any)?.days) || [];
+        if (sel.length === 0) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Выбери хотя бы один день' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const labels = eventDays(ev).filter((d) => sel.includes(d.date)).map((d) => d.label).join(', ');
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `📅 Дни участия: <b>${esc(labels)}</b>` });
+        await askTransport(ev);
+        return res.status(200).json({ ok: true });
       }
 
       // === Организация: снаряжение / роли (мультивыбор) ===
