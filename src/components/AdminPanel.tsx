@@ -3,9 +3,49 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity } from 'lucide-react';
 import { CommunityEvent, HouseQuality } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
+import { generateProgram, generateThreshold } from '../eventGuide';
 
 const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
+
+/** Редактор списка (программа / порог входа): генерация, правка, ↑↓, удаление, добавление. */
+function ListEditor({ label, items, onChange, onGenerate, placeholder }: {
+  label: string; items: string[]; onChange: (v: string[]) => void; onGenerate: () => void; placeholder?: string;
+}) {
+  const upd = (i: number, val: string) => { const c = [...items]; c[i] = val; onChange(c); };
+  const del = (i: number) => onChange(items.filter((_, x) => x !== i));
+  const move = (i: number, d: number) => {
+    const j = i + d;
+    if (j < 0 || j >= items.length) return;
+    const c = [...items];
+    [c[i], c[j]] = [c[j], c[i]];
+    onChange(c);
+  };
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <label className="text-[10px] text-white/40 uppercase font-mono">{label}</label>
+        <button type="button" onClick={onGenerate} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 transition-colors">
+          ⚡ {items.length ? 'Перегенерировать' : 'Сгенерировать'}
+        </button>
+      </div>
+      <div className="space-y-1.5">
+        {items.map((it, i) => (
+          <div key={i} className="flex items-center gap-1.5">
+            <span className="text-[10px] text-white/30 font-mono w-4 shrink-0">{i + 1}</span>
+            <input value={it} placeholder={placeholder} onChange={(e) => upd(i, e.target.value)} className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm" />
+            <button type="button" onClick={() => move(i, -1)} className="text-white/40 hover:text-white px-1 cursor-pointer bg-transparent border-none" title="Вверх">↑</button>
+            <button type="button" onClick={() => move(i, 1)} className="text-white/40 hover:text-white px-1 cursor-pointer bg-transparent border-none" title="Вниз">↓</button>
+            <button type="button" onClick={() => del(i)} className="text-red-400/70 hover:text-red-400 px-1 cursor-pointer bg-transparent border-none" title="Удалить">✕</button>
+          </div>
+        ))}
+        <button type="button" onClick={() => onChange([...items, ''])} className="text-[11px] text-white/50 hover:text-white border border-dashed border-white/15 hover:border-white/30 rounded-lg px-2 py-1.5 w-full cursor-pointer bg-transparent transition-colors">
+          ＋ Добавить пункт
+        </button>
+      </div>
+    </div>
+  );
+}
 
 /** Кликабельные теги 6 качеств «Дома Личности». Выбранные «горят». */
 function QualityChips({ selected, onChange }: { selected: HouseQuality[]; onChange: (q: HouseQuality[]) => void }) {
@@ -1141,6 +1181,7 @@ function EditEventModal({ event, onClose, onSave }: {
     priceAmount: event.priceAmount || 0,
     entryThreshold: event.entryThreshold || '',
     entryType: event.entryType || 'all',
+    program: (event.program || []) as string[],
     houseQualities: (event.houseQualities || []) as HouseQuality[]
   });
 
@@ -1179,6 +1220,7 @@ function EditEventModal({ event, onClose, onSave }: {
       priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType,
+      program: formData.program,
       houseQualities: formData.houseQualities
     });
   };
@@ -1404,18 +1446,21 @@ function EditEventModal({ event, onClose, onSave }: {
             )}
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Порог входа
-            </label>
-            <input
-              type="text"
-              value={formData.entryThreshold}
-              onChange={(e) => setFormData({...formData, entryThreshold: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              placeholder="Например: 100% трезвость • личный веник"
-            />
-          </div>
+          <ListEditor
+            label="Программа события"
+            placeholder="Шаг программы"
+            items={formData.program}
+            onChange={(v) => setFormData({...formData, program: v})}
+            onGenerate={() => setFormData({...formData, program: generateProgram({ ...formData, type: event.type })})}
+          />
+
+          <ListEditor
+            label="Порог входа (условия прохода)"
+            placeholder="Условие"
+            items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []}
+            onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})}
+            onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold({ ...formData, type: event.type }).join(' • ')})}
+          />
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
@@ -1475,6 +1520,7 @@ function AddEventModal({ onClose, onAdd }: {
     priceAmount: 0,
     entryThreshold: '100% Трезвость',
     entryType: 'all' as 'male' | 'female' | 'all',
+    program: [] as string[],
     houseQualities: [] as HouseQuality[]
   });
 
@@ -1506,7 +1552,7 @@ function AddEventModal({ onClose, onAdd }: {
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType,
       status: 'locked',
-      program: [],
+      program: formData.program,
       notifications: {
         reminder7d: true,
         reminder3d: true,
@@ -1660,12 +1706,20 @@ function AddEventModal({ onClose, onAdd }: {
 
           <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
-          <input
-            type="text"
-            placeholder="Порог входа"
-            value={formData.entryThreshold}
-            onChange={(e) => setFormData({...formData, entryThreshold: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+          <ListEditor
+            label="Программа события"
+            placeholder="Шаг программы"
+            items={formData.program}
+            onChange={(v) => setFormData({...formData, program: v})}
+            onGenerate={() => setFormData({...formData, program: generateProgram(formData)})}
+          />
+
+          <ListEditor
+            label="Порог входа (условия прохода)"
+            placeholder="Условие"
+            items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []}
+            onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})}
+            onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})}
           />
         </div>
 

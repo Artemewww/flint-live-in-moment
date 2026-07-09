@@ -94,3 +94,25 @@ export function getEventGuide(event: CommunityEvent): EventGuide {
     : defaultProgram(event);
   return { bring: bringList(event), program, vector: vectorFor(event) };
 }
+
+/** Мин. набор полей для генерации (админка не всегда имеет полный CommunityEvent). */
+export type GuideInput = Pick<CommunityEvent, 'type'> & Partial<CommunityEvent>;
+
+/** Генерация черновика программы по типу/названию/датам события. */
+export function generateProgram(event: GuideInput): string[] {
+  return defaultProgram(event as CommunityEvent);
+}
+
+/** Генерация черновика «порога входа» (условий прохода) по типу/аудитории/цене. */
+export function generateThreshold(event: GuideInput): string[] {
+  const items: string[] = [];
+  if (event.entryType === 'male') items.push('Только мужчины');
+  else if (event.entryType === 'female') items.push('Только женщины');
+  items.push('100% трезвость — без алкоголя и веществ');
+  if (has(event as CommunityEvent, 'баня', 'парен')) items.push('Личный веник для бани');
+  if (has(event as CommunityEvent, 'поход', 'кемпинг', 'слёт', 'слет', 'палат', 'сплав'))
+    items.push('Своё снаряжение по чек-листу');
+  if (event.priceType === 'paid') items.push('Взнос на аренду — делится поровну на всех');
+  items.push('Уважение и искренность к каждому в круге');
+  return items;
+}
