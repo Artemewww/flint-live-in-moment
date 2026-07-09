@@ -14,6 +14,7 @@ function mapEventToCamelCase(event: any) {
     description: event.description,
     type: event.type,
     date: event.date,
+    dateEnd: event.date_end,
     dateLabel: event.date_label,
     time: event.time,
     timeEnd: event.time_end,
@@ -100,6 +101,8 @@ export default async function handler(req: any, res: any) {
         notifications: body.notifications || {},
         program_voting: body.programVoting || null
       };
+      // date_end шлём только если задан (колонка может отсутствовать до миграции).
+      if (body.dateEnd) (eventData as any).date_end = body.dateEnd;
 
       const { data: event, error } = await supabase
         .from('events')

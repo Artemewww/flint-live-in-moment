@@ -24,7 +24,8 @@ export interface CommunityEvent {
   title: string;
   description: string;
   type: EventType;
-  date: string; // YYYY-MM-DD format (e.g., "2026-06-04")
+  date: string; // YYYY-MM-DD дата начала (e.g., "2026-06-04")
+  dateEnd?: string; // YYYY-MM-DD дата окончания (для многодневных); пусто = однодневное
   dateLabel: string; // Readable single day or range, e.g. "4 июня в 19:00"
   time: string; // Weekly scale, e.g. "Каждый четверг в 19:00" or "Пятница - Воскресенье"
   timeEnd: string; // Время окончания, e.g. "23:00"
@@ -83,7 +84,8 @@ export function getToday(): string {
  * и в API (которое отдаёт данные боту), чтобы состояние совпадало везде.
  */
 export function getEventPhase(event: CommunityEvent, today: string = getToday()): EventPhase {
-  if (event.date < today) return 'past';
+  // Для многодневных «прошедшее» считается по дате ОКОНЧАНИЯ, а не начала.
+  if ((event.dateEnd || event.date) < today) return 'past';
   if (event.status === 'closed') return 'closed';
   if (event.status === 'locked') return 'locked';
   if (event.maxParticipants && event.participantsCount >= event.maxParticipants) return 'full';

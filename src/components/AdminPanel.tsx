@@ -48,6 +48,24 @@ interface AdminPanelProps {
   onClose: () => void;
 }
 
+const MONTHS_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+const DOW_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
+
+/** Человекочитаемая подпись даты: один день или диапазон (многодневное). */
+function buildDateLabel(date: string, dateEnd: string, time: string): string {
+  if (!date) return '';
+  const d = new Date(date + 'T00:00:00');
+  const day = d.getDate();
+  const mon = MONTHS_RU[d.getMonth()];
+  const t = time ? `, ${time}` : '';
+  if (dateEnd && dateEnd !== date) {
+    const e = new Date(dateEnd + 'T00:00:00');
+    const left = e.getMonth() === d.getMonth() ? `${day}` : `${day} ${mon}`;
+    return `${left}–${e.getDate()} ${MONTHS_RU[e.getMonth()]}${t}`;
+  }
+  return `${day} ${mon} (${DOW_RU[d.getDay()]})${t}`;
+}
+
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState('');
@@ -1015,6 +1033,7 @@ function EditEventModal({ event, onClose, onSave }: {
     title: event.title,
     description: event.description,
     date: event.date,
+    dateEnd: event.dateEnd || '',
     dateLabel: event.dateLabel,
     time: event.time || '',
     timeEnd: event.timeEnd || '',
@@ -1051,7 +1070,8 @@ function EditEventModal({ event, onClose, onSave }: {
       title: formData.title,
       description: formData.description,
       date: formData.date,
-      dateLabel: formData.dateLabel,
+      dateEnd: formData.dateEnd,
+      dateLabel: buildDateLabel(formData.date, formData.dateEnd, formData.time),
       time: formData.time,
       timeEnd: formData.timeEnd,
       location: formData.location,
@@ -1095,17 +1115,32 @@ function EditEventModal({ event, onClose, onSave }: {
             />
           </div>
 
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-              Дата *
-            </label>
-            <input
-              type="date"
-              value={formData.date}
-              onChange={(e) => setFormData({...formData, date: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            />
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Дата начала *
+              </label>
+              <input
+                type="date"
+                value={formData.date}
+                onChange={(e) => setFormData({...formData, date: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+            <div>
+              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                Дата окончания
+              </label>
+              <input
+                type="date"
+                value={formData.dateEnd}
+                min={formData.date}
+                onChange={(e) => setFormData({...formData, dateEnd: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
           </div>
+          <p className="text-[9px] text-white/40 -mt-2 mb-1">Для многодневных (поход, кемпинг) укажи дату окончания — подпись станет диапазоном автоматически.</p>
 
 
           <div className="grid grid-cols-2 gap-2">
@@ -1345,13 +1380,17 @@ function AddEventModal({ onClose, onAdd }: {
   const [formData, setFormData] = useState({
     title: '',
     date: '',
+    dateEnd: '',
     dateLabel: '',
     time: '',
     timeEnd: '',
     location: '',
+    image: '',
+    painPoint: '',
     type: 'mixed' as CommunityEvent['type'],
     maxParticipants: 15,
     description: '',
+    priceType: 'conscience' as 'free' | 'conscience' | 'paid',
     priceLabel: 'На совесть',
     priceAmount: 0,
     entryThreshold: '100% Трезвость',
@@ -1367,17 +1406,18 @@ function AddEventModal({ onClose, onAdd }: {
       description: formData.description || 'Описание будет добавлено позже',
       type: formData.type,
       date: formData.date,
-      dateLabel: formData.dateLabel || formData.date,
+      dateEnd: formData.dateEnd,
+      dateLabel: buildDateLabel(formData.date, formData.dateEnd, formData.time),
       time: formData.time,
       timeEnd: formData.timeEnd,
       location: formData.location,
-      painPoint: '',
+      painPoint: formData.painPoint,
       houseQualities: [],
-      image: '/assets/images/default_event.png',
+      image: formData.image || '',
       maxParticipants: formData.maxParticipants,
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
-      priceType: 'conscience',
+      priceType: formData.priceType,
       priceLabel: formData.priceLabel,
       priceAmount: formData.priceAmount,
       entryThreshold: formData.entryThreshold,
@@ -1417,13 +1457,29 @@ function AddEventModal({ onClose, onAdd }: {
           />
 
           <div className="grid grid-cols-2 gap-2">
-            <input
-              type="date"
-              value={formData.date}
-              onChange={(e) => setFormData({...formData, date: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            />
+            <div>
+              <label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата начала *</label>
+              <input
+                type="date"
+                value={formData.date}
+                onChange={(e) => setFormData({...formData, date: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+            <div>
+              <label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата окончания</label>
+              <input
+                type="date"
+                value={formData.dateEnd}
+                min={formData.date}
+                onChange={(e) => setFormData({...formData, dateEnd: e.target.value})}
+                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+              />
+            </div>
+          </div>
+          <p className="text-[9px] text-white/40">Для многодневных укажи дату окончания — подпись станет диапазоном.</p>
 
+          <div className="grid grid-cols-2 gap-2">
             <input
               type="text"
               placeholder="Время начала (19:00)"
@@ -1431,9 +1487,6 @@ function AddEventModal({ onClose, onAdd }: {
               onChange={(e) => setFormData({...formData, time: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
             />
-          </div>
-
-          <div className="grid grid-cols-2 gap-2">
             <input
               type="text"
               placeholder="Время окончания (23:00)"
@@ -1441,15 +1494,15 @@ function AddEventModal({ onClose, onAdd }: {
               onChange={(e) => setFormData({...formData, timeEnd: e.target.value})}
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
             />
-
-            <input
-              type="number"
-              placeholder="Стоимость аренды (₽)"
-              value={formData.priceAmount}
-              onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value)})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-            />
           </div>
+
+          <input
+            type="number"
+            placeholder="Стоимость аренды (₽)"
+            value={formData.priceAmount}
+            onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value)})}
+            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+          />
 
           <input
             type="text"
@@ -1458,6 +1511,17 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, location: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
+
+          <input
+            type="text"
+            placeholder="Ссылка на картинку события (https://... или /assets/images/...)"
+            value={formData.image}
+            onChange={(e) => setFormData({...formData, image: e.target.value})}
+            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+          />
+          {formData.image && (
+            <img src={formData.image} alt="" className="w-full h-24 object-cover rounded-xl border border-white/10" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }} />
+          )}
 
           <textarea
             placeholder="Описание мероприятия"
