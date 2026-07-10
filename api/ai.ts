@@ -22,6 +22,9 @@ function checkAdminAuth(req: any): boolean {
  */
 let modelCache: { at: number; models: string[] } | null = null;
 
+/** Какая модель в итоге ответила — возвращаем клиенту, чтобы отладка не была гаданием. */
+let usedModel = '';
+
 async function listModels(): Promise<string[]> {
   if (modelCache && Date.now() - modelCache.at < 30 * 60 * 1000) return modelCache.models;
 
@@ -80,7 +83,14 @@ async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
       model, contents: prompt,
       config: { responseMimeType: 'application/json', responseSchema: schema },
     });
-    return JSON.parse(resp.text || '{}');
+    const parsed = JSON.parse(resp.text || '{}');
+    // Некоторые модели отвечают 200 и пустым объектом. Молча принимать это нельзя:
+    // наружу уйдут дефолты, и будет выглядеть, будто ИИ «ничего не придумал».
+    if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
+      throw new Error('вернула пустой JSON');
+    }
+    usedModel = model;
+    return parsed;
   };
 
   for (const model of queue) {
@@ -153,13 +163,18 @@ export default async function handler(req: any, res: any) {
       const p = await genJSON(ai, prompt, {
         type: Type.OBJECT,
         properties: {
-          type: { type: Type.STRING },
+          type: { type: Type.STRING, enum: ['male', 'mixed', 'intellectual', 'active'] },
           description: { type: Type.STRING },
           painPoint: { type: Type.STRING },
           program: { type: Type.ARRAY, items: { type: Type.STRING } },
           entryThreshold: { type: Type.STRING },
-          houseQualities: { type: Type.ARRAY, items: { type: Type.STRING } },
+          houseQualities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING, enum: ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] },
+          },
         },
+        // Без required модель вправе вернуть пустой объект — так и происходило.
+        required: ['type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities'],
       });
       const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
       const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
@@ -172,6 +187,7 @@ export default async function handler(req: any, res: any) {
           entryThreshold: p.entryThreshold || '',
           houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],
         },
+        model: usedModel,
       });
     }
 
@@ -203,8 +219,12 @@ export default async function handler(req: any, res: any) {
       `Название: «${ev.title || 'Событие'}». Тип: ${typeRu}. Длительность: ${days}. Ожидается людей: ${people}.\n` +
       (ev.painPoint ? `Смысл/запрос: ${ev.painPoint}.\n` : '') +
       `Верни JSON: массив program из 5–9 пунктов (каждый — короткая строка шага программы, можно со временем).`;
-    const parsed = await genJSON(ai, prompt, { type: Type.OBJECT, properties: { program: { type: Type.ARRAY, items: { type: Type.STRING } } } });
-    return res.status(200).json({ program: parsed.program || [] });
+    const parsed = await genJSON(ai, prompt, {
+      type: Type.OBJECT,
+      properties: { program: { type: Type.ARRAY, items: { type: Type.STRING } } },
+      required: ['program'],
+    });
+    return res.status(200).json({ program: parsed.program || [], model: usedModel });
   } catch (err) {
     return res.status(200).json({ error: (err as Error).message });
   }
