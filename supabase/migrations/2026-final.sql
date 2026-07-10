@@ -175,6 +175,30 @@ create table if not exists admin_presence (
 create index if not exists idx_admin_presence_seen on admin_presence(last_seen);
 
 -- ─────────────────────────────────────────────────────────────
+-- 9d. RLS. Ключ в SUPABASE_SERVICE_ROLE_KEY по факту НЕ обходит RLS
+-- (настоящий service_role обходил бы). Новые таблицы создаются с включённым
+-- RLS, и запись в них падает: `new row violates row-level security policy`.
+-- Причём select при этом молча возвращает пусто — данные терялись без ошибки.
+-- Доступ к этим таблицам идёт только через наши serverless-функции, снаружи
+-- их не дёргают. Отключаем RLS, как уже сделано для events/members/registrations
+-- в supabase/disable-rls.sql.
+--
+-- Правильнее — положить в env НАСТОЯЩИЙ service_role key и вернуть RLS.
+-- ─────────────────────────────────────────────────────────────
+alter table bot_sessions    disable row level security;
+alter table referrals       disable row level security;
+alter table polls           disable row level security;
+alter table poll_votes      disable row level security;
+alter table program_votes   disable row level security;
+alter table interests       disable row level security;
+alter table feedback        disable row level security;
+alter table tasks           disable row level security;
+alter table admin_presence  disable row level security;
+alter table rides           disable row level security;
+alter table ride_bookings   disable row level security;
+alter table ride_requests   disable row level security;
+
+-- ─────────────────────────────────────────────────────────────
 -- 10. RPC
 -- ─────────────────────────────────────────────────────────────
 

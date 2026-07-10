@@ -224,19 +224,27 @@ async function handleHealth(res: any) {
   const { error: pointsErr } = await supabase.rpc('award_points', { tg: -1, n: 0 });
   out['rpc:award_points'] = pointsErr ? `ОТСУТСТВУЕТ: ${pointsErr.message}` : 'ok';
 
-  // Чтения мало: диалоги бота ломаются именно на ЗАПИСИ в bot_sessions,
-  // а webhook ошибку upsert не проверяет. Пишем-читаем-удаляем тестовую строку.
-  const probeId = -999999;
-  const { error: wErr } = await supabase.from('bot_sessions').upsert(
-    { telegram_id: probeId, state: 'probe', context: { x: 1 }, updated_at: new Date().toISOString() },
-    { onConflict: 'telegram_id' }
-  );
-  if (wErr) {
-    out['bot_sessions:WRITE'] = `НЕ ПИШЕТСЯ: ${wErr.message}`;
-  } else {
-    const { data: back } = await supabase.from('bot_sessions').select('state').eq('telegram_id', probeId).maybeSingle();
-    out['bot_sessions:WRITE'] = back?.state === 'probe' ? 'ok' : 'ЗАПИСАЛОСЬ, НО НЕ ЧИТАЕТСЯ';
-    await supabase.from('bot_sessions').delete().eq('telegram_id', probeId);
+  // Одного чтения мало: при включённом RLS без политик select молча вернёт
+  // пустой список (выглядит как «ok»), а insert упадёт. Данные теряются тихо.
+  // Поэтому каждую таблицу, в которую бот и сайт ПИШУТ, проверяем записью.
+  const PROBE = -999999;
+  const writeProbes: [string, Record<string, unknown>, Record<string, unknown>][] = [
+    ['bot_sessions', { telegram_id: PROBE, state: 'probe' }, { telegram_id: PROBE }],
+    ['program_votes', { event_id: '__probe__', telegram_id: PROBE, option: 'p' }, { telegram_id: PROBE }],
+    ['interests', { event_id: '__probe__', telegram_id: PROBE }, { telegram_id: PROBE }],
+    ['feedback', { event_id: '__probe__', telegram_id: PROBE, rating: 5 }, { telegram_id: PROBE }],
+    ['admin_presence', { id: '__probe__', name: 'probe' }, { id: '__probe__' }],
+  ];
+
+  for (const [table, row, key] of writeProbes) {
+    // program_votes/interests/feedback ссылаются на events(id) — сначала нужен якорь.
+    const needsEvent = 'event_id' in row;
+    if (needsEvent) await supabase.from('events').upsert({ id: '__probe__', title: 'probe', date: '2000-01-01', location: 'probe' });
+
+    const { error } = await supabase.from(table).insert(row);
+    out[`${table}:WRITE`] = error ? `НЕ ПИШЕТСЯ: ${error.message}` : 'ok';
+    if (!error) await supabase.from(table).delete().match(key);
+    if (needsEvent) await supabase.from('events').delete().eq('id', '__probe__');
   }
 
   const broken = Object.entries(out).filter(([, v]) => v !== 'ok' && !v.startsWith('ok'));
