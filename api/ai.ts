@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { isAdmin, deny } from './_lib/auth';
 
 /**
  * ИИ-помощник организатора (Google Gemini). Генерирует под контекст события:
@@ -9,10 +10,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
 
-function checkAdminAuth(req: any): boolean {
-  const token = String(req.headers.authorization || '').replace('Bearer ', '');
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
-}
+
 
 /**
  * Какие модели реально доступны этому ключу. Захардкоженный список угадывать
@@ -127,7 +125,7 @@ const TYPE_RU: Record<string, string> = {
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
-  if (!checkAdminAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
+  if (!isAdmin(req)) return deny(res);
   if (!API_KEY) return res.status(200).json({ error: 'GEMINI_API_KEY не задан в env' });
 
   try {

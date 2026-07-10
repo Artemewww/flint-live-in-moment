@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
+import { isAdmin } from './_lib/auth';
 
 /**
  * Публичный роутер событий. Лимит Vercel Hobby — 12 функций, поэтому мелкие
@@ -20,10 +21,7 @@ const supabase = createClient(
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 
-function checkAdminAuth(req: any): boolean {
-  const token = String(req.headers.authorization || '').replace('Bearer ', '');
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
-}
+
 
 /** Подпись Telegram WebApp initData → достоверный telegram_id. */
 function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
@@ -258,7 +256,7 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === 'GET') {
     if (req.query?.action === 'health') {
-      if (!checkAdminAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
+      if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
       return await handleHealth(res);
     }
     try {
@@ -289,7 +287,7 @@ export default async function handler(req: any, res: any) {
       if (action === 'feedback') return await handleFeedback(body, res);
 
       // Запись события — только для админа. Раньше эндпоинт был открыт всем.
-      if (!checkAdminAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
+      if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
 
       const eventData = {
         id: body.id,

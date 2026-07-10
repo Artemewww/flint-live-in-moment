@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { isAdmin } from '../_lib/auth';
 
 /**
  * Ежедневный крон (Vercel Cron, см. vercel.json).
@@ -20,7 +21,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 function authorized(req: any): boolean {
   const token = String(req.headers.authorization || '').replace('Bearer ', '');
   if (process.env.CRON_SECRET && token === process.env.CRON_SECRET) return true;
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
+  return isAdmin(req);
 }
 
 function esc(s: any): string {

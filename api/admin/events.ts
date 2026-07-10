@@ -1,16 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
+import { isAdmin, deny, passwordMatches, sessionCookie, clearCookie } from '../_lib/auth';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
-
-// Middleware для проверки админского токена
-function checkAdminAuth(req: any): boolean {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace('Bearer ', '');
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
-}
 
 // Маппинг snake_case -> camelCase для фронтенда
 function mapEventToCamelCase(event: any) {
@@ -61,10 +55,22 @@ function mapEventToCamelCase(event: any) {
 }
 
 export default async function handler(req: any, res: any) {
-  // Проверяем авторизацию
-  if (!checkAdminAuth(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  // Вход/выход админки. Пароль сверяется на сервере и обменивается на
+  // подписанную httpOnly-куку — в браузер секрет не попадает.
+  if (req.method === 'POST' && req.query?.action === 'login') {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    if (!passwordMatches(body.password)) {
+      return res.status(401).json({ error: 'Неверный пароль' });
+    }
+    res.setHeader('Set-Cookie', sessionCookie());
+    return res.status(200).json({ ok: true });
   }
+  if (req.method === 'POST' && req.query?.action === 'logout') {
+    res.setHeader('Set-Cookie', clearCookie());
+    return res.status(200).json({ ok: true });
+  }
+
+  if (!isAdmin(req)) return deny(res);
 
   if (req.method === 'GET') {
     /**
