@@ -70,6 +70,10 @@ export default async function handler(req: any, res: any) {
     /**
      * Пульс присутствия: вкладка админки раз в ~20 сек отмечается и получает
      * список тех, кто онлайн. Онлайн = отметился за последние 60 сек.
+     *
+     * Живёт в bot_sessions, а не в отдельной таблице: это тоже эфемерная
+     * сессия, а лишний DDL на прод-базе не нужен. Ключ — отрицательный хеш
+     * id вкладки; настоящие telegram_id бота положительные, так что не пересечёмся.
      */
     if (req.query?.action === 'presence') {
       try {
@@ -77,19 +81,31 @@ export default async function handler(req: any, res: any) {
         const name = String(req.query.name || 'Админ').slice(0, 40);
         if (!id) return res.status(400).json({ error: 'Missing id' });
 
-        await supabase.from('admin_presence').upsert(
-          { id, name, last_seen: new Date().toISOString() },
-          { onConflict: 'id' }
+        let h = 0;
+        for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+        const key = -Math.abs(h) - 1;
+
+        await supabase.from('bot_sessions').upsert(
+          { telegram_id: key, state: 'admin_presence', context: { name }, updated_at: new Date().toISOString() },
+          { onConflict: 'telegram_id' }
         );
 
         const cutoff = new Date(Date.now() - 60_000).toISOString();
         const { data: online } = await supabase
-          .from('admin_presence').select('id,name').gte('last_seen', cutoff);
+          .from('bot_sessions')
+          .select('telegram_id,context')
+          .eq('state', 'admin_presence')
+          .gte('updated_at', cutoff);
 
-        // Подчищаем протухшие записи, чтобы таблица не росла бесконечно.
-        await supabase.from('admin_presence').delete().lt('last_seen', new Date(Date.now() - 3600_000).toISOString());
+        // Подчищаем протухшие отметки, чтобы таблица не росла.
+        await supabase
+          .from('bot_sessions')
+          .delete()
+          .eq('state', 'admin_presence')
+          .lt('updated_at', new Date(Date.now() - 3600_000).toISOString());
 
-        return res.status(200).json({ online: (online || []).length, users: online || [] });
+        const users = (online || []).map((r: any) => ({ id: String(r.telegram_id), name: r.context?.name || 'Админ' }));
+        return res.status(200).json({ online: users.length, users });
       } catch (error) {
         return res.status(200).json({ online: 1, users: [], error: (error as Error).message });
       }

@@ -233,7 +233,6 @@ async function handleHealth(res: any) {
     ['program_votes', { event_id: '__probe__', telegram_id: PROBE, option: 'p' }, { telegram_id: PROBE }],
     ['interests', { event_id: '__probe__', telegram_id: PROBE }, { telegram_id: PROBE }],
     ['feedback', { event_id: '__probe__', telegram_id: PROBE, rating: 5 }, { telegram_id: PROBE }],
-    ['admin_presence', { id: '__probe__', name: 'probe' }, { id: '__probe__' }],
   ];
 
   for (const [table, row, key] of writeProbes) {
