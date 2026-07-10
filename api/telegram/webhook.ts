@@ -713,6 +713,26 @@ export default async function handler(req: any, res: any) {
           ]),
         });
       };
+      // Правила события перед записью — человек должен ознакомиться и принять.
+      const askRules = async (ev: any) => {
+        const lines = ['📜 <b>Правила события</b>', ''];
+        if (ev.entry_threshold) lines.push(`🎫 <b>Порог входа:</b>\n${esc(ev.entry_threshold)}`, '');
+        lines.push(
+          '<b>Кодекс участника:</b>',
+          '• 100% трезвость на встрече',
+          '• уважение к другим и к месту',
+          '• записался — предупреди заранее, если не сможешь',
+          '• помогаем друг другу, а не потребляем',
+          '',
+          'Записываясь, ты соглашаешься с этим.',
+        );
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: lines.join('\n'),
+          reply_markup: kb([[{ text: '✅ Принимаю правила, записаться', callback_data: `rules_${ev.id}` }]]),
+        });
+      };
+
       const beginReg = async (ev: any) => {
         const r = await registerFromBot(cq.from, ev);
         if (r === 'error') { await tg('sendMessage', { chat_id: chatId, text: 'Ошибка записи, попробуйте позже.' }); return; }
@@ -762,17 +782,27 @@ export default async function handler(req: any, res: any) {
           });
           return res.status(200).json({ ok: true });
         }
-        await beginReg(ev);
+        await askRules(ev);
         return res.status(200).json({ ok: true });
       }
 
-      // Согласие ПД дано → регистрируем.
+      // Согласие ПД дано → показываем правила события.
       if (data.startsWith('pd_')) {
         const ev = await getEvent(data.slice(3));
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо!' });
         if (!ev) return res.status(200).json({ ok: true });
         await supabase.from('members').update({ agreed_pd: true }).eq('telegram_id', tgId);
-        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ Согласие получено. Продолжаем запись 👇' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ Согласие получено.' });
+        await askRules(ev);
+        return res.status(200).json({ ok: true });
+      }
+
+      // Правила приняты → регистрируем.
+      if (data.startsWith('rules_')) {
+        const ev = await getEvent(data.slice('rules_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (!ev) return res.status(200).json({ ok: true });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ Правила приняты. Продолжаем запись 👇' });
         await beginReg(ev);
         return res.status(200).json({ ok: true });
       }
