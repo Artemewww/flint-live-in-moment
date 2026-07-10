@@ -318,6 +318,81 @@ function buildStats(regs: any[], extra: Record<string, any> = {}) {
   };
 }
 
+/** Поле модалки ввода. Нативные пикеры даты/времени вместо системного prompt. */
+interface InputField {
+  key: string;
+  label: string;
+  type: 'text' | 'date' | 'time' | 'textarea' | 'select' | 'checkbox';
+  value?: string;
+  placeholder?: string;
+  required?: boolean;
+  options?: { value: string; label: string }[];
+  hint?: string;
+}
+interface InputModalSpec {
+  title: string;
+  fields: InputField[];
+  submitLabel?: string;
+  onSubmit: (values: Record<string, string>) => void;
+}
+
+/** Аккуратная модалка ввода: даты через нативный date-picker, а не белый prompt. */
+function InputModal({ spec, onClose }: { spec: InputModalSpec; onClose: () => void }) {
+  const [vals, setVals] = useState<Record<string, string>>(() => {
+    const init: Record<string, string> = {};
+    for (const f of spec.fields) init[f.key] = f.value ?? (f.type === 'checkbox' ? '' : '');
+    return init;
+  });
+  const [err, setErr] = useState('');
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-brand/40';
+
+  const submit = () => {
+    for (const f of spec.fields) {
+      if (f.required && f.type !== 'checkbox' && !vals[f.key]?.trim()) { setErr(`Заполни: ${f.label}`); return; }
+    }
+    spec.onSubmit(vals);
+    onClose();
+  };
+
+  return (
+    <div className="fixed inset-0 z-[90] flex items-end md:items-center justify-center md:p-4">
+      <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={onClose} />
+      <motion.div
+        initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }}
+        className="bg-[#161616] md:rounded-3xl rounded-t-3xl w-full max-w-md relative z-10 border border-white/10 p-5 space-y-4 text-white"
+      >
+        <h3 className="font-display font-black text-lg uppercase">{spec.title}</h3>
+        {spec.fields.map((f) => (
+          <div key={f.key} className="space-y-1">
+            {f.type !== 'checkbox' && <label className="text-[10px] text-white/40 uppercase font-mono block">{f.label}</label>}
+            {f.type === 'textarea' ? (
+              <textarea value={vals[f.key]} placeholder={f.placeholder} rows={3} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} className={inp} />
+            ) : f.type === 'select' ? (
+              <select value={vals[f.key]} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} className={inp}>
+                <option value="">— выбери —</option>
+                {(f.options || []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            ) : f.type === 'checkbox' ? (
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input type="checkbox" checked={vals[f.key] === '1'} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.checked ? '1' : '' }))} className="w-4 h-4 accent-brand" />
+                <span className="text-sm text-white/80">{f.label}</span>
+              </label>
+            ) : (
+              <input type={f.type} value={vals[f.key]} placeholder={f.placeholder} onChange={(e) => setVals((v) => ({ ...v, [f.key]: e.target.value }))} className={inp} />
+            )}
+            {f.hint && <p className="text-[10px] text-white/30">{f.hint}</p>}
+          </div>
+        ))}
+        {err && <p className="text-[11px] text-rose-400">{err}</p>}
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 bg-white/5 hover:bg-white/10 text-white/70 py-3 rounded-xl text-xs font-bold uppercase cursor-pointer border-none">Отмена</button>
+          <button onClick={submit} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase cursor-pointer border-none">{spec.submitLabel || 'Готово'}</button>
+        </div>
+      </motion.div>
+    </div>
+  );
+}
+
 /** Средняя оценка по отзывам, одна цифра после запятой. */
 function avgRating(feedback: any[]): string {
   if (!feedback.length) return '—';
@@ -438,6 +513,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [partFilter, setPartFilter] = useState<'all' | 'confirmed' | 'pending' | 'paid'>('all');
   /** Какая панель раскрыта во вкладке «Логистика». */
   const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | null>(null);
+  /** Модалка ввода вместо системных window.prompt (даты, причины, объявления). */
+  const [inputModal, setInputModal] = useState<InputModalSpec | null>(null);
   /** Аудитория клуба (все участники, не по событию). */
   const [showAudience, setShowAudience] = useState(false);
   const [audience, setAudience] = useState<any>(null);
@@ -1671,12 +1748,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           Завершить
                         </button>
                         <button
-                          onClick={async () => {
-                            const reason = window.prompt('Причина отмены? Она уйдёт участникам в Telegram.');
-                            if (!reason) return;
-                            await patchEvent({ status: 'closed', statusReason: reason });
-                            await sendMessageToAll(`❌ <b>${selectedEvent.title}</b> отменяется.\n\n${reason}`);
-                          }}
+                          onClick={() => setInputModal({
+                            title: 'Отменить событие',
+                            submitLabel: 'Отменить и уведомить',
+                            fields: [{ key: 'reason', label: 'Причина отмены', type: 'textarea', required: true, hint: 'Уйдёт всем участникам в Telegram' }],
+                            onSubmit: async (v) => {
+                              await patchEvent({ status: 'closed', statusReason: v.reason });
+                              await sendMessageToAll(`❌ <b>${selectedEvent.title}</b> отменяется.\n\n${v.reason}`);
+                            },
+                          })}
                           className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
                           title="Отменить и уведомить участников"
                         >
@@ -1698,15 +1778,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       )}
 
                       <button
-                        onClick={async () => {
-                          if (selectedEvent.statusReason) {
-                            await patchEvent({ statusReason: null, decisionDeadline: null });
-                            return;
-                          }
-                          const reason = window.prompt('Почему событие под вопросом? (напр. «нужно ещё 4 человека»)');
-                          if (!reason) return;
-                          const deadline = window.prompt('Дедлайн решения (YYYY-MM-DD), можно пропустить:') || null;
-                          await patchEvent({ statusReason: reason, decisionDeadline: deadline });
+                        onClick={() => {
+                          if (selectedEvent.statusReason) { patchEvent({ statusReason: null, decisionDeadline: null }); return; }
+                          setInputModal({
+                            title: 'Событие под вопросом',
+                            submitLabel: 'Пометить',
+                            fields: [
+                              { key: 'reason', label: 'Причина', type: 'text', required: true, placeholder: 'напр. нужно ещё 4 человека' },
+                              { key: 'deadline', label: 'Дедлайн решения', type: 'date', value: selectedEvent.decisionDeadline || '', hint: 'необязательно' },
+                            ],
+                            onSubmit: (v) => patchEvent({ statusReason: v.reason, decisionDeadline: v.deadline || null }),
+                          });
                         }}
                         className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
                       >
@@ -1715,18 +1797,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </button>
 
                       <button
-                        onClick={async () => {
-                          const date = window.prompt('Новая дата начала (YYYY-MM-DD):', selectedEvent.date);
-                          if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-                            if (date) setActionMsg({ ok: false, text: 'Формат даты: YYYY-MM-DD' });
-                            return;
-                          }
-                          const dateEnd = window.prompt('Дата окончания (YYYY-MM-DD), пусто = однодневное:', selectedEvent.dateEnd || '') || null;
-                          const dateLabel = buildDateLabel(date, dateEnd || '', selectedEvent.time || '');
-                          await patchEvent({ date, dateEnd, dateLabel });
-                          if (window.confirm('Уведомить участников о переносе?')) {
-                            await sendMessageToAll(`📅 <b>${selectedEvent.title}</b> переносится.\n\nНовые даты: ${dateLabel}\n\nЕсли планы поменялись — напиши сюда.`);
-                          }
+                        onClick={() => {
+                          setInputModal({
+                            title: 'Перенести даты',
+                            submitLabel: 'Перенести',
+                            fields: [
+                              { key: 'date', label: 'Новая дата начала', type: 'date', value: selectedEvent.date, required: true },
+                              { key: 'time', label: 'Время начала', type: 'time', value: selectedEvent.time || '' },
+                              { key: 'dateEnd', label: 'Дата окончания', type: 'date', value: selectedEvent.dateEnd || '', hint: 'пусто = однодневное' },
+                              { key: 'notify', label: 'Уведомить участников о переносе', type: 'checkbox', value: '1' },
+                            ],
+                            onSubmit: async (v) => {
+                              const dateLabel = buildDateLabel(v.date, v.dateEnd || '', v.time || '');
+                              await patchEvent({ date: v.date, dateEnd: v.dateEnd || null, time: v.time || null, dateLabel });
+                              if (v.notify === '1') await sendMessageToAll(`📅 <b>${selectedEvent.title}</b> переносится.\n\nНовые даты: ${dateLabel}\n\nЕсли планы поменялись — напиши сюда.`);
+                            },
+                          });
                         }}
                         className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
                       >
@@ -1767,11 +1853,16 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         onClick={() => {
                           const candidates = (eventStats?.registrations || []).filter((r: any) => Number(r.telegramId) > 0);
                           if (!candidates.length) { setActionMsg({ ok: false, text: 'Нет участников с Telegram-id' }); return; }
-                          const list = candidates.map((r: any, i: number) => `${i + 1}. ${r.name} (${r.telegramId})`).join('\n');
-                          const pick = window.prompt(`Кого назначить заместителем?\n\n${list}\n\nВведи номер:`);
-                          const idx = Number(pick) - 1;
-                          if (!(idx >= 0 && idx < candidates.length)) return;
-                          patchEvent({ deputyId: Number(candidates[idx].telegramId) });
+                          setInputModal({
+                            title: 'Заместитель на событие',
+                            submitLabel: 'Назначить',
+                            fields: [{
+                              key: 'deputy', label: 'Кто помогает вести событие', type: 'select', required: true,
+                              value: selectedEvent.deputyId ? String(selectedEvent.deputyId) : '',
+                              options: candidates.map((r: any) => ({ value: String(r.telegramId), label: `${r.name}${r.telegram ? ` @${r.telegram}` : ''}` })),
+                            }],
+                            onSubmit: (v) => patchEvent({ deputyId: Number(v.deputy) }),
+                          });
                         }}
                         className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
                       >
@@ -1784,11 +1875,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       <h4 className="text-xs font-bold uppercase mb-1">Участники</h4>
 
                       <button
-                        onClick={async () => {
-                          const text = window.prompt('Текст объявления — уйдёт всем участникам в Telegram:');
-                          if (!text?.trim()) return;
-                          await sendMessageToAll(`📢 <b>${selectedEvent.title}</b>\n\n${text.trim()}`);
-                        }}
+                        onClick={() => setInputModal({
+                          title: 'Объявление всем участникам',
+                          submitLabel: 'Разослать',
+                          fields: [{ key: 'text', label: 'Текст — уйдёт в Telegram', type: 'textarea', required: true, placeholder: 'Важное про событие…' }],
+                          onSubmit: (v) => sendMessageToAll(`📢 <b>${selectedEvent.title}</b>\n\n${v.text.trim()}`),
+                        })}
                         disabled={broadcasting === selectedEvent.id}
                         className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none disabled:opacity-50"
                       >
@@ -1807,6 +1899,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           </div>
         </div>
       </motion.div>
+
+      {/* Модалка ввода (даты/причины/объявления) вместо системного prompt */}
+      <AnimatePresence>
+        {inputModal && <InputModal spec={inputModal} onClose={() => setInputModal(null)} />}
+      </AnimatePresence>
 
       {/* Аудитория клуба — все участники, кто активен, кто кого привёл */}
       <AnimatePresence>
