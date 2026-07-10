@@ -18,7 +18,7 @@ function extractRefCode(raw: string): string {
   return s.replace(/^ref_/, '');
 }
 
-export default function GateScreen({ onPass }: { onPass: () => void }) {
+export default function GateScreen({ onPass, onAdmin }: { onPass: () => void; onAdmin?: () => void }) {
   const [input, setInput] = useState('');
   const [checking, setChecking] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -130,6 +130,17 @@ export default function GateScreen({ onPass }: { onPass: () => void }) {
         >
           Нет приглашения? Написать в бот →
         </a>
+
+        {/* Организатору шлюз не должен мешать войти в панель. */}
+        {onAdmin && (
+          <button
+            type="button"
+            onClick={onAdmin}
+            className="block mx-auto mt-3 text-[11px] text-white/30 hover:text-white/70 transition-colors font-mono bg-transparent border-none cursor-pointer"
+          >
+            Я организатор — вход в админку
+          </button>
+        )}
       </motion.div>
     </div>
   );

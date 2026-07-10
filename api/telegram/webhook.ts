@@ -258,6 +258,66 @@ async function isCore(tgId: number): Promise<boolean> {
   return !!m && m.is_core === true;
 }
 
+/** Шаг «откуда узнал». Если человек пришёл по ссылке — реферер уже известен. */
+async function askApplySource(tgId: number, chatId: number, context: any) {
+  await setSession(tgId, 'apply_source', context);
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: '🤝 Последний вопрос: <b>кто тебя пригласил или откуда ты о нас узнал?</b>\n\nНапиши имя или @ник участника — костяку важно понимать, кто за тебя ручается.',
+    reply_markup: { remove_keyboard: true },
+  });
+}
+
+/**
+ * Заявка уходит костяку с полной карточкой: имя, телефон, ник, кто пригласил.
+ * Раньше приходил только ник — принимать вслепую было нельзя.
+ */
+async function finishApplication(from: any, chatId: number, context: any) {
+  const tgId = from.id;
+  await clearSession(tgId);
+
+  await supabase.from('members').update({
+    status: 'pending_review',
+    first_name: context.name || from.first_name || null,
+    phone: context.phone || null,
+    agreed_pd: true,
+  }).eq('telegram_id', tgId);
+
+  // Кто пригласил — если пришёл по реф-ссылке, знаем точно.
+  const { data: me } = await supabase.from('members').select('referred_by').eq('telegram_id', tgId).maybeSingle();
+  let inviter = '';
+  if ((me as any)?.referred_by) {
+    const { data: inv } = await supabase.from('members').select('first_name,username').eq('telegram_id', (me as any).referred_by).maybeSingle();
+    inviter = inv ? `${(inv as any).first_name || ''} ${(inv as any).username ? '@' + (inv as any).username : ''}` : String((me as any).referred_by);
+  }
+
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text:
+      '✅ <b>Заявка отправлена</b>\n\n' +
+      `Имя: ${esc(context.name || '')}\nТелефон: ${esc(context.phone || '')}\n\n` +
+      'Костяк клуба рассмотрит её вручную — обычно в течение дня. Ответ придёт сюда.',
+    reply_markup: { remove_keyboard: true },
+  });
+
+  if (ADMIN_CHAT_ID) {
+    await tg('sendMessage', {
+      chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+      text:
+        `🚪 <b>Заявка в клуб</b>\n\n` +
+        `👤 ${esc(context.name || from.first_name || '')}\n` +
+        `📞 <code>${esc(context.phone || '—')}</code>\n` +
+        `✈️ ${from.username ? '@' + esc(from.username) : 'ника нет'} (id ${tgId})\n` +
+        (inviter ? `🔗 Пригласил: ${esc(inviter)}\n` : '') +
+        `💬 Откуда: ${esc(context.source || '—')}`,
+      reply_markup: kb([[
+        { text: '✅ Принять', callback_data: `approve_${tgId}` },
+        { text: '❌ Отклонить', callback_data: `reject_${tgId}` },
+      ]]),
+    });
+  }
+}
+
 /**
  * Профиль: баллы, приглашённые, посещённые события, реф-ссылка.
  * Раньше ссылку можно было только выделить пальцем — теперь есть кнопка
@@ -321,13 +381,23 @@ async function clearSession(tgId: number) {
 }
 
 // --- Машины (участник-driven логистика) ---
-function rideLine(r: any): string {
+/** Карточка машины. Название события обязательно: у человека их может быть несколько. */
+function rideLine(r: any, eventTitle?: string): string {
   const taken = r.seats_taken || 0;
   const free = Math.max(0, (r.seats_total || 0) - taken);
   const fuel = r.fuel_cost ? `⛽ ${r.fuel_cost} ₽/чел` : '⛽ бесплатно';
-  return `🚗 <b>${esc(r.driver_name || 'Водитель')}</b>\n` +
-    `📍 ${esc(r.from_point || '—')}  🕐 ${esc(r.depart_text || '—')}\n` +
-    `Мест свободно: ${free}/${r.seats_total || 0}  ${fuel}`;
+  return (eventTitle ? `📅 <b>${esc(eventTitle)}</b>\n\n` : '') +
+    `🚗 <b>${esc(r.driver_name || 'Водитель')}</b>\n` +
+    `📍 Выезд: ${esc(r.from_point || '—')}\n` +
+    `🕐 Когда: ${esc(r.depart_text || '—')}\n` +
+    `💺 Свободно ${free} из ${r.seats_total || 0}   ${fuel}`;
+}
+
+/** Маршрут до точки выезда водителя — открывается в картах телефона. */
+function pointRouteUrl(fromPoint: string): string | null {
+  const p = String(fromPoint || '').trim();
+  if (!p) return null;
+  return `https://yandex.ru/maps/?rtext=~${encodeURIComponent(p)}&rtt=auto`;
 }
 
 // --- Организация: чек-листы снаряжения и ролей (мультивыбор, stateless по registration) ---
@@ -403,6 +473,22 @@ export default async function handler(req: any, res: any) {
       const msgId = cq.message?.message_id;
       const tgId = cq.from.id;
 
+      /**
+       * Клубный заслон на ВСЕ действия. Раньше стоял только на `reg_`, поэтому
+       * непринятый человек мог открыть событие, занять место в машине и увидеть
+       * логистику. Пропускаем лишь вступление, поддержку и модерацию костяка.
+       */
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|support|approve_|reject_|payok_|payno_)/;
+      if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🔒 Это доступно участникам клуба.\n\nЕсли у тебя есть ссылка-приглашение — открой её. Если нет — подай заявку, костяк рассмотрит.',
+          reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }], [{ text: '💬 Поддержка', callback_data: 'support' }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       const payRow = (ev: any) => (ev?.price_type === 'paid' ? [{ text: '💳 Оплатить участие', callback_data: `pay_${ev.id}` }] : null);
       const finalKb = (ev: any) => {
         const rows: any[] = [];
@@ -462,24 +548,40 @@ export default async function handler(req: any, res: any) {
         });
       };
 
-      // Согласие ПД + подача заявки в клуб.
-      if (data === 'verify_consent') {
-        await supabase.from('members').update({ agreed_pd: true, status: 'pending_review' }).eq('telegram_id', tgId);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Заявка отправлена!' });
+      // Заявка в клуб, шаг 1: согласие на обработку персональных данных.
+      if (data === 'verify_start' || data === 'verify_consent') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: '✅ Заявка отправлена костяку клуба. Как только одобрят — открою доступ к событиям и пришлю сюда.',
+          text:
+            '📋 <b>Шаг 1 из 3 — согласие на обработку данных</b>\n\n' +
+            'Нам нужны имя, телефон и предпочтения, чтобы собрать логистику и закупку. ' +
+            'Данные видит только костяк клуба, третьим лицам не передаём (законодательство РБ).',
+          reply_markup: kb([[{ text: '✅ Согласен, продолжить', callback_data: 'verify_pd' }]]),
         });
-        if (ADMIN_CHAT_ID) {
-          await tg('sendMessage', {
-            chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
-            text: `🚪 <b>Заявка в клуб</b>\n${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''} (id ${tgId})`,
-            reply_markup: kb([[
-              { text: '✅ Принять', callback_data: `approve_${tgId}` },
-              { text: '❌ Отклонить', callback_data: `reject_${tgId}` },
-            ]]),
-          });
-        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Шаг 2: как зовут.
+      if (data === 'verify_pd') {
+        await supabase.from('members').update({ agreed_pd: true }).eq('telegram_id', tgId);
+        await setSession(tgId, 'apply_name', {});
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: '👤 <b>Шаг 2 из 3 — знакомство</b>\n\nКак тебя зовут? Напиши имя и фамилию — костяк должен понимать, кого принимает.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Поддержка — доступна и до вступления в клуб.
+      if (data === 'support') {
+        await setSession(tgId, 'support_text', {});
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -498,8 +600,25 @@ export default async function handler(req: any, res: any) {
           text: `${approve ? '✅ Принят в клуб' : '❌ Отклонён'} (id ${targetId}) — решил ${esc(cq.from.first_name || 'костяк')}`,
         });
         try {
-          if (approve) await tg('sendMessage', { chat_id: targetId, parse_mode: 'HTML', text: '🎉 Добро пожаловать в клуб! Двери открыты. Нажми /start — покажу события.', reply_markup: kb([[openBtn]]) });
-          else await tg('sendMessage', { chat_id: targetId, text: 'К сожалению, заявка в клуб отклонена.' });
+          if (approve) {
+            // Сразу показываем события: «нажми /start» — лишний шаг и потеря человека.
+            const { data: evs } = await supabase
+              .from('events').select('id,title,date').eq('status', 'open').order('date', { ascending: true }).limit(6);
+            const rows = (evs || []).map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
+            rows.push([openBtn as any]);
+            await tg('sendMessage', {
+              chat_id: targetId, parse_mode: 'HTML',
+              text: '🎉 <b>Тебя приняли в клуб!</b>\n\nТеперь доступны все события: выбирай и записывайся в пару кликов.\nМеню всегда снизу.',
+              reply_markup: rows.length > 1 ? kb(rows) : kb([[openBtn]]),
+            });
+            await tg('sendMessage', { chat_id: targetId, text: 'Меню 👇', reply_markup: mainMenu() });
+          } else {
+            await tg('sendMessage', {
+              chat_id: targetId, parse_mode: 'HTML',
+              text: '🚪 К сожалению, заявка в клуб отклонена.\n\nЕсли считаешь это ошибкой — напиши нам.',
+              reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+            });
+          }
         } catch { /* пользователь мог не начинать чат */ }
         return res.status(200).json({ ok: true });
       }
@@ -994,6 +1113,7 @@ export default async function handler(req: any, res: any) {
           .in('ride_id', rides.map((r: any) => r.id))
           .eq('passenger_id', tgId);
         const booked = new Set((myBookings || []).map((b: any) => b.ride_id));
+        const evForRides = await getEvent(evId);
         for (const r of rides) {
           const taken = (r as any).seats_taken || 0;
           const free = Math.max(0, ((r as any).seats_total || 0) - taken);
@@ -1002,7 +1122,14 @@ export default async function handler(req: any, res: any) {
           if (mine) rows.push([{ text: '❌ Отменить мою поездку', callback_data: `ridecancel_${(r as any).id}` }]);
           else if (booked.has((r as any).id)) rows.push([{ text: '❌ Освободить моё место', callback_data: `rideunbook_${(r as any).id}` }]);
           else if (free > 0) rows.push([{ text: `✅ Занять место (${free} своб.)`, callback_data: `ridebook_${(r as any).id}` }]);
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: rideLine(r), reply_markup: rows.length ? kb(rows) : undefined });
+          // Маршрут до точки выезда водителя, а не до самого события.
+          const route = pointRouteUrl((r as any).from_point);
+          if (route) rows.push([{ text: '🧭 Маршрут до точки выезда', url: route }]);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: rideLine(r, evForRides?.title),
+            reply_markup: rows.length ? kb(rows) : undefined,
+          });
         }
         return res.status(200).json({ ok: true });
       }
@@ -1026,12 +1153,34 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место забронировано ✅' });
+
+        // Контакты в обе стороны: Telegram у человека может быть закрыт настройками,
+        // и тогда без телефона попутчики друг друга не найдут.
+        const { data: driverInfo } = await supabase.from('members').select('phone,username,first_name').eq('telegram_id', (ride as any).driver_id).maybeSingle();
+        const { data: paxInfo } = await supabase.from('members').select('phone').eq('telegram_id', tgId).maybeSingle();
+        const route = pointRouteUrl((ride as any).from_point);
+        const rows: any[] = [[{ text: '❌ Освободить место', callback_data: `rideunbook_${rideId}` }]];
+        if (route) rows.unshift([{ text: '🧭 Маршрут до точки выезда', url: route }]);
+
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ Ты занял место у ${esc((ride as any).driver_name || 'водителя')}.\n📍 ${esc((ride as any).from_point)}  🕐 ${esc((ride as any).depart_text)}\nВодитель свяжется по деталям.`,
-          reply_markup: kb([[{ text: '❌ Освободить место', callback_data: `rideunbook_${rideId}` }]]),
+          text:
+            `✅ <b>Место твоё</b>\n\n` +
+            `🚗 Водитель: ${esc((ride as any).driver_name || '')}` +
+            ((driverInfo as any)?.username ? ` @${esc((driverInfo as any).username)}` : '') + '\n' +
+            ((driverInfo as any)?.phone ? `📞 <code>${esc((driverInfo as any).phone)}</code>\n` : '') +
+            `📍 Выезд: ${esc((ride as any).from_point)}\n🕐 Когда: ${esc((ride as any).depart_text)}`,
+          reply_markup: kb(rows),
         });
-        try { await tg('sendMessage', { chat_id: (ride as any).driver_id, parse_mode: 'HTML', text: `🧍 К тебе в машину сел ${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''}. Свяжись по сбору.` }); } catch { /* no-op */ }
+        try {
+          await tg('sendMessage', {
+            chat_id: (ride as any).driver_id, parse_mode: 'HTML',
+            text: `🧍 <b>К тебе в машину сел ${esc(cq.from.first_name || '')}</b>` +
+              (cq.from.username ? ` @${esc(cq.from.username)}` : '') + '\n' +
+              ((paxInfo as any)?.phone ? `📞 <code>${esc((paxInfo as any).phone)}</code>\n` : '') +
+              `\nСобытие: ${esc((await getEvent((ride as any).event_id))?.title || '')}`,
+          });
+        } catch { /* no-op */ }
         return res.status(200).json({ ok: true });
       }
 
@@ -1086,6 +1235,19 @@ export default async function handler(req: any, res: any) {
     }
 
     const msg = update.message || update.edited_message;
+
+    // Телефон, присланный кнопкой «Отправить мой номер» — это не текст.
+    if (msg?.contact && msg.from?.id) {
+      const sess = await getSession(msg.from.id);
+      if (sess?.state === 'apply_phone') {
+        await askApplySource(msg.from.id, msg.chat.id, { ...sess.context, phone: msg.contact.phone_number });
+        return res.status(200).json({ ok: true });
+      }
+      // Контакт вне сценария — просто сохраняем телефон.
+      await supabase.from('members').update({ phone: msg.contact.phone_number }).eq('telegram_id', msg.from.id);
+      await tg('sendMessage', { chat_id: msg.chat.id, text: '✅ Телефон сохранён.', reply_markup: mainMenu() });
+      return res.status(200).json({ ok: true });
+    }
     if (msg && typeof msg.text === 'string') {
       const chatId = msg.chat.id;
       const text = msg.text.trim();
@@ -1110,6 +1272,48 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, text: '🙏 Спасибо! Отзыв записан — организаторы его увидят.' });
           return res.status(200).json({ ok: true });
         }
+        // ── Заявка в клуб: имя → телефон → откуда пришёл ──────────────────
+        if (sess && sess.state === 'apply_name') {
+          const name = text.slice(0, 80);
+          await setSession(msg.from.id, 'apply_phone', { ...sess.context, name });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `Приятно, <b>${esc(name)}</b>!\n\n📞 <b>Шаг 3 из 3 — контакт</b>\n\nОставь телефон: Telegram может быть закрыт настройками, и до тебя не дозвонятся по логистике.`,
+            reply_markup: {
+              keyboard: [[{ text: '📞 Отправить мой номер', request_contact: true }]],
+              resize_keyboard: true, one_time_keyboard: true,
+            },
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'apply_phone') {
+          // Разрешаем и ручной ввод, если человек не хочет делиться контактом кнопкой.
+          const phone = text.replace(/[^\d+]/g, '').slice(0, 20);
+          if (phone.length < 7) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Не похоже на телефон. Напиши в формате +375XXXXXXXXX или нажми кнопку ниже.' });
+            return res.status(200).json({ ok: true });
+          }
+          await askApplySource(msg.from.id, chatId, { ...sess.context, phone });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'apply_source') {
+          await finishApplication(msg.from, chatId, { ...sess.context, source: text.slice(0, 200) });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Обращение в поддержку.
+        if (sess && sess.state === 'support_text') {
+          await clearSession(msg.from.id);
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', {
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `💬 <b>Поддержка</b>\nОт: ${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : ''} (id ${msg.from.id})\n\n<i>${esc(text.slice(0, 1500))}</i>`,
+            });
+          }
+          await tg('sendMessage', { chat_id: chatId, text: '✅ Отправил организаторам. Ответят сюда.' });
+          return res.status(200).json({ ok: true });
+        }
+
         // Вопрос организатору / идея по улучшению.
         if (sess && (sess.state === 'ask_text' || sess.state === 'idea_text')) {
           const isAsk = sess.state === 'ask_text';
@@ -1158,7 +1362,7 @@ export default async function handler(req: any, res: any) {
               '5. После события бот попросит оценку — она влияет на следующие.\n\n' +
               'Вопрос по событию — кнопка «❓ Спросить» в его карточке.\n' +
               '/profile — баллы и твоя реф-ссылка.',
-            reply_markup: mainMenu(),
+            reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
           });
           return res.status(200).json({ ok: true });
         }
@@ -1182,13 +1386,19 @@ export default async function handler(req: any, res: any) {
       }
 
       if (text.startsWith('/start')) {
+        // /start всегда обрывает недоделанный диалог. Иначе человек, начавший
+        // заявку поездки и ушедший, потом получает «Когда выезжаешь?» на ровном месте.
+        await clearSession(msg.from.id);
+
         let payload = text.split(' ')[1] || '';
         // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
         let invitedIn = false;
+        let invitedBy = false;   // ссылка была, но пригласивший сам не в клубе
         if (payload.startsWith('ref_')) {
           const rest = payload.slice('ref_'.length);
           const sep = rest.indexOf('_ev_');
           const code = sep === -1 ? rest : rest.slice(0, sep);
+          invitedBy = true;
           try { invitedIn = await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
           payload = sep === -1 ? '' : `event_${rest.slice(sep + '_ev_'.length)}`;
           if (invitedIn) {
@@ -1199,22 +1409,47 @@ export default async function handler(req: any, res: any) {
           }
         }
 
-        // Закрытый клуб: незнакомец не видит события — сначала согласие ПД + заявка костяку.
+        // Закрытый клуб. Каждый экран должен говорить, что делать дальше —
+        // иначе человек упирается в «Доступ закрыт» и не понимает, куда жать.
         if (gateOn() && !(await isApproved(msg.from.id))) {
           await supabase.from('members').upsert(
             { telegram_id: msg.from.id, username: msg.from.username || null, first_name: msg.from.first_name || null },
             { onConflict: 'telegram_id' }
           );
           const m = await memberOf(msg.from.id);
+
           if (m?.status === 'pending_review') {
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⏳ Твоя заявка в клуб на рассмотрении у костяка. Как только одобрят — пришлю доступ сюда.' });
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '⏳ <b>Заявка на рассмотрении</b>\n\nКостяк клуба смотрит её вручную — обычно в течение дня.\nКак только одобрят, пришлю сюда события и открою запись.\n\nПока можно ничего не делать.',
+              reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+            });
           } else if (m?.status === 'blocked') {
-            await tg('sendMessage', { chat_id: chatId, text: 'Доступ в клуб закрыт.' });
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '🚪 <b>Доступ закрыт</b>\n\nТвоя заявка была отклонена. Если это ошибка — напиши нам, разберёмся.',
+              reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+            });
+          } else if (invitedBy) {
+            // Пришёл по ссылке, но пригласивший сам ещё не в клубе.
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '🔒 <b>«Живи в моменте» — закрытый клуб</b>\n\nСсылка, по которой ты пришёл, пока не действует: пригласивший сам ещё не принят.\n\nМожешь подать заявку — костяк рассмотрит.',
+              reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }]]),
+            });
           } else {
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
-              text: '🔒 <b>«Живи в моменте» — закрытый клуб.</b>\n\nДоступ к событиям — после короткой верификации. Подтверди согласие на обработку персональных данных (по законодательству РБ) и подай заявку — костяк клуба её рассмотрит.',
-              reply_markup: kb([[{ text: '✅ Согласен, подать заявку', callback_data: 'verify_consent' }]]),
+              text:
+                '🔒 <b>«Живи в моменте» — закрытый клуб</b>\n\n' +
+                'Сюда попадают по приглашению участника. Если тебе давали ссылку — открой её ещё раз, она впустит сразу.\n\n' +
+                'Ссылки нет? Подай заявку — костяк познакомится и решит.\n\n' +
+                '<b>Что будет дальше:</b>\n' +
+                '1️⃣ Согласие на обработку данных\n' +
+                '2️⃣ Как тебя зовут и телефон для связи\n' +
+                '3️⃣ Откуда ты о нас узнал\n' +
+                '4️⃣ Ответ костяка — придёт сюда',
+              reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }]]),
             });
           }
           return res.status(200).json({ ok: true });

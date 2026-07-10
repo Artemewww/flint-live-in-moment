@@ -307,8 +307,21 @@ export default function App() {
     }
   };
 
+  // Админ должен попадать в панель, не проходя шлюз для гостей.
+  if (gateEnabled && !gatePassed && showAdminPanel) {
+    return (
+      <AdminPanel
+        events={events}
+        onUpdateEvent={(e) => setEvents((prev) => prev.map((x) => (x.id === e.id ? e : x)))}
+        onAddEvent={(e) => setEvents((prev) => [...prev, e])}
+        onDeleteEvent={(id) => setEvents((prev) => prev.filter((x) => x.id !== id))}
+        onClose={() => setShowAdminPanel(false)}
+      />
+    );
+  }
+
   if (gateEnabled && !gatePassed) {
-    return <GateScreen onPass={() => setGatePassed(true)} />;
+    return <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />;
   }
 
   return (
