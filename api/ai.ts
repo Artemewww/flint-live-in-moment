@@ -59,26 +59,55 @@ function rankModels(available: string[]): string[] {
   return ranked;
 }
 
-/** Вызов Gemini с JSON-схемой. Пробует доступные модели по убыванию пригодности. */
+/**
+ * Вызов Gemini с JSON-схемой. Модели отваливаются по-разному, и лечится это
+ * тоже по-разному:
+ *   503 — модель временно перегружена, имеет смысл вернуться к ней позже;
+ *   404 — модель недоступна этому ключу, второй раз пробовать бессмысленно;
+ *   429 — выбрана квота, идём к следующей модели.
+ * Функция на Vercel Hobby живёт 10 секунд, поэтому длинных пауз себе не позволяем.
+ */
 async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
   const available = await listModels();
   if (!available.length) throw new Error('У ключа нет ни одной модели с generateContent');
 
-  const candidates = rankModels(available).slice(0, 4);
+  const queue = rankModels(available).slice(0, 6);
   const errors: string[] = [];
+  const retryable: string[] = [];
 
-  for (const model of candidates) {
+  const attempt = async (model: string) => {
+    const resp = await ai.models.generateContent({
+      model, contents: prompt,
+      config: { responseMimeType: 'application/json', responseSchema: schema },
+    });
+    return JSON.parse(resp.text || '{}');
+  };
+
+  for (const model of queue) {
     try {
-      const resp = await ai.models.generateContent({
-        model, contents: prompt,
-        config: { responseMimeType: 'application/json', responseSchema: schema },
-      });
-      return JSON.parse(resp.text || '{}');
+      return await attempt(model);
     } catch (e) {
-      errors.push(`${model}: ${(e as Error).message.slice(0, 120)}`);
+      const msg = (e as Error).message;
+      if (/503|UNAVAILABLE|high demand/i.test(msg)) retryable.push(model);
+      errors.push(`${model}: ${msg.slice(0, 100)}`);
     }
   }
-  throw new Error(`Ни одна модель не ответила.\n${errors.join('\n')}`);
+
+  // Второй заход по тем, кто был просто перегружен.
+  for (const model of retryable.slice(0, 2)) {
+    await new Promise((r) => setTimeout(r, 800));
+    try {
+      return await attempt(model);
+    } catch (e) {
+      errors.push(`${model} (повтор): ${(e as Error).message.slice(0, 100)}`);
+    }
+  }
+
+  const quota = errors.some((e) => /429|quota/i.test(e));
+  throw new Error(
+    (quota ? 'Похоже, выбрана дневная квота Gemini у ключа. ' : '') +
+    `Ни одна из ${queue.length} моделей не ответила.\n${errors.join('\n')}`
+  );
 }
 
 const TYPE_RU: Record<string, string> = {
