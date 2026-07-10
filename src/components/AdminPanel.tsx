@@ -1812,7 +1812,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       <AnimatePresence>
         {showAudience && (
           <div className="fixed inset-0 z-[80] flex items-end md:items-center justify-center md:p-4">
-            <div className="absolute inset-0 bg-black/90" onClick={() => setShowAudience(false)} />
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={() => setShowAudience(false)} />
             <motion.div
               initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
               className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-3xl relative z-10 border border-white/10 flex flex-col h-[90dvh] md:max-h-[85vh] text-white"
