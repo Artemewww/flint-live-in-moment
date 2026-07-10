@@ -39,12 +39,59 @@ async function getEvent(id: string) {
   return data;
 }
 
+const DOW_RU = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
+const MON_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+
+/** Сколько дней осталось до даты (0 = сегодня). */
+function daysUntil(date: string): number | null {
+  if (!date) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(`${date}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
+}
+
+/** «через 5 дней», «завтра», «сегодня», «прошло». Человек должен сразу понимать срок. */
+function whenPhrase(date: string): string {
+  const n = daysUntil(date);
+  if (n === null) return '';
+  if (n < 0) return 'уже прошло';
+  if (n === 0) return 'сегодня';
+  if (n === 1) return 'завтра';
+  if (n === 2) return 'послезавтра';
+  const last = n % 10, tens = n % 100;
+  const word = (tens >= 11 && tens <= 14) ? 'дней' : last === 1 ? 'день' : (last >= 2 && last <= 4) ? 'дня' : 'дней';
+  return `через ${n} ${word}`;
+}
+
+/** «суббота, 18 июля» — день недели и дата явно, без догадок. */
+function dayPhrase(date: string): string {
+  if (!date) return '';
+  const d = new Date(`${date}T00:00:00`);
+  if (isNaN(d.getTime())) return '';
+  return `${DOW_RU[d.getDay()]}, ${d.getDate()} ${MON_RU[d.getMonth()]}`;
+}
+
+/** Ссылка на построение маршрута: открывается в картах телефона. */
+function routeUrl(ev: any): string | null {
+  const lat = ev?.coordinates_lat, lng = ev?.coordinates_lng;
+  if (lat && lng) return `https://yandex.ru/maps/?rtext=~${lat},${lng}&rtt=auto`;
+  if (ev?.location) return `https://yandex.ru/maps/?text=${encodeURIComponent(ev.location)}`;
+  return null;
+}
+
 function eventCard(ev: any): string {
   const aud = ev.entry_type === 'male' ? '👨 Только мужчины'
     : ev.entry_type === 'female' ? '👩 Только женщины' : '👥 Все';
+  const when = whenPhrase(ev.date);
+  const day = dayPhrase(ev.date);
   return (
     `<b>${esc(ev.title)}</b>\n\n` +
-    (ev.date_label ? `🗓 ${esc(ev.date_label)}\n` : '') +
+    // Сначала — когда и через сколько: это первое, что человек хочет знать.
+    (day ? `🗓 ${esc(day)}${ev.time ? `, ${esc(ev.time)}` : ''}\n` : '') +
+    (when ? `⏳ <b>${esc(when)}</b>\n` : '') +
+    (ev.date_end && ev.date_end !== ev.date ? `📆 по ${esc(dayPhrase(ev.date_end))}\n` : '') +
     (ev.location ? `📍 ${esc(ev.location)}\n` : '') +
     (ev.price_label ? `💳 ${esc(ev.price_label)}\n` : '') +
     (ev.entry_threshold ? `🎫 ${esc(ev.entry_threshold)}\n` : '') +
@@ -130,6 +177,44 @@ async function bindReferrer(from: any, code: string) {
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
 
+/** Постоянное меню внизу чата — раньше у участника не было ни одной кнопки под рукой. */
+function mainMenu() {
+  return {
+    keyboard: [
+      [{ text: '📅 Ближайшие события' }, { text: '👤 Мой статус' }],
+      [{ text: '🚗 Логистика и брони' }, { text: 'ℹ️ Помощь' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}
+
+/**
+ * Кнопки под карточкой события. Набор зависит от самого события:
+ * интеллектуальному клубу не нужна логистика, бесплатному — оплата,
+ * событию без координат — маршрут.
+ */
+function eventCardButtons(ev: any, openBtn: any): any[] {
+  const rows: any[] = [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
+
+  const route = routeUrl(ev);
+  const nav: any[] = [];
+  if (route) nav.push({ text: '🧭 Маршрут', url: route });
+  if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
+  if (nav.length) rows.push(nav);
+
+  if (ev.price_type === 'paid') rows.push([{ text: '💳 Оплата', callback_data: `pay_${ev.id}` }]);
+  if (ev.type !== 'intellectual') rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+
+  rows.push([
+    { text: '❓ Спросить', callback_data: `ask_${ev.id}` },
+    { text: '💡 Предложить', callback_data: `idea_${ev.id}` },
+  ]);
+  rows.push([{ text: '📤 Позвать друга', callback_data: `share_${ev.id}` }]);
+  rows.push([openBtn]);
+  return rows;
+}
+
 // --- Закрытый клуб (за флагом GATE_ENABLED) ---
 function gateOn(): boolean { return process.env.GATE_ENABLED === '1'; }
 async function memberOf(tgId: number): Promise<{ status?: string; is_core?: boolean } | null> {
@@ -143,6 +228,50 @@ async function isApproved(tgId: number): Promise<boolean> {
 async function isCore(tgId: number): Promise<boolean> {
   const m = await memberOf(tgId);
   return !!m && m.is_core === true;
+}
+
+/**
+ * Профиль: баллы, приглашённые, посещённые события, реф-ссылка.
+ * Раньше ссылку можно было только выделить пальцем — теперь есть кнопка
+ * «Отправить другу», которая открывает нативный шеринг Telegram.
+ */
+async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
+  const tgId = msg.from.id;
+  await supabase.from('members').upsert(
+    { telegram_id: tgId, username: msg.from.username || null, first_name: msg.from.first_name || null },
+    { onConflict: 'telegram_id' }
+  );
+  const code = await ensureRefCode(tgId);
+  const { data: me } = await supabase.from('members').select('points,status,is_core').eq('telegram_id', tgId).maybeSingle();
+  const { count: invited } = await supabase.from('members').select('telegram_id', { count: 'exact', head: true }).eq('referred_by', tgId);
+  const { count: visited } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('telegram_id', tgId).eq('attended', true);
+
+  const link = code ? `https://t.me/${BOT_USERNAME}?start=ref_${code}` : null;
+  const status = (me as any)?.is_core ? 'костяк клуба'
+    : (me as any)?.status === 'approved' ? 'участник клуба'
+    : (me as any)?.status === 'pending_review' ? 'заявка на рассмотрении'
+    : 'новичок';
+
+  const rows: any[] = [];
+  if (link) {
+    const invite = 'Это «Живи в моменте» — закрытый клуб трезвых событий. Заходи по моей ссылке.';
+    rows.push([{ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` }]);
+  }
+  rows.push([openBtn]);
+
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text:
+      `👤 <b>${esc(msg.from.first_name || 'Профиль')}</b>\n\n` +
+      `🏅 Баллы: <b>${(me as any)?.points || 0}</b>\n` +
+      `🚪 Статус: ${esc(status)}\n` +
+      `🤝 Пригласил: <b>${invited || 0}</b>\n` +
+      `🎒 Событий посетил: <b>${visited || 0}</b>\n\n` +
+      (link
+        ? `🔗 Твоя реф-ссылка:\n<code>${esc(link)}</code>\n\n<i>Нажми на ссылку — скопируется. Или жми «Отправить другу». Баллы придут, когда друг впервые дойдёт до события.</i>`
+        : '<i>Реф-ссылка недоступна.</i>'),
+    reply_markup: kb(rows),
+  });
 }
 
 // --- Сессии диалога (для пошагового ввода текста) ---
@@ -224,6 +353,19 @@ export default async function handler(req: any, res: any) {
     const update = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const site = siteUrl(req);
     const openBtn = { text: '🗓 Открыть афишу', web_app: { url: site } };
+
+    // Отметка живости: любой апдейт от человека = бот у него не заблокирован.
+    // Без этого нельзя честно сказать, сколько участников реально получат рассылку.
+    const actor = update.callback_query?.from || update.message?.from;
+    if (actor?.id) {
+      const base = { telegram_id: actor.id, username: actor.username || null, first_name: actor.first_name || null };
+      const { error } = await supabase.from('members').upsert(
+        { ...base, bot_active: true, last_seen_at: new Date().toISOString() },
+        { onConflict: 'telegram_id' }
+      );
+      // До миграции колонок нет — тогда хотя бы обновим имя, не теряя апдейт целиком.
+      if (error) await supabase.from('members').upsert(base, { onConflict: 'telegram_id' });
+    }
 
     // Кнопки: запись + пошаговый умный опрос под событие.
     if (update.callback_query) {
@@ -619,6 +761,66 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Карточка события из списка /start.
+      if (data.startsWith('ev_')) {
+        const ev = await getEvent(data.slice(3));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (!ev) return res.status(200).json({ ok: true });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn)) });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Программа события.
+      if (data.startsWith('prog_')) {
+        const ev = await getEvent(data.slice('prog_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const items: string[] = (ev?.program || []) as string[];
+        if (!items.length) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Программа ещё готовится — пришлю, как появится.' });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `📋 <b>Программа: ${esc(ev.title)}</b>\n\n` + items.map((p) => `• ${esc(p)}`).join('\n'),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Вопрос организатору и идея по улучшению — свободный текст через сессию.
+      if (data.startsWith('ask_') || data.startsWith('idea_')) {
+        const isAsk = data.startsWith('ask_');
+        const evId = data.slice(isAsk ? 4 : 5);
+        await setSession(tgId, isAsk ? 'ask_text' : 'idea_text', { evId });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: isAsk
+            ? '❓ Напиши свой вопрос по событию — передам организатору, ответ придёт сюда.'
+            : '💡 Что можно улучшить в этом событии? Напиши — организатор увидит.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // «Позвать друга»: готовое сообщение с реф-ссылкой, кнопка «Поделиться».
+      if (data.startsWith('share_')) {
+        const ev = await getEvent(data.slice('share_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (!ev) return res.status(200).json({ ok: true });
+        const code = await ensureRefCode(tgId);
+        const link = `https://t.me/${BOT_USERNAME}?start=${code ? `ref_${code}_ev_${ev.id}` : `event_${ev.id}`}`;
+        const invite = `${ev.title} — ${dayPhrase(ev.date)} (${whenPhrase(ev.date)}). Идём вместе?`;
+        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}`;
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text:
+            `📤 <b>Позови друга</b>\n\n${esc(invite)}\n\n` +
+            `Твоя ссылка на это событие:\n<code>${esc(link)}</code>\n\n` +
+            `<i>Нажми на ссылку — скопируется. Друг придёт по ней, и это засчитается тебе.</i>`,
+          reply_markup: kb([[{ text: '📤 Отправить в Telegram', url: shareUrl }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // === Отзыв после события (приходит из крона: fb_ → звёзды → «придёшь снова» → коммент) ===
       if (data.startsWith('fb_')) {
         const evId = data.slice(3);
@@ -867,13 +1069,86 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, text: '🙏 Спасибо! Отзыв записан — организаторы его увидят.' });
           return res.status(200).json({ ok: true });
         }
+        // Вопрос организатору / идея по улучшению.
+        if (sess && (sess.state === 'ask_text' || sess.state === 'idea_text')) {
+          const isAsk = sess.state === 'ask_text';
+          const ev = await getEvent(sess.context.evId);
+          await clearSession(msg.from.id);
+          const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', {
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `${isAsk ? '❓ <b>Вопрос по событию</b>' : '💡 <b>Идея по событию</b>'}\n` +
+                `${esc(ev?.title || sess.context.evId)}\nОт: ${who}\n\n<i>${esc(text.slice(0, 1000))}</i>`,
+            });
+          }
+          await tg('sendMessage', {
+            chat_id: chatId,
+            text: isAsk
+              ? '✅ Вопрос отправлен организатору. Ответ придёт сюда.'
+              : '✅ Спасибо! Идея передана организатору.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Постоянное меню внизу чата.
+        if (text === '📅 Ближайшие события') {
+          const { data: evs } = await supabase
+            .from('events').select('id,title,date,status')
+            .eq('status', 'open').order('date', { ascending: true }).limit(6);
+          if (!evs || !evs.length) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Пока нет открытых событий. Загляни позже.' });
+            return res.status(200).json({ ok: true });
+          }
+          const rows = evs.map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
+          rows.push([openBtn as any]);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📅 <b>Ближайшие события</b>', reply_markup: kb(rows) });
+          return res.status(200).json({ ok: true });
+        }
+        if (text === 'ℹ️ Помощь') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text:
+              'ℹ️ <b>Как это работает</b>\n\n' +
+              '1. Выбираешь событие → «Записаться».\n' +
+              '2. Отвечаешь на пару вопросов — они нужны для закупки и логистики.\n' +
+              '3. Дальше всё придёт сюда: точный адрес, программа, напоминания за 7/3/1 день.\n' +
+              '4. Нужна машина или место в ней — «🚗 Логистика и брони».\n' +
+              '5. После события бот попросит оценку — она влияет на следующие.\n\n' +
+              'Вопрос по событию — кнопка «❓ Спросить» в его карточке.\n' +
+              '/profile — баллы и твоя реф-ссылка.',
+            reply_markup: mainMenu(),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '👤 Мой статус') {
+          await handleProfileCommand(msg, chatId, openBtn);
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '🚗 Логистика и брони') {
+          const { data: myRegs } = await supabase
+            .from('registrations').select('event_id').eq('telegram_id', msg.from.id).neq('status', 'cancelled');
+          const ids = (myRegs || []).map((r: any) => r.event_id);
+          if (!ids.length) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Сначала запишись на событие — потом появятся машины и брони.' });
+            return res.status(200).json({ ok: true });
+          }
+          const { data: evs } = await supabase.from('events').select('id,title,date').in('id', ids).order('date');
+          const rows = (evs || []).map((e: any) => [{ text: `🚗 ${e.title}`, callback_data: `logi_${e.id}` }]);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🚗 Выбери событие:', reply_markup: kb(rows) });
+          return res.status(200).json({ ok: true });
+        }
       }
 
       if (text.startsWith('/start')) {
-        const payload = text.split(' ')[1] || '';
-        // Реферальная ссылка: фиксируем пригласившего, дальше — обычное приветствие.
+        let payload = text.split(' ')[1] || '';
+        // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
         if (payload.startsWith('ref_')) {
-          try { await bindReferrer(msg.from, payload.slice('ref_'.length)); } catch {}
+          const rest = payload.slice('ref_'.length);
+          const sep = rest.indexOf('_ev_');
+          const code = sep === -1 ? rest : rest.slice(0, sep);
+          try { await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
+          payload = sep === -1 ? '' : `event_${rest.slice(sep + '_ev_'.length)}`;
         }
 
         // Закрытый клуб: незнакомец не видит события — сначала согласие ПД + заявка костяку.
@@ -904,61 +1179,45 @@ export default async function handler(req: any, res: any) {
               chat_id: chatId,
               parse_mode: 'HTML',
               text: eventCard(ev),
-              reply_markup: {
-                inline_keyboard: [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }], [openBtn]],
-              },
+              reply_markup: kb(eventCardButtons(ev, openBtn)),
             });
+            await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
             return res.status(200).json({ ok: true });
           }
         }
-        // Приветствие + открытые события кнопками.
+        // Приветствие + открытые события кнопками (со сроком до старта).
         const { data: evs } = await supabase
           .from('events')
-          .select('id,title,status')
+          .select('id,title,status,date')
           .eq('status', 'open')
           .order('date', { ascending: true })
           .limit(6);
-        const rows = (evs || []).map((e: any) => [{ text: `✅ ${e.title}`, callback_data: `reg_${e.id}` }]);
+        const rows = (evs || []).map((e: any) => [
+          { text: `✅ ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` },
+        ]);
         rows.push([openBtn as any]);
         await tg('sendMessage', {
           chat_id: chatId,
           parse_mode: 'HTML',
           text:
             '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
-            'Живая афиша трезвого сообщества. Открой афишу или запишись на ближайшее событие 👇',
+            'Живая афиша трезвого сообщества. Выбери событие — покажу детали, дату и как добраться 👇',
           reply_markup: { inline_keyboard: rows },
         });
+        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
         return res.status(200).json({ ok: true });
       }
 
       // Профиль: баллы, реф-ссылка, счётчик приглашённых.
       if (text.startsWith('/profile')) {
-        const tgId = msg.from.id;
-        await supabase.from('members').upsert(
-          { telegram_id: tgId, username: msg.from.username || null, first_name: msg.from.first_name || null },
-          { onConflict: 'telegram_id' }
-        );
-        const code = await ensureRefCode(tgId);
-        const { data: me } = await supabase.from('members').select('points,status,is_core').eq('telegram_id', tgId).maybeSingle();
-        const { count } = await supabase.from('members').select('telegram_id', { count: 'exact', head: true }).eq('referred_by', tgId);
-        const link = code ? `https://t.me/${BOT_USERNAME}?start=ref_${code}` : null;
-        await tg('sendMessage', {
-          chat_id: chatId, parse_mode: 'HTML',
-          text:
-            `👤 <b>${esc(msg.from.first_name || 'Профиль')}</b>\n\n` +
-            `🏅 Баллы: <b>${(me as any)?.points || 0}</b>\n` +
-            `🚪 Статус: ${(me as any)?.is_core ? 'костяк клуба' : esc((me as any)?.status || 'pending')}\n` +
-            `🤝 Приглашено: <b>${count || 0}</b>\n\n` +
-            (link ? `🔗 Твоя реф-ссылка:\n<code>${esc(link)}</code>\n\n<i>Нажми на ссылку, чтобы скопировать. Баллы за друга придут, когда он впервые дойдёт до события.</i>` : '<i>Реф-ссылка недоступна.</i>'),
-          reply_markup: kb([[openBtn]]),
-        });
+        await handleProfileCommand(msg, chatId, openBtn);
         return res.status(200).json({ ok: true });
       }
 
       await tg('sendMessage', {
         chat_id: chatId,
-        text: 'Нажми кнопку ниже, чтобы открыть афишу 👇\n\n/profile — баллы и реф-ссылка',
-        reply_markup: { inline_keyboard: [[openBtn]] },
+        text: 'Не понял. Пользуйся кнопками меню внизу 👇',
+        reply_markup: mainMenu(),
       });
       return res.status(200).json({ ok: true });
     }

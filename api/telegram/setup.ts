@@ -8,12 +8,15 @@
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || 'flint-admin-2026';
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 export default async function handler(req: any, res: any) {
   // Разрешаем запуск по секрету вебхука ИЛИ по админ-паролю (что удобнее).
+  // Пустой key не должен совпасть с незаданным env — иначе эндпоинт открыт всем.
   const key = (req.query.key as string) || '';
-  if (key !== ADMIN_TOKEN && !(WEBHOOK_SECRET && key === WEBHOOK_SECRET)) {
+  const okAdmin = !!ADMIN_TOKEN && key === ADMIN_TOKEN;
+  const okHook = !!WEBHOOK_SECRET && key === WEBHOOK_SECRET;
+  if (!okAdmin && !okHook) {
     return res.status(401).json({ ok: false, error: 'Неверный ?key= (укажите ADMIN_TOKEN или TELEGRAM_WEBHOOK_SECRET)' });
   }
   if (!BOT_TOKEN) return res.status(500).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан в env' });

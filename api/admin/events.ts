@@ -1,16 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
+
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
-
-// Middleware для проверки админского токена
-function checkAdminAuth(req: any): boolean {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace('Bearer ', '');
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
-}
 
 // Маппинг snake_case -> camelCase для фронтенда
 function mapEventToCamelCase(event: any) {
@@ -60,11 +55,85 @@ function mapEventToCamelCase(event: any) {
   };
 }
 
-export default async function handler(req: any, res: any) {
-  // Проверяем авторизацию
-  if (!checkAdminAuth(req)) {
-    return res.status(401).json({ error: 'Unauthorized' });
+// ─── Админская авторизация ───────────────────────────────────────────────
+// Дублируется по файлам сознательно: Vercel не включает в бандл функции
+// модули из папок на «_», а импорт из ../src роняет FUNCTION_INVOCATION_FAILED
+// (PLAN.md §9). Тот же приём, что с mapEventToCamelCase.
+//
+// Секрет живёт только в env. Раньше здесь был фолбэк на строку-пароль, и она
+// уезжала в публичный JS-бандл вместе с фронтом.
+const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+const ADMIN_COOKIE = 'flint_admin';
+
+function safeEq(a: string, b: string): boolean {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
+
+function readCookie(req: any, name: string): string | null {
+  const raw = req.headers?.cookie;
+  if (!raw) return null;
+  for (const part of String(raw).split(';')) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(rest.join('='));
   }
+  return null;
+}
+
+/** Кука вида <срок>.<подпись>: подпись не даёт продлить срок вручную. */
+function validSession(value: string): boolean {
+  const [expRaw, mac] = String(value).split('.');
+  const exp = Number(expRaw);
+  if (!exp || !mac || Date.now() > exp) return false;
+  return safeEq(mac, crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex'));
+}
+
+/** Пускать ли запрос: заголовок (крон, curl) или подписанная кука (браузер). */
+function isAdmin(req: any): boolean {
+  if (!ADMIN_SECRET) return false;
+  const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+  if (bearer && safeEq(bearer, ADMIN_SECRET)) return true;
+  const cookie = readCookie(req, ADMIN_COOKIE);
+  return !!cookie && validSession(cookie);
+}
+
+function deny(res: any) {
+  return res.status(401).json({ error: 'Unauthorized' });
+}
+
+const ADMIN_TTL_MS = 12 * 60 * 60 * 1000;
+
+function passwordMatches(password: string): boolean {
+  return !!ADMIN_SECRET && safeEq(String(password || ''), ADMIN_SECRET);
+}
+
+function sessionCookie(): string {
+  const exp = Date.now() + ADMIN_TTL_MS;
+  const mac = crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex');
+  return `${ADMIN_COOKIE}=${encodeURIComponent(`${exp}.${mac}`)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ADMIN_TTL_MS / 1000}`;
+}
+
+function clearCookie(): string {
+  return `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
+}
+
+export default async function handler(req: any, res: any) {
+  // Вход/выход админки. Пароль сверяется на сервере и обменивается на
+  // подписанную httpOnly-куку — в браузер секрет не попадает.
+  if (req.method === 'POST' && req.query?.action === 'login') {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    if (!passwordMatches(body.password)) {
+      return res.status(401).json({ error: 'Неверный пароль' });
+    }
+    res.setHeader('Set-Cookie', sessionCookie());
+    return res.status(200).json({ ok: true });
+  }
+  if (req.method === 'POST' && req.query?.action === 'logout') {
+    res.setHeader('Set-Cookie', clearCookie());
+    return res.status(200).json({ ok: true });
+  }
+
+  if (!isAdmin(req)) return deny(res);
 
   if (req.method === 'GET') {
     /**

@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
+
 
 /**
  * Ежедневный крон (Vercel Cron, см. vercel.json).
@@ -20,7 +22,7 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 function authorized(req: any): boolean {
   const token = String(req.headers.authorization || '').replace('Bearer ', '');
   if (process.env.CRON_SECRET && token === process.env.CRON_SECRET) return true;
-  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
+  return isAdmin(req);
 }
 
 function esc(s: any): string {
@@ -50,6 +52,52 @@ function dayOffset(n: number): string {
 /** Реальные Telegram-получатели: веб-заявки имеют отрицательный хеш вместо id. */
 function realIds(regs: any[]): any[] {
   return regs.filter((r) => Number.isFinite(Number(r.telegram_id)) && Number(r.telegram_id) > 0);
+}
+
+// ─── Админская авторизация ───────────────────────────────────────────────
+// Дублируется по файлам сознательно: Vercel не включает в бандл функции
+// модули из папок на «_», а импорт из ../src роняет FUNCTION_INVOCATION_FAILED
+// (PLAN.md §9). Тот же приём, что с mapEventToCamelCase.
+//
+// Секрет живёт только в env. Раньше здесь был фолбэк на строку-пароль, и она
+// уезжала в публичный JS-бандл вместе с фронтом.
+const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+const ADMIN_COOKIE = 'flint_admin';
+
+function safeEq(a: string, b: string): boolean {
+  const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
+
+function readCookie(req: any, name: string): string | null {
+  const raw = req.headers?.cookie;
+  if (!raw) return null;
+  for (const part of String(raw).split(';')) {
+    const [k, ...rest] = part.trim().split('=');
+    if (k === name) return decodeURIComponent(rest.join('='));
+  }
+  return null;
+}
+
+/** Кука вида <срок>.<подпись>: подпись не даёт продлить срок вручную. */
+function validSession(value: string): boolean {
+  const [expRaw, mac] = String(value).split('.');
+  const exp = Number(expRaw);
+  if (!exp || !mac || Date.now() > exp) return false;
+  return safeEq(mac, crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex'));
+}
+
+/** Пускать ли запрос: заголовок (крон, curl) или подписанная кука (браузер). */
+function isAdmin(req: any): boolean {
+  if (!ADMIN_SECRET) return false;
+  const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+  if (bearer && safeEq(bearer, ADMIN_SECRET)) return true;
+  const cookie = readCookie(req, ADMIN_COOKIE);
+  return !!cookie && validSession(cookie);
+}
+
+function deny(res: any) {
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
 export default async function handler(req: any, res: any) {
