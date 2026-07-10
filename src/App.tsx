@@ -93,6 +93,9 @@ export default function App() {
   const isAuthorizedUser = (() => {
     try { return typeof window !== 'undefined' && !!window.Telegram?.WebApp?.initDataUnsafe?.user; } catch { return false; }
   })();
+  // Уже принятый в клуб участник не должен проходить «верификацию» заново
+  // при каждой записи. null = ещё не знаем, true/false = ответ сервера.
+  const [clubApproved, setClubApproved] = useState<boolean | null>(null);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -133,6 +136,24 @@ export default function App() {
             });
           });
       });
+  }, []);
+
+  // Статус в клубе: одобрен ли участник. Нужно, чтобы не показывать «верификацию»
+  // тем, кто уже внутри (пришёл по реф-ссылке и принят костяком).
+  useEffect(() => {
+    const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
+    if (!initData) { setClubApproved(false); return; }
+    fetch('/api/club', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'profile', initData }),
+    })
+      .then((r) => r.json())
+      .then((d) => {
+        const p = d?.profile;
+        setClubApproved(!!p && (p.status === 'approved' || p.isCore));
+      })
+      .catch(() => setClubApproved(false));
   }, []);
 
   // Внутри Telegram — подтягиваем свои заявки из БД, чтобы «Мои Участия»
@@ -203,19 +224,20 @@ export default function App() {
     }
   }, []);
 
-  // Слушаем событие открытия верификации из EventDetailModal
+  // Слушаем событие открытия верификации из EventDetailModal.
+  // Кто уже в клубе — сразу к записи, «кто пригласил в клуб» ему показывать не нужно.
   useEffect(() => {
     const handleOpenVerification = (e: any) => {
-      const { eventId, eventTitle } = e.detail;
+      const { eventId } = e.detail;
       const event = events.find(ev => ev.id === eventId);
-      if (event) {
-        setVerifyingEvent(event);
-      }
+      if (!event) return;
+      if (clubApproved) setRegisteringEvent(event);
+      else setVerifyingEvent(event);
     };
 
     window.addEventListener('openVerification', handleOpenVerification);
     return () => window.removeEventListener('openVerification', handleOpenVerification);
-  }, [events]);
+  }, [events, clubApproved]);
 
   // Слушаем событие открытия постера из EventDetailModal
   useEffect(() => {
@@ -766,6 +788,7 @@ export default function App() {
         <EventDetailModal
           event={activeDetailEvent}
           isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
+          isClubMember={clubApproved === true}
           onClose={() => setActiveDetailEvent(null)}
           onRegisterClick={(evt) => setRegisteringEvent(evt)}
         />

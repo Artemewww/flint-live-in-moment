@@ -124,15 +124,18 @@ function WeatherBlock({ event }: { event: CommunityEvent }) {
 interface EventDetailModalProps {
   event: CommunityEvent;
   isRegistered: boolean;
+  /** Уже принят в клуб — тогда «верификацию» не показываем. */
+  isClubMember?: boolean;
   onClose: () => void;
   onRegisterClick: (event: CommunityEvent) => void;
 }
 
-export default function EventDetailModal({ 
-  event, 
-  isRegistered, 
-  onClose, 
-  onRegisterClick 
+export default function EventDetailModal({
+  event,
+  isRegistered,
+  isClubMember,
+  onClose,
+  onRegisterClick
 }: EventDetailModalProps) {
   const maxSpots = event.maxParticipants || 15;
   const totalRegistered = event.participantsCount + (isRegistered ? 1 : 0);
@@ -571,12 +574,12 @@ export default function EventDetailModal({
           ) : (
             /* Open for Registration */
             <>
-              {event.needsOnboarding && (
+              {/* «Верификация» — только для тех, кого ещё не приняли в клуб. */}
+              {event.needsOnboarding && !isClubMember && (
                 <button
                   type="button"
                   onClick={() => {
                     onClose();
-                    // Открываем верификацию через App.tsx
                     window.dispatchEvent(new CustomEvent('openVerification', { detail: { eventId: event.id, eventTitle: event.title } }));
                   }}
                   className="flex-1 order-2 sm:order-1 border border-brand/30 py-4.5 rounded-2xl text-xs font-bold uppercase tracking-widest text-brand hover:bg-brand/10 transition-colors cursor-pointer font-mono bg-transparent"
