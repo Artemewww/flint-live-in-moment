@@ -224,6 +224,21 @@ async function handleHealth(res: any) {
   const { error: pointsErr } = await supabase.rpc('award_points', { tg: -1, n: 0 });
   out['rpc:award_points'] = pointsErr ? `ОТСУТСТВУЕТ: ${pointsErr.message}` : 'ok';
 
+  // Чтения мало: диалоги бота ломаются именно на ЗАПИСИ в bot_sessions,
+  // а webhook ошибку upsert не проверяет. Пишем-читаем-удаляем тестовую строку.
+  const probeId = -999999;
+  const { error: wErr } = await supabase.from('bot_sessions').upsert(
+    { telegram_id: probeId, state: 'probe', context: { x: 1 }, updated_at: new Date().toISOString() },
+    { onConflict: 'telegram_id' }
+  );
+  if (wErr) {
+    out['bot_sessions:WRITE'] = `НЕ ПИШЕТСЯ: ${wErr.message}`;
+  } else {
+    const { data: back } = await supabase.from('bot_sessions').select('state').eq('telegram_id', probeId).maybeSingle();
+    out['bot_sessions:WRITE'] = back?.state === 'probe' ? 'ok' : 'ЗАПИСАЛОСЬ, НО НЕ ЧИТАЕТСЯ';
+    await supabase.from('bot_sessions').delete().eq('telegram_id', probeId);
+  }
+
   const broken = Object.entries(out).filter(([, v]) => v !== 'ok' && !v.startsWith('ok'));
   return res.status(200).json({ migrationApplied: broken.length === 0, checks: out });
 }

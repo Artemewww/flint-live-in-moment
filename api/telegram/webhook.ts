@@ -151,10 +151,13 @@ async function getSession(tgId: number): Promise<{ state: string; context: any }
   return data ? { state: (data as any).state, context: (data as any).context || {} } : null;
 }
 async function setSession(tgId: number, state: string, context: any) {
-  await supabase.from('bot_sessions').upsert(
+  const { error } = await supabase.from('bot_sessions').upsert(
     { telegram_id: tgId, state, context, updated_at: new Date().toISOString() },
     { onConflict: 'telegram_id' }
   );
+  // Если состояние не сохранилось, следующий шаг диалога молча провалится
+  // в фолбэк «Нажми кнопку ниже» — так уже ломался ввод точки выезда.
+  if (error) throw new Error(`bot_sessions upsert: ${error.message}`);
 }
 async function clearSession(tgId: number) {
   await supabase.from('bot_sessions').delete().eq('telegram_id', tgId);

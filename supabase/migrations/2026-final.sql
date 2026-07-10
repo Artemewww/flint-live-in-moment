@@ -165,6 +165,16 @@ update rides
  where seats_taken is distinct from (select count(*) from ride_bookings b where b.ride_id = rides.id);
 
 -- ─────────────────────────────────────────────────────────────
+-- 9c. Кто сейчас в админке. Строка на вкладку, TTL проверяется запросом.
+-- ─────────────────────────────────────────────────────────────
+create table if not exists admin_presence (
+  id        text primary key,   -- случайный id вкладки
+  name      text,
+  last_seen timestamptz default now()
+);
+create index if not exists idx_admin_presence_seen on admin_presence(last_seen);
+
+-- ─────────────────────────────────────────────────────────────
 -- 10. RPC
 -- ─────────────────────────────────────────────────────────────
 

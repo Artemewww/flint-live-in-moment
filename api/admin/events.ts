@@ -67,6 +67,34 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method === 'GET') {
+    /**
+     * Пульс присутствия: вкладка админки раз в ~20 сек отмечается и получает
+     * список тех, кто онлайн. Онлайн = отметился за последние 60 сек.
+     */
+    if (req.query?.action === 'presence') {
+      try {
+        const id = String(req.query.id || '').slice(0, 64);
+        const name = String(req.query.name || 'Админ').slice(0, 40);
+        if (!id) return res.status(400).json({ error: 'Missing id' });
+
+        await supabase.from('admin_presence').upsert(
+          { id, name, last_seen: new Date().toISOString() },
+          { onConflict: 'id' }
+        );
+
+        const cutoff = new Date(Date.now() - 60_000).toISOString();
+        const { data: online } = await supabase
+          .from('admin_presence').select('id,name').gte('last_seen', cutoff);
+
+        // Подчищаем протухшие записи, чтобы таблица не росла бесконечно.
+        await supabase.from('admin_presence').delete().lt('last_seen', new Date(Date.now() - 3600_000).toISOString());
+
+        return res.status(200).json({ online: (online || []).length, users: online || [] });
+      } catch (error) {
+        return res.status(200).json({ online: 1, users: [], error: (error as Error).message });
+      }
+    }
+
     // Получить все события
     try {
       const { data: events, error } = await supabase

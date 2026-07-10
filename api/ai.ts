@@ -8,18 +8,66 @@ import { GoogleGenAI, Type } from '@google/genai';
  */
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
-// Список моделей с фолбэком: если заданная/первая недоступна на ключе — пробуем следующую.
-const MODELS = [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'].filter(Boolean) as string[];
 
 function checkAdminAuth(req: any): boolean {
   const token = String(req.headers.authorization || '').replace('Bearer ', '');
   return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
 }
 
-/** Вызов Gemini с JSON-схемой и перебором моделей. Бросает последнюю ошибку, если все упали. */
+/**
+ * Какие модели реально доступны этому ключу. Захардкоженный список угадывать
+ * бесполезно: набор моделей у разных ключей разный и меняется со временем
+ * (именно поэтому падало на `gemini-1.5-flash is not found`).
+ * Кэшируем в памяти инстанса — Vercel переиспользует его между вызовами.
+ */
+let modelCache: { at: number; models: string[] } | null = null;
+
+async function listModels(): Promise<string[]> {
+  if (modelCache && Date.now() - modelCache.at < 30 * 60 * 1000) return modelCache.models;
+
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}&pageSize=200`);
+  if (!r.ok) throw new Error(`ListModels ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const j: any = await r.json();
+
+  const usable = (j.models || [])
+    .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
+    .map((m: any) => String(m.name).replace(/^models\//, ''))
+    // Картиночные/голосовые/эмбеддинги для JSON-генерации не годятся.
+    .filter((n: string) => !/embedding|aqa|image|tts|audio|vision|live/i.test(n));
+
+  modelCache = { at: Date.now(), models: usable };
+  return usable;
+}
+
+/** Порядок предпочтений: явный env → самые свежие flash → всё остальное. */
+function rankModels(available: string[]): string[] {
+  const score = (n: string): number => {
+    let s = 0;
+    if (/flash/.test(n)) s += 100;          // дёшево и быстро — то, что нам нужно
+    if (/lite/.test(n)) s -= 20;
+    if (/preview|exp/.test(n)) s -= 30;     // экспериментальные — в последнюю очередь
+    const ver = n.match(/(\d+)\.(\d+)/);
+    if (ver) s += Number(ver[1]) * 10 + Number(ver[2]);
+    if (/latest/.test(n)) s += 5;
+    return s;
+  };
+  const ranked = [...available].sort((a, b) => score(b) - score(a));
+  const preferred = process.env.GEMINI_MODEL;
+  if (preferred && available.includes(preferred)) {
+    return [preferred, ...ranked.filter((m) => m !== preferred)];
+  }
+  return ranked;
+}
+
+/** Вызов Gemini с JSON-схемой. Пробует доступные модели по убыванию пригодности. */
 async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
-  let lastErr: any = null;
-  for (const model of MODELS) {
+  const available = await listModels();
+  if (!available.length) throw new Error('У ключа нет ни одной модели с generateContent');
+
+  const candidates = rankModels(available).slice(0, 4);
+  const errors: string[] = [];
+
+  for (const model of candidates) {
     try {
       const resp = await ai.models.generateContent({
         model, contents: prompt,
@@ -27,10 +75,10 @@ async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
       });
       return JSON.parse(resp.text || '{}');
     } catch (e) {
-      lastErr = e;
+      errors.push(`${model}: ${(e as Error).message.slice(0, 120)}`);
     }
   }
-  throw lastErr || new Error('Все модели недоступны');
+  throw new Error(`Ни одна модель не ответила.\n${errors.join('\n')}`);
 }
 
 const TYPE_RU: Record<string, string> = {
@@ -49,6 +97,12 @@ export default async function handler(req: any, res: any) {
     const ev = body.event || {};
     const people = Number(body.people) || Number(ev.maxParticipants) || 10;
     const diet = body.diet || {}; // { vegan, vegetarian, children }
+
+    // Диагностика: что за модели вообще доступны этому ключу.
+    if (task === 'models') {
+      const available = await listModels();
+      return res.status(200).json({ available, ranked: rankModels(available).slice(0, 6) });
+    }
 
     const ai = new GoogleGenAI({ apiKey: API_KEY });
     const typeRu = TYPE_RU[ev.type] || 'встреча сообщества';

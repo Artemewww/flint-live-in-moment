@@ -358,9 +358,34 @@ function buildDateLabel(date: string, dateEnd: string, time: string): string {
   return `${day} ${mon} (${DOW_RU[d.getDay()]})${t}`;
 }
 
+/** Сессия админки живёт 12 часов — чтобы не вводить пароль на каждой перезагрузке. */
+const SESSION_KEY = 'flint_admin_session';
+const SESSION_TTL = 12 * 60 * 60 * 1000;
+
+function readSession(): boolean {
+  try {
+    const raw = localStorage.getItem(SESSION_KEY);
+    if (!raw) return false;
+    const { at } = JSON.parse(raw);
+    if (Date.now() - at > SESSION_TTL) { localStorage.removeItem(SESSION_KEY); return false; }
+    return true;
+  } catch { return false; }
+}
+
+/** Стабильный id вкладки — по нему считается присутствие в админке. */
+function tabId(): string {
+  try {
+    let id = sessionStorage.getItem('flint_admin_tab');
+    if (!id) { id = Math.random().toString(36).slice(2, 12); sessionStorage.setItem('flint_admin_tab', id); }
+    return id;
+  } catch { return 'anon'; }
+}
+
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose }: AdminPanelProps) {
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(readSession);
+  const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
   const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [editingEvent, setEditingEvent] = useState<CommunityEvent | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [broadcasting, setBroadcasting] = useState<string | null>(null);
@@ -549,11 +574,39 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
   const handleLogin = () => {
     if (password === ADMIN_PASSWORD) {
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       setIsAuthenticated(true);
     } else {
-      alert('Неверный пароль');
+      setLoginError('Неверный пароль');
     }
   };
+
+  const handleLogout = () => {
+    try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
+    setIsAuthenticated(false);
+    setPassword('');
+  };
+
+  // Пульс присутствия: кто ещё сидит в админке прямо сейчас.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    const name = (() => {
+      try { return localStorage.getItem('flint_admin_name') || 'Админ'; } catch { return 'Админ'; }
+    })();
+    let alive = true;
+    const beat = async () => {
+      try {
+        const res = await fetch(`/api/admin/events?action=presence&id=${encodeURIComponent(tabId())}&name=${encodeURIComponent(name)}`, {
+          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        });
+        const data = await res.json();
+        if (alive && Array.isArray(data.users)) setOnlineAdmins(data.users);
+      } catch { /* офлайн — просто не обновляем */ }
+    };
+    beat();
+    const t = setInterval(beat, 20000);
+    return () => { alive = false; clearInterval(t); };
+  }, [isAuthenticated]);
 
   const toggleEventStatus = (event: CommunityEvent) => {
     const newStatus = event.status === 'open' ? 'locked' : 'open';
@@ -699,11 +752,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             <input
               type="password"
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(e) => { setPassword(e.target.value); setLoginError(''); }}
               placeholder="Пароль"
+              autoFocus
               className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-brand/40"
-              onKeyPress={(e) => e.key === 'Enter' && handleLogin()}
+              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
             />
+            {loginError && <p className="text-[11px] text-rose-400">{loginError}</p>}
+            <p className="text-[10px] text-white/35 text-center">Вход запомнится на 12 часов</p>
             <button
               onClick={handleLogin}
               className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest"
@@ -733,17 +789,35 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         className="bg-[#121212] rounded-2xl md:rounded-3xl w-full max-w-6xl shadow-2xl relative z-10 border border-white/10 flex flex-col max-h-[92vh] text-white"
       >
         {/* Header */}
-        <div className="p-6 border-b border-white/10 flex items-center justify-between">
+        <div className="p-6 border-b border-white/10 flex items-center justify-between gap-3">
           <div>
             <h2 className="font-display font-black text-2xl uppercase">Админ-панель</h2>
             <p className="text-xs text-brand font-mono uppercase">Полное управление мероприятиями</p>
           </div>
-          <button
-            onClick={onClose}
-            className="p-2 rounded-full bg-white/5 hover:bg-white/10"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div
+              className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-full px-3 py-1.5"
+              title={onlineAdmins.length ? onlineAdmins.map((u) => u.name).join(', ') : 'Только ты'}
+            >
+              <span className="w-2 h-2 rounded-full bg-brand animate-pulse" />
+              <span className="text-[10px] font-mono text-white/70">
+                в админке: {onlineAdmins.length || 1}
+              </span>
+            </div>
+            <button
+              onClick={handleLogout}
+              className="text-[10px] font-mono uppercase text-white/50 hover:text-white bg-white/5 hover:bg-white/10 border-none rounded-full px-3 py-2 cursor-pointer"
+              title="Выйти и забыть сессию"
+            >
+              Выйти
+            </button>
+            <button
+              onClick={onClose}
+              className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Результат последнего действия — иначе кнопки «молчат» и непонятно, сработали ли */}
