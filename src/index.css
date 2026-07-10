@@ -19,3 +19,14 @@
   -ms-overflow-style: none;  /* IE and Edge */
   scrollbar-width: none;  /* Firefox */
 }
+
+/* Страница «плавала» влево-вправо: какой-то блок вылезал за ширину экрана.
+   Запрещаем горизонтальный сдвиг на уровне документа. */
+html, body {
+  max-width: 100%;
+  overflow-x: hidden;
+  overscroll-behavior-x: none;
+}
+#root {
+  overflow-x: hidden;
+}

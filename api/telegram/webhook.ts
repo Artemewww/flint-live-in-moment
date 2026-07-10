@@ -310,10 +310,13 @@ async function finishApplication(from: any, chatId: number, context: any) {
         `✈️ ${from.username ? '@' + esc(from.username) : 'ника нет'} (id ${tgId})\n` +
         (inviter ? `🔗 Пригласил: ${esc(inviter)}\n` : '') +
         `💬 Откуда: ${esc(context.source || '—')}`,
-      reply_markup: kb([[
-        { text: '✅ Принять', callback_data: `approve_${tgId}` },
-        { text: '❌ Отклонить', callback_data: `reject_${tgId}` },
-      ]]),
+      reply_markup: kb([
+        [
+          { text: '✅ Принять', callback_data: `approve_${tgId}` },
+          { text: '❌ Отклонить', callback_data: `reject_${tgId}` },
+        ],
+        [{ text: '✍️ Написать заявителю', callback_data: `reply_${tgId}` }],
+      ]),
     });
   }
 }
@@ -478,7 +481,7 @@ export default async function handler(req: any, res: any) {
        * непринятый человек мог открыть событие, занять место в машине и увидеть
        * логистику. Пропускаем лишь вступление, поддержку и модерацию костяка.
        */
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|support|approve_|reject_|payok_|payno_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|support|approve_|reject_|payok_|payno_|reply_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -582,6 +585,19 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Костяк отвечает пользователю на заявку/поддержку/вопрос.
+      if (data.startsWith('reply_')) {
+        if (!(await isCore(cq.from.id))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отвечать может только костяк' });
+          return res.status(200).json({ ok: true });
+        }
+        const targetId = Number(data.slice('reply_'.length));
+        await setSession(cq.from.id, 'admin_reply', { targetId });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✍️ Напиши ответ следующим сообщением — доставлю пользователю (id ${targetId}).` });
         return res.status(200).json({ ok: true });
       }
 
@@ -1302,12 +1318,29 @@ export default async function handler(req: any, res: any) {
         }
 
         // Обращение в поддержку.
+        // Ответ костяка пользователю (после кнопки «✍️ Ответить»).
+        if (sess && sess.state === 'admin_reply') {
+          await clearSession(msg.from.id);
+          const targetId = sess.context.targetId;
+          try {
+            await tg('sendMessage', {
+              chat_id: targetId, parse_mode: 'HTML',
+              text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
+            });
+            await tg('sendMessage', { chat_id: chatId, text: '✅ Ответ отправлен.' });
+          } catch {
+            await tg('sendMessage', { chat_id: chatId, text: '⚠️ Не удалось доставить — пользователь мог остановить бота.' });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
         if (sess && sess.state === 'support_text') {
           await clearSession(msg.from.id);
           if (ADMIN_CHAT_ID) {
             await tg('sendMessage', {
               chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
               text: `💬 <b>Поддержка</b>\nОт: ${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : ''} (id ${msg.from.id})\n\n<i>${esc(text.slice(0, 1500))}</i>`,
+              reply_markup: kb([[{ text: '✍️ Ответить', callback_data: `reply_${msg.from.id}` }]]),
             });
           }
           await tg('sendMessage', { chat_id: chatId, text: '✅ Отправил организаторам. Ответят сюда.' });
@@ -1325,6 +1358,7 @@ export default async function handler(req: any, res: any) {
               chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
               text: `${isAsk ? '❓ <b>Вопрос по событию</b>' : '💡 <b>Идея по событию</b>'}\n` +
                 `${esc(ev?.title || sess.context.evId)}\nОт: ${who}\n\n<i>${esc(text.slice(0, 1000))}</i>`,
+              reply_markup: kb([[{ text: '✍️ Ответить', callback_data: `reply_${msg.from.id}` }]]),
             });
           }
           await tg('sendMessage', {
