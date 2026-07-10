@@ -348,6 +348,35 @@ interface AdminPanelProps {
 const MONTHS_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const DOW_RU = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота'];
 
+/** Сколько дней до старта (0 = сегодня, отрицательное = прошло). */
+function daysUntil(date?: string): number | null {
+  if (!date) return null;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const d = new Date(`${date}T00:00:00`);
+  if (isNaN(d.getTime())) return null;
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
+}
+
+/** Короткая метка отсчёта для админки: «сегодня», «завтра», «через 5 дн.», «прошло». */
+function countdownLabel(date?: string): string {
+  const n = daysUntil(date);
+  if (n === null) return '';
+  if (n < 0) return 'прошло';
+  if (n === 0) return 'сегодня';
+  if (n === 1) return 'завтра';
+  return `через ${n} дн.`;
+}
+
+/** События по близости старта: ближайшие вверху, прошедшие в конце. */
+function sortByNearest(list: any[]): any[] {
+  return [...list].sort((a, b) => {
+    const da = daysUntil(a.date), db = daysUntil(b.date);
+    const ka = da === null ? 1e9 : da < 0 ? 1e8 - da : da;   // прошедшие — в самый низ
+    const kb = db === null ? 1e9 : db < 0 ? 1e8 - db : db;
+    return ka - kb;
+  });
+}
+
 /** Человекочитаемая подпись даты: один день или диапазон (многодневное). */
 function buildDateLabel(date: string, dateEnd: string, time: string): string {
   if (!date) return '';
@@ -405,8 +434,33 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Вкладка «Участники»: показывать всех или только тех, кто реально приехал. */
   const [onlyAttended, setOnlyAttended] = useState(false);
   const [showFeedback, setShowFeedback] = useState(false);
+  /** Фильтр списка участников. Клик по карточке на «Обзоре» ставит нужный. */
+  const [partFilter, setPartFilter] = useState<'all' | 'confirmed' | 'pending' | 'paid'>('all');
   /** Какая панель раскрыта во вкладке «Логистика». */
   const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | null>(null);
+  /** Аудитория клуба (все участники, не по событию). */
+  const [showAudience, setShowAudience] = useState(false);
+  const [audience, setAudience] = useState<any>(null);
+
+  /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
+  const openParticipants = (filter: typeof partFilter, attended = false) => {
+    setPartFilter(filter);
+    setOnlyAttended(attended);
+    setShowFeedback(false);
+    setActiveTab('participants');
+  };
+
+  /** Загрузка всей аудитории клуба (эндпоинт ?action=members). */
+  const loadAudience = async () => {
+    try {
+      const res = await fetch('/api/admin/registrations?action=members');
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setAudience(j);
+    } catch (e) {
+      setActionMsg({ ok: false, text: 'Не удалось загрузить участников' });
+    }
+  };
 
   // Тост гаснет сам — чтобы не копился поверх интерфейса.
   useEffect(() => {
@@ -800,19 +854,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" id="admin-panel-root">
+    <div className="fixed inset-0 z-50 flex items-center justify-center md:p-4" id="admin-panel-root">
       <div className="absolute inset-0 bg-black/90 backdrop-blur-md" onClick={onClose} />
 
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-2xl md:rounded-3xl w-full max-w-6xl shadow-2xl relative z-10 border border-white/10 flex flex-col max-h-[92vh] text-white"
+        className="bg-[#121212] md:rounded-3xl w-full max-w-6xl shadow-2xl relative z-10 border border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[92vh] text-white"
       >
         {/* Header */}
-        <div className="p-6 border-b border-white/10 flex items-center justify-between gap-3">
-          <div>
-            <h2 className="font-display font-black text-2xl uppercase">Админ-панель</h2>
-            <p className="text-xs text-brand font-mono uppercase">Полное управление мероприятиями</p>
+        <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="font-display font-black text-lg md:text-2xl uppercase">Админка</h2>
+            <button
+              onClick={() => { setShowAudience(true); loadAudience(); }}
+              className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
+            >
+              👥 Аудитория клуба →
+            </button>
           </div>
           <div className="flex items-center gap-2">
             <div
@@ -848,9 +907,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           </div>
         )}
 
-        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
-          {/* Events List Sidebar */}
-          <div className="w-full md:w-80 shrink-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 max-h-56 md:max-h-none">
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">
+          {/* Список событий. На мобильном прячется, когда открыто конкретное событие. */}
+          <div className={`w-full md:w-80 shrink-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 md:max-h-none ${selectedEvent ? 'hidden md:block' : 'block'}`}>
             <div className="flex items-center justify-between mb-4">
               <span className="text-white/40 text-[10px] uppercase font-mono">Мероприятия: {events.length}</span>
               <div className="flex gap-1">
@@ -871,7 +930,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </div>
             </div>
 
-            {events.map(event => (
+            {sortByNearest(events).map(event => {
+              const cd = countdownLabel(event.date);
+              const soon = (daysUntil(event.date) ?? 99) <= 3 && (daysUntil(event.date) ?? -1) >= 0;
+              return (
               <div
                 key={event.id}
                 className={`p-3 rounded-xl border cursor-pointer transition-all ${
@@ -891,9 +953,16 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     {event.status === 'open' ? 'Набор открыт' : event.status === 'closed' ? 'Завершено' : 'Набор закрыт'}
                   </span>
                 </div>
-                
-                <p className="text-[10px] text-white/60 mb-2">{event.dateLabel}</p>
-                
+
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <p className="text-[10px] text-white/60">{event.dateLabel}</p>
+                  {cd && (
+                    <span className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full shrink-0 ${soon ? 'bg-rose-500/20 text-rose-300' : cd === 'прошло' ? 'bg-white/5 text-white/30' : 'bg-brand/15 text-brand'}`}>
+                      {cd}
+                    </span>
+                  )}
+                </div>
+
                 <div className="flex items-center gap-1 text-[10px] text-white/50 mb-2">
                   <Users className="w-3 h-3" />
                   <span>{event.participantsCount}/{event.maxParticipants}</span>
@@ -947,11 +1016,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   </div>
                 )}
               </div>
-            ))}
+            );})}
           </div>
 
           {/* Event Details Panel */}
-          <div className="flex-1 overflow-y-auto p-6">
+          <div className="flex-1 overflow-y-auto p-4 md:p-6 min-h-0">
             {!selectedEvent ? (
               <div className="flex flex-col items-center justify-center h-full text-white/40">
                 <Calendar className="w-16 h-16 mb-4" />
@@ -959,11 +1028,21 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </div>
             ) : (
               <div className="space-y-6">
+                {/* На мобильном — вернуться к списку событий */}
+                <button
+                  onClick={() => setSelectedEvent(null)}
+                  className="md:hidden flex items-center gap-1 text-xs text-white/60 hover:text-white bg-white/5 rounded-lg px-3 py-2 cursor-pointer border-none"
+                >
+                  ← Все события
+                </button>
                 {/* Event Header */}
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div>
                     <h3 className="font-display font-black text-xl uppercase mb-1">{selectedEvent.title}</h3>
-                    <p className="text-xs text-white/60">{selectedEvent.dateLabel} • {selectedEvent.location}</p>
+                    <p className="text-xs text-white/60">
+                      {selectedEvent.dateLabel}{selectedEvent.location ? ` • ${selectedEvent.location}` : ''}
+                      {countdownLabel(selectedEvent.date) && <span className="text-brand"> · {countdownLabel(selectedEvent.date)}</span>}
+                    </p>
                   </div>
                   <div className="flex gap-2">
                     <button
@@ -1024,47 +1103,64 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 {/* Tab Content */}
                 {activeTab === 'overview' && eventStats && (
                   <div className="space-y-4">
+                    <p className="text-[10px] text-white/30 font-mono uppercase">Нажми на карточку — откроется список</p>
                     <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <button
+                        type="button"
+                        onClick={() => openParticipants('all')}
+                        className="text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 hover:border-brand/30 transition-all cursor-pointer"
+                      >
                         <div className="flex items-center gap-2 mb-2">
                           <Users className="w-4 h-4 text-brand" />
                           <span className="text-[10px] text-white/60 uppercase font-mono">Участники</span>
                         </div>
                         <p className="text-2xl font-black">{eventStats.total}</p>
-                        <p className="text-xs text-white/40">из {selectedEvent.maxParticipants} мест</p>
-                      </div>
+                        <p className="text-xs text-white/40">из {selectedEvent.maxParticipants} мест · показать всех</p>
+                      </button>
 
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <button
+                        type="button"
+                        onClick={() => openParticipants('paid')}
+                        className="text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 hover:border-brand/30 transition-all cursor-pointer"
+                      >
                         <div className="flex items-center gap-2 mb-2">
                           <DollarSign className="w-4 h-4 text-brand" />
                           <span className="text-[10px] text-white/60 uppercase font-mono">Оплата</span>
                         </div>
                         <p className="text-2xl font-black">{eventStats.payments}</p>
-                        <p className="text-xs text-white/40">{eventStats.totalAmount} ₽ собрано</p>
-                      </div>
+                        <p className="text-xs text-white/40">{eventStats.totalAmount} ₽ · показать оплативших</p>
+                      </button>
 
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <button
+                        type="button"
+                        onClick={() => openParticipants('pending')}
+                        className="text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 hover:border-brand/30 transition-all cursor-pointer"
+                      >
                         <div className="flex items-center gap-2 mb-2">
                           <CheckSquare className="w-4 h-4 text-brand" />
                           <span className="text-[10px] text-white/60 uppercase font-mono">Подтверждено</span>
                         </div>
                         <p className="text-2xl font-black">{eventStats.confirmed}</p>
-                        <p className="text-xs text-white/40">{eventStats.pending} ожидают</p>
-                      </div>
+                        <p className="text-xs text-white/40">{eventStats.pending} ждут — показать их</p>
+                      </button>
 
-                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                      <button
+                        type="button"
+                        onClick={() => openParticipants('all', true)}
+                        className="text-left bg-white/5 border border-white/10 rounded-xl p-4 hover:bg-white/10 hover:border-brand/30 transition-all cursor-pointer"
+                      >
                         <div className="flex items-center gap-2 mb-2">
                           <Activity className="w-4 h-4 text-brand" />
                           <span className="text-[10px] text-white/60 uppercase font-mono">Готовность</span>
                         </div>
                         <p className="text-2xl font-black">{Math.round((eventStats.confirmed / (selectedEvent.maxParticipants || 1)) * 100)}%</p>
                         <div className="w-full bg-white/10 rounded-full h-2 mt-2">
-                          <div 
+                          <div
                             className="bg-brand h-2 rounded-full transition-all"
-                            style={{ width: `${(eventStats.confirmed / (selectedEvent.maxParticipants || 1)) * 100}%` }}
+                            style={{ width: `${Math.min(100, (eventStats.confirmed / (selectedEvent.maxParticipants || 1)) * 100)}%` }}
                           />
                         </div>
-                      </div>
+                      </button>
                     </div>
 
                     {/* Спрос и голоса — то, что раньше молча терялось в console.log */}
@@ -1134,6 +1230,23 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
                 {activeTab === 'participants' && eventStats && (
                   <div className="space-y-4">
+                    {/* Быстрый фильтр по статусу заявки — синхронизирован с карточками «Обзора» */}
+                    <div className="flex flex-wrap gap-2">
+                      {([
+                        ['all', `Все · ${eventStats.total}`],
+                        ['pending', `Ждут · ${eventStats.pending}`],
+                        ['confirmed', `Подтверждены · ${eventStats.confirmed}`],
+                        ['paid', `Оплатили · ${eventStats.payments}`],
+                      ] as const).map(([key, label]) => (
+                        <button
+                          key={key}
+                          onClick={() => { setPartFilter(key); setOnlyAttended(false); }}
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold cursor-pointer border-none transition-all ${partFilter === key && !onlyAttended ? 'bg-brand text-black' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
                     <div className="flex flex-wrap gap-2 mb-4">
                       <button
                         onClick={() => setOnlyAttended(!onlyAttended)}
@@ -1193,14 +1306,27 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                       <div className="p-3 border-b border-white/10">
                         <h4 className="text-xs font-bold uppercase">
-                          Список участников ({onlyAttended ? eventStats.attended : eventStats.total})
+                          {onlyAttended ? 'Кто приехал' : partFilter === 'pending' ? 'Ждут подтверждения'
+                            : partFilter === 'confirmed' ? 'Подтверждённые' : partFilter === 'paid' ? 'Оплатившие' : 'Все участники'}
+                          {' '}({(() => {
+                            const v = eventStats.registrations.filter((r: any) =>
+                              onlyAttended ? r.attended
+                              : partFilter === 'pending' ? r.status === 'pending'
+                              : partFilter === 'confirmed' ? r.status === 'confirmed'
+                              : partFilter === 'paid' ? r.paymentStatus === 'paid'
+                              : true);
+                            return v.length;
+                          })()})
                         </h4>
                       </div>
                       <div className="max-h-96 overflow-y-auto">
                         {(() => {
-                          const visible = onlyAttended
-                            ? eventStats.registrations.filter((r: any) => r.attended)
-                            : eventStats.registrations;
+                          const visible = eventStats.registrations.filter((r: any) =>
+                            onlyAttended ? r.attended
+                            : partFilter === 'pending' ? r.status === 'pending'
+                            : partFilter === 'confirmed' ? r.status === 'confirmed'
+                            : partFilter === 'paid' ? r.paymentStatus === 'paid'
+                            : true);
                           return visible.length === 0 ? (
                           <div className="p-6 text-center text-white/40 text-xs">
                             {onlyAttended ? 'Никто ещё не отмечен как приехавший' : 'Пока нет зарегистрированных участников'}
@@ -1681,6 +1807,69 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           </div>
         </div>
       </motion.div>
+
+      {/* Аудитория клуба — все участники, кто активен, кто кого привёл */}
+      <AnimatePresence>
+        {showAudience && (
+          <div className="fixed inset-0 z-[80] flex items-end md:items-center justify-center md:p-4">
+            <div className="absolute inset-0 bg-black/90" onClick={() => setShowAudience(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+              className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-3xl relative z-10 border border-white/10 flex flex-col h-[90dvh] md:max-h-[85vh] text-white"
+            >
+              <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between">
+                <div>
+                  <h3 className="font-display font-black text-lg uppercase">Аудитория клуба</h3>
+                  {audience?.summary && (
+                    <p className="text-[11px] text-white/50 font-mono">
+                      всего {audience.summary.total} · костяк {audience.summary.core} · получат рассылку {audience.summary.reachable}
+                      {audience.summary.blocked ? ` · заблокировали ${audience.summary.blocked}` : ''}
+                    </p>
+                  )}
+                </div>
+                <button onClick={() => setShowAudience(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {!audience ? (
+                  <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
+                ) : audience.members?.length === 0 ? (
+                  <p className="text-white/40 text-xs text-center py-8">Пока только ты.</p>
+                ) : (
+                  (audience.members || []).map((m: any) => (
+                    <div key={m.telegramId} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-bold text-sm">{m.firstName || 'Без имени'}</span>
+                            {m.username && <span className="text-[10px] text-white/50 font-mono">@{m.username}</span>}
+                            {m.isCore && <span className="text-[9px] bg-brand/20 text-brand px-1.5 py-0.5 rounded font-mono">костяк</span>}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${m.status === 'approved' ? 'bg-brand/15 text-brand' : m.status === 'blocked' ? 'bg-rose-500/15 text-rose-400' : 'bg-white/10 text-white/50'}`}>
+                              {m.status === 'approved' ? 'в клубе' : m.status === 'pending_review' ? 'на модерации' : m.status === 'blocked' ? 'отклонён' : 'новичок'}
+                            </span>
+                            {m.realTelegram && (
+                              <span className={`text-[9px] font-mono ${m.botActive ? 'text-white/40' : 'text-rose-400'}`}>
+                                {m.botActive ? '🟢 бот активен' : '⛔ заблокировал бота'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-brand font-black text-sm">{m.points} 🏅</p>
+                          <p className="text-[9px] text-white/40 font-mono">был: {m.attendedCount} · привёл: {m.invitedCount}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Edit Modal */}
       <AnimatePresence>
