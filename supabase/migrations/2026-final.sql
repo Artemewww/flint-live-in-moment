@@ -33,13 +33,6 @@ alter table members add column if not exists referred_by bigint;
 alter table members add column if not exists points integer default 0;
 alter table members add column if not exists agreed_pd boolean default false;
 alter table members add column if not exists approved_by bigint;
--- Живость: кто реально получит рассылку. bot_active=false ставится, когда
--- Telegram отвечает 403 «bot was blocked by the user».
-alter table members add column if not exists bot_active boolean default true;
-alter table members add column if not exists last_seen_at timestamptz;
--- Накопленные предпочтения участника (питание, транспорт, роли, снаряжение) —
--- чтобы не спрашивать одно и то же и подбирать подходящие события.
-alter table members add column if not exists prefs jsonb default '{}';
 create unique index if not exists uniq_members_ref_code on members(ref_code);
 
 -- ─────────────────────────────────────────────────────────────

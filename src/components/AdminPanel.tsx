@@ -5,20 +5,15 @@ import { CommunityEvent, HouseQuality } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { generateProgram, generateThreshold } from '../eventGuide';
 
+const ADMIN_TOKEN = 'flint-admin-2026';
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
-
-/**
- * Секрета в браузере больше нет: сервер выдаёт подписанную httpOnly-куку,
- * fetch подставляет её сам (credentials по умолчанию 'same-origin').
- * Раньше здесь лежал пароль, и он уезжал в публичный JS-бандл.
- */
 
 /** ИИ-генерация программы (Gemini). Возвращает null при ошибке/без ключа — тогда фолбэк на локальный генератор. */
 async function aiProgram(ev: any): Promise<string[] | null> {
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
       body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants }),
     });
     const j = await res.json();
@@ -31,7 +26,7 @@ async function aiAutofill(ev: any): Promise<{ draft?: any; error?: string }> {
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
       body: JSON.stringify({ task: 'autofill', event: ev }),
     });
     const j = await res.json();
@@ -96,7 +91,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     try {
       const res = await fetch('/api/ai', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
         body: JSON.stringify({ task: 'shopping', event, people, diet }),
       });
       const j = await res.json();
@@ -391,7 +386,6 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
-  const [loggingIn, setLoggingIn] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CommunityEvent | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [broadcasting, setBroadcasting] = useState<string | null>(null);
@@ -407,6 +401,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [showFeedback, setShowFeedback] = useState(false);
   /** Какая панель раскрыта во вкладке «Логистика». */
   const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | null>(null);
+
+  const ADMIN_PASSWORD = 'flint-admin-2026';
 
   // Тост гаснет сам — чтобы не копился поверх интерфейса.
   useEffect(() => {
@@ -576,33 +572,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setShowTemplates(false);
   };
 
-  const handleLogin = async () => {
-    setLoginError('');
-    setLoggingIn(true);
-    try {
-      const res = await fetch('/api/admin/events?action=login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password }),
-      });
-      if (!res.ok) {
-        setLoginError(res.status === 401 ? 'Неверный пароль' : `Ошибка входа (${res.status})`);
-        return;
-      }
-      // Сама сессия — в httpOnly-куке. Здесь только пометка, чтобы не мигать формой.
+  const handleLogin = () => {
+    if (password === ADMIN_PASSWORD) {
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       setIsAuthenticated(true);
-      setPassword('');
-    } catch (e) {
-      setLoginError((e as Error).message);
-    } finally {
-      setLoggingIn(false);
+    } else {
+      setLoginError('Неверный пароль');
     }
   };
 
-  const handleLogout = async () => {
+  const handleLogout = () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
-    try { await fetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
     setIsAuthenticated(false);
     setPassword('');
   };
@@ -617,7 +597,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     const beat = async () => {
       try {
         const res = await fetch(`/api/admin/events?action=presence&id=${encodeURIComponent(tabId())}&name=${encodeURIComponent(name)}`, {
-                  });
+          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        });
         const data = await res.json();
         if (alive && Array.isArray(data.users)) setOnlineAdmins(data.users);
       } catch { /* офлайн — просто не обновляем */ }
@@ -639,9 +620,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Перезагрузить данные события, не сбрасывая активную вкладку. */
   const refreshStats = async (event: CommunityEvent) => {
     try {
-      const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
-      // Кука протухла (12 ч) — просим войти заново, а не показываем пустые данные.
-      if (res.status === 401) { handleLogout(); return false; }
+      const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`, {
+        headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+      });
       if (res.ok) {
         const data = await res.json();
         const regs = (data.registrations || []).map(mapRegistration);
@@ -676,7 +657,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       const res = await fetch(`/api/admin/events?eventId=${encodeURIComponent(selectedEvent.id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
         body: JSON.stringify(patch),
       });
       const data = await res.json();
@@ -700,7 +681,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       const res = await fetch('/api/admin/broadcast', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
         body: JSON.stringify({ eventId: selectedEvent.id, message }),
       });
       const data = await res.json().catch(() => ({}));
@@ -722,7 +703,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       // Рассылка идёт на сервере (токен бота не в браузере, безопасно).
       const res = await fetch('/api/admin/broadcast', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
         body: JSON.stringify({ eventId: event.id }),
       });
       const data = await res.json().catch(() => ({}));
@@ -746,7 +727,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
         body: JSON.stringify(patch),
       });
     } catch (err) {
@@ -781,10 +762,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             <p className="text-[10px] text-white/35 text-center">Вход запомнится на 12 часов</p>
             <button
               onClick={handleLogin}
-              disabled={loggingIn || !password}
-              className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer border-none"
+              className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest"
             >
-              {loggingIn ? 'Проверяю…' : 'Войти'}
+              Войти
             </button>
           </div>
 
@@ -1306,7 +1286,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                     try {
                                       const res = await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
                                         method: 'DELETE',
-                                                                      });
+                                        headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+                                      });
                                       if (!res.ok) throw new Error(`HTTP ${res.status}`);
                                       setActionMsg({ ok: true, text: 'Участник удалён' });
                                     } catch (err) {

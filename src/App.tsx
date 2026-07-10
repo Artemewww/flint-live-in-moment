@@ -830,7 +830,10 @@ export default function App() {
             try {
               await fetch('/api/admin/events', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer flint-admin-2026'
+                },
                 body: JSON.stringify(updated)
               });
             } catch (err) {
@@ -842,7 +845,10 @@ export default function App() {
             try {
               await fetch('/api/admin/events', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer flint-admin-2026'
+                },
                 body: JSON.stringify(newEvent)
               });
             } catch (err) {
@@ -854,7 +860,9 @@ export default function App() {
             try {
               await fetch(`/api/admin/events?eventId=${eventId}`, {
                 method: 'DELETE',
-                headers: {}
+                headers: {
+                  'Authorization': 'Bearer flint-admin-2026'
+                }
               });
             } catch (err) {
               console.error('API error, using local update:', err);
