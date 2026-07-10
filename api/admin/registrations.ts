@@ -68,6 +68,89 @@ function deny(res: any) {
 export default async function handler(req: any, res: any) {
   if (!isAdmin(req)) return deny(res);
 
+  /**
+   * Аудитория клуба: кто есть, кто активен в боте, кто кого привёл,
+   * сколько событий реально посетил. Основа для статистики результативности.
+   */
+  if (req.method === 'GET' && req.query?.action === 'members') {
+    try {
+      const { data: members } = await supabase
+        .from('members')
+        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at')
+        .order('points', { ascending: false });
+
+      const { data: attended } = await supabase
+        .from('registrations').select('telegram_id').eq('attended', true);
+      const { data: regs } = await supabase
+        .from('registrations').select('telegram_id').neq('status', 'cancelled');
+
+      const countBy = (rows: any[]) => {
+        const m = new Map<string, number>();
+        for (const r of rows || []) {
+          const k = String(r.telegram_id);
+          m.set(k, (m.get(k) || 0) + 1);
+        }
+        return m;
+      };
+      const attendedBy = countBy(attended || []);
+      const regsBy = countBy(regs || []);
+      const invitedBy = countBy((members || []).filter((m: any) => m.referred_by).map((m: any) => ({ telegram_id: m.referred_by })));
+
+      const list = (members || []).map((m: any) => ({
+        telegramId: String(m.telegram_id),
+        username: m.username,
+        firstName: m.first_name,
+        status: m.status || 'pending',
+        isCore: !!m.is_core,
+        role: m.role || 'member',
+        referredBy: m.referred_by ? String(m.referred_by) : null,
+        points: m.points || 0,
+        botActive: m.bot_active !== false,
+        lastSeenAt: m.last_seen_at,
+        // Веб-заявки без Telegram имеют отрицательный хеш вместо id.
+        realTelegram: Number(m.telegram_id) > 0,
+        attendedCount: attendedBy.get(String(m.telegram_id)) || 0,
+        registeredCount: regsBy.get(String(m.telegram_id)) || 0,
+        invitedCount: invitedBy.get(String(m.telegram_id)) || 0,
+      }));
+
+      const reachable = list.filter((m) => m.realTelegram && m.botActive).length;
+      return res.status(200).json({
+        members: list,
+        summary: {
+          total: list.length,
+          approved: list.filter((m) => m.status === 'approved').length,
+          core: list.filter((m) => m.isCore).length,
+          reachable,
+          blocked: list.filter((m) => m.realTelegram && !m.botActive).length,
+        },
+      });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
+  /** Права участника: костяк, статус, роль. */
+  if (req.method === 'PATCH' && req.query?.action === 'member') {
+    try {
+      const telegramId = Number(req.query.telegramId);
+      if (!telegramId) return res.status(400).json({ error: 'Missing telegramId' });
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+
+      const patch: Record<string, unknown> = {};
+      if (body.isCore !== undefined) patch.is_core = !!body.isCore;
+      if (body.status !== undefined) patch.status = body.status;
+      if (body.role !== undefined) patch.role = body.role;
+      if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to update' });
+
+      const { error } = await supabase.from('members').update(patch).eq('telegram_id', telegramId);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ success: true });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   if (req.method === 'GET') {
     // Получить регистрации для события
     try {
