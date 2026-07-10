@@ -182,6 +182,52 @@ async function handleFeedback(body: any, res: any) {
   return res.status(200).json({ ok: true, delivered });
 }
 
+/**
+ * Проверка, что миграция 2026-final.sql применена: тыкаем каждую новую таблицу
+ * и RPC. Читать схему посторонним незачем — поэтому под админ-токеном.
+ * GET /api/events?action=health  (Authorization: Bearer <ADMIN_TOKEN>)
+ */
+async function handleHealth(res: any) {
+  const tables = ['program_votes', 'interests', 'feedback', 'tasks', 'polls', 'poll_votes', 'bot_sessions', 'referrals', 'rides', 'ride_bookings', 'ride_requests'];
+  const out: Record<string, string> = {};
+
+  for (const t of tables) {
+    const { error } = await supabase.from(t).select('*', { count: 'exact', head: true });
+    out[t] = error ? `ОТСУТСТВУЕТ: ${error.message}` : 'ok';
+  }
+
+  // Новые колонки: выборка несуществующей колонки возвращает ошибку.
+  const columnProbes: [string, string][] = [
+    ['events', 'checklist'],
+    ['events', 'deputy_id'],
+    ['events', 'status_reason'],
+    ['events', 'is_public'],
+    ['members', 'agreed_pd'],
+    ['members', 'ref_code'],
+    ['registrations', 'attended'],
+    ['registrations', 'days'],
+    ['registrations', 'reminded_at'],
+  ];
+  for (const [table, column] of columnProbes) {
+    const { error } = await supabase.from(table).select(column).limit(1);
+    out[`${table}.${column}`] = error ? `ОТСУТСТВУЕТ: ${error.message}` : 'ok';
+  }
+
+  // RPC: вызываем с заведомо несуществующей поездкой — интересен только факт,
+  // что функция найдена (тогда вернётся 'gone', а не ошибка «не существует»).
+  const { data: bookRes, error: bookErr } = await supabase.rpc('book_ride_seat', { p_ride_id: -1, p_passenger: -1, p_name: 'probe' });
+  out['rpc:book_ride_seat'] = bookErr ? `ОТСУТСТВУЕТ: ${bookErr.message}` : `ok (вернул «${bookRes}»)`;
+
+  const { error: cancelErr } = await supabase.rpc('cancel_ride_seat', { p_ride_id: -1, p_passenger: -1 });
+  out['rpc:cancel_ride_seat'] = cancelErr ? `ОТСУТСТВУЕТ: ${cancelErr.message}` : 'ok';
+
+  const { error: pointsErr } = await supabase.rpc('award_points', { tg: -1, n: 0 });
+  out['rpc:award_points'] = pointsErr ? `ОТСУТСТВУЕТ: ${pointsErr.message}` : 'ok';
+
+  const broken = Object.entries(out).filter(([, v]) => v !== 'ok' && !v.startsWith('ok'));
+  return res.status(200).json({ migrationApplied: broken.length === 0, checks: out });
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -189,6 +235,10 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'OPTIONS') return res.status(204).end();
 
   if (req.method === 'GET') {
+    if (req.query?.action === 'health') {
+      if (!checkAdminAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
+      return await handleHealth(res);
+    }
     try {
       const { data: events, error } = await supabase
         .from('events')
