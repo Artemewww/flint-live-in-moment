@@ -8,11 +8,29 @@ import { GoogleGenAI, Type } from '@google/genai';
  */
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
-const MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+// Список моделей с фолбэком: если заданная/первая недоступна на ключе — пробуем следующую.
+const MODELS = [process.env.GEMINI_MODEL, 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-flash-latest', 'gemini-1.5-flash'].filter(Boolean) as string[];
 
 function checkAdminAuth(req: any): boolean {
   const token = String(req.headers.authorization || '').replace('Bearer ', '');
   return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
+}
+
+/** Вызов Gemini с JSON-схемой и перебором моделей. Бросает последнюю ошибку, если все упали. */
+async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
+  let lastErr: any = null;
+  for (const model of MODELS) {
+    try {
+      const resp = await ai.models.generateContent({
+        model, contents: prompt,
+        config: { responseMimeType: 'application/json', responseSchema: schema },
+      });
+      return JSON.parse(resp.text || '{}');
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  throw lastErr || new Error('Все модели недоступны');
 }
 
 const TYPE_RU: Record<string, string> = {
@@ -49,24 +67,17 @@ export default async function handler(req: any, res: any) {
         `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
         `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
         `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье).`;
-      const resp = await ai.models.generateContent({
-        model: MODEL, contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING },
-              description: { type: Type.STRING },
-              painPoint: { type: Type.STRING },
-              program: { type: Type.ARRAY, items: { type: Type.STRING } },
-              entryThreshold: { type: Type.STRING },
-              houseQualities: { type: Type.ARRAY, items: { type: Type.STRING } },
-            },
-          },
+      const p = await genJSON(ai, prompt, {
+        type: Type.OBJECT,
+        properties: {
+          type: { type: Type.STRING },
+          description: { type: Type.STRING },
+          painPoint: { type: Type.STRING },
+          program: { type: Type.ARRAY, items: { type: Type.STRING } },
+          entryThreshold: { type: Type.STRING },
+          houseQualities: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
       });
-      const p = JSON.parse(resp.text || '{}');
       const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
       const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
       return res.status(200).json({
@@ -90,22 +101,15 @@ export default async function handler(req: any, res: any) {
         `Правила: здоровое питание, БЕЗ алкоголя и вредного; учитывай веганов/вегетарианцев/детей; ` +
         `количества — реалистичные на указанное число людей; цены ориентировочные по рынку Минска в BYN. ` +
         `Верни JSON: массив items с полями item (продукт), qty (количество, напр. «3 кг»), note (примечание/примерная цена).`;
-      const resp = await ai.models.generateContent({
-        model: MODEL, contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              items: {
-                type: Type.ARRAY,
-                items: { type: Type.OBJECT, properties: { item: { type: Type.STRING }, qty: { type: Type.STRING }, note: { type: Type.STRING } } },
-              },
-            },
+      const parsed = await genJSON(ai, prompt, {
+        type: Type.OBJECT,
+        properties: {
+          items: {
+            type: Type.ARRAY,
+            items: { type: Type.OBJECT, properties: { item: { type: Type.STRING }, qty: { type: Type.STRING }, note: { type: Type.STRING } } },
           },
         },
       });
-      const parsed = JSON.parse(resp.text || '{}');
       return res.status(200).json({ items: parsed.items || [] });
     }
 
@@ -116,14 +120,7 @@ export default async function handler(req: any, res: any) {
       `Название: «${ev.title || 'Событие'}». Тип: ${typeRu}. Длительность: ${days}. Ожидается людей: ${people}.\n` +
       (ev.painPoint ? `Смысл/запрос: ${ev.painPoint}.\n` : '') +
       `Верни JSON: массив program из 5–9 пунктов (каждый — короткая строка шага программы, можно со временем).`;
-    const resp = await ai.models.generateContent({
-      model: MODEL, contents: prompt,
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: { type: Type.OBJECT, properties: { program: { type: Type.ARRAY, items: { type: Type.STRING } } } },
-      },
-    });
-    const parsed = JSON.parse(resp.text || '{}');
+    const parsed = await genJSON(ai, prompt, { type: Type.OBJECT, properties: { program: { type: Type.ARRAY, items: { type: Type.STRING } } } });
     return res.status(200).json({ program: parsed.program || [] });
   } catch (err) {
     return res.status(200).json({ error: (err as Error).message });

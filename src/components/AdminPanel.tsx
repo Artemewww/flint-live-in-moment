@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity } from 'lucide-react';
+import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote } from 'lucide-react';
 import { CommunityEvent, HouseQuality } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { generateProgram, generateThreshold } from '../eventGuide';
@@ -21,8 +21,8 @@ async function aiProgram(ev: any): Promise<string[] | null> {
   } catch { return null; }
 }
 
-/** ИИ-автозаполнение всего события по названию (Gemini). null при ошибке/без ключа. */
-async function aiAutofill(ev: any): Promise<any | null> {
+/** ИИ-автозаполнение всего события по названию (Gemini). Возвращает {draft?, error?}. */
+async function aiAutofill(ev: any): Promise<{ draft?: any; error?: string }> {
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
@@ -30,8 +30,9 @@ async function aiAutofill(ev: any): Promise<any | null> {
       body: JSON.stringify({ task: 'autofill', event: ev }),
     });
     const j = await res.json();
-    return j.draft || null;
-  } catch { return null; }
+    if (j.draft) return { draft: j.draft };
+    return { error: j.error || `HTTP ${res.status}` };
+  } catch (e) { return { error: (e as Error).message }; }
 }
 
 /** Редактор списка (программа / порог входа): генерация, правка, ↑↓, удаление, добавление. */
@@ -283,20 +284,53 @@ function mapRegistration(r: any) {
     category: r.category || '',
     dietary: r.dietary || '',
     guestCount: r.guest_count || 0,
+    childrenCount: r.children_count || 0,
+    foodOptout: r.food_optout || false,
+    attended: r.attended || false,
+    equipment: r.equipment || [],
+    roles: r.roles || [],
+    days: r.days || [],
+    source: r.source || '',
   };
 }
 
 // Считаем статистику по заявкам единообразно на клиенте.
-function buildStats(regs: any[]) {
+function buildStats(regs: any[], extra: Record<string, any> = {}) {
   return {
     total: regs.length,
     confirmed: regs.filter((r) => r.status === 'confirmed').length,
     pending: regs.filter((r) => r.status === 'pending').length,
     payments: regs.filter((r) => r.paymentStatus === 'paid').length,
+    attended: regs.filter((r) => r.attended).length,
     totalAmount: regs.reduce((s, r) => s + (r.paymentAmount || 0), 0),
     registrations: regs,
+    rides: [] as any[],
+    rideRequests: [] as any[],
+    feedback: [] as any[],
+    interestCount: 0,
+    voteTally: {} as Record<string, number>,
+    ...extra,
   };
 }
+
+/** Средняя оценка по отзывам, одна цифра после запятой. */
+function avgRating(feedback: any[]): string {
+  if (!feedback.length) return '—';
+  return (feedback.reduce((s, f) => s + (f.rating || 0), 0) / feedback.length).toFixed(1);
+}
+
+/** Пункты чек-листа готовности. Ключи уходят в events.checklist как есть. */
+const CHECKLIST_ITEMS: { key: string; label: string }[] = [
+  { key: 'voting', label: 'Голосование за программу завершено' },
+  { key: 'program', label: 'Программа согласована и разослана' },
+  { key: 'menu', label: 'Меню питания утверждено' },
+  { key: 'buyer', label: 'Закупщик найден или закупка распределена' },
+  { key: 'bought', label: 'Закупка выполнена и подтверждена' },
+  { key: 'coords', label: 'Координаты лагеря разосланы участникам' },
+  { key: 'started', label: 'Мероприятие стартовало' },
+  { key: 'finished', label: 'Мероприятие завершено' },
+  { key: 'feedback', label: 'Отзывы собраны' },
+];
 
 interface AdminPanelProps {
   events: CommunityEvent[];
@@ -335,8 +369,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [eventStats, setEventStats] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'participants' | 'logistics' | 'settings'>('overview');
   const [showTemplates, setShowTemplates] = useState(false);
+  /** Тост результата последнего действия админа (сохранение, рассылка). */
+  const [actionMsg, setActionMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  /** Вкладка «Участники»: показывать всех или только тех, кто реально приехал. */
+  const [onlyAttended, setOnlyAttended] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  /** Какая панель раскрыта во вкладке «Логистика». */
+  const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | null>(null);
 
   const ADMIN_PASSWORD = 'flint-admin-2026';
+
+  // Тост гаснет сам — чтобы не копился поверх интерфейса.
+  useEffect(() => {
+    if (!actionMsg) return;
+    const t = setTimeout(() => setActionMsg(null), 4000);
+    return () => clearTimeout(t);
+  }, [actionMsg]);
 
   // Шаблоны мероприятий
   const eventTemplates = [
@@ -516,41 +564,83 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     onUpdateEvent({ ...event, participantsCount: count });
   };
 
-  const loadEventStats = async (event: CommunityEvent) => {
-    setSelectedEvent(event);
-    
+  /** Перезагрузить данные события, не сбрасывая активную вкладку. */
+  const refreshStats = async (event: CommunityEvent) => {
     try {
-      // Загружаем заявки из API (Supabase)
       const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`, {
         headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
       });
-
       if (res.ok) {
         const data = await res.json();
         const regs = (data.registrations || []).map(mapRegistration);
-        setEventStats(buildStats(regs));
-        setActiveTab('overview');
-        return;
+        setEventStats(buildStats(regs, {
+          rides: data.rides || [],
+          rideRequests: data.rideRequests || [],
+          feedback: data.feedback || [],
+          interestCount: data.interestCount || 0,
+          voteTally: data.voteTally || {},
+        }));
+        return true;
       }
     } catch (err) {
-      console.error('Failed to load from API, using localStorage:', err);
+      console.error('Не удалось загрузить данные события:', err);
     }
-    
-    // Fallback на localStorage
-    const registrations = JSON.parse(localStorage.getItem('event_registrations') || '[]');
-    const eventRegs = registrations.filter((r: any) => r.eventId === event.id);
-    
-    const stats = {
-      total: eventRegs.length,
-      confirmed: eventRegs.filter((r: any) => r.status === 'confirmed').length,
-      pending: eventRegs.filter((r: any) => r.status === 'pending').length,
-      payments: eventRegs.filter((r: any) => r.paymentStatus === 'paid').length,
-      totalAmount: eventRegs.reduce((sum: number, r: any) => sum + (r.paymentAmount || 0), 0),
-      registrations: eventRegs
-    };
-    
-    setEventStats(stats);
+    return false;
+  };
+
+  const loadEventStats = async (event: CommunityEvent) => {
+    setSelectedEvent(event);
+    const ok = await refreshStats(event);
+    if (!ok) setEventStats(buildStats([]));
     setActiveTab('overview');
+  };
+
+  /**
+   * Точечное обновление события (жизненный цикл, чек-лист, публичность).
+   * PATCH не перезаписывает поля, которых нет в теле, — в отличие от POST-upsert.
+   */
+  const patchEvent = async (patch: Record<string, unknown>) => {
+    if (!selectedEvent) return;
+    try {
+      const res = await fetch(`/api/admin/events?eventId=${encodeURIComponent(selectedEvent.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        setActionMsg({ ok: false, text: data.details || data.error || 'Не удалось сохранить' });
+        return;
+      }
+      const merged = { ...selectedEvent, ...(patch as any) } as CommunityEvent;
+      setSelectedEvent(merged);
+      onUpdateEvent(merged);
+      setActionMsg({ ok: true, text: 'Сохранено' });
+    } catch (err) {
+      setActionMsg({ ok: false, text: (err as Error).message });
+    }
+  };
+
+  /** Отправить участникам произвольный текст в Telegram (через серверную рассылку). */
+  const sendMessageToAll = async (message: string) => {
+    if (!selectedEvent) return;
+    setBroadcasting(selectedEvent.id);
+    try {
+      const res = await fetch('/api/admin/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ADMIN_TOKEN}` },
+        body: JSON.stringify({ eventId: selectedEvent.id, message }),
+      });
+      const data = await res.json().catch(() => ({}));
+      setActionMsg({
+        ok: !!data.ok,
+        text: data.ok ? `Отправлено ${data.sent}/${data.total}` : (data.message || data.error || 'Некому слать'),
+      });
+    } catch (err) {
+      setActionMsg({ ok: false, text: (err as Error).message });
+    } finally {
+      setBroadcasting(null);
+    }
   };
 
   const broadcastEvent = async (event: CommunityEvent) => {
@@ -579,7 +669,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
-  // Обновить статус/оплату участника и обновить список.
+  // Обновить статус/оплату/явку участника и перечитать список.
   const patchRegistration = async (reg: any, patch: Record<string, unknown>) => {
     try {
       await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
@@ -588,9 +678,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         body: JSON.stringify(patch),
       });
     } catch (err) {
-      console.error('Ошибка обновления участника:', err);
+      setActionMsg({ ok: false, text: 'Ошибка обновления участника' });
     }
-    if (selectedEvent) loadEventStats(selectedEvent);
+    if (selectedEvent) await refreshStats(selectedEvent);
   };
 
   if (!isAuthenticated) {
@@ -655,6 +745,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Результат последнего действия — иначе кнопки «молчат» и непонятно, сработали ли */}
+        {actionMsg && (
+          <div className={`px-6 py-2 text-xs flex items-center gap-2 border-b ${actionMsg.ok ? 'bg-brand/10 text-brand border-brand/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
+            {actionMsg.ok ? <CheckCircle className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
+            <span>{actionMsg.text}</span>
+          </div>
+        )}
 
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* Events List Sidebar */}
@@ -875,66 +973,146 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </div>
                     </div>
 
-                    {/* Checklist */}
+                    {/* Спрос и голоса — то, что раньше молча терялось в console.log */}
+                    {(eventStats.interestCount > 0 || Object.keys(eventStats.voteTally || {}).length > 0) && (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {eventStats.interestCount > 0 && (
+                          <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Heart className="w-4 h-4 text-brand" />
+                              <span className="text-[10px] text-white/60 uppercase font-mono">Мне интересно</span>
+                            </div>
+                            <p className="text-2xl font-black">{eventStats.interestCount}</p>
+                            <p className="text-xs text-white/40">сигналов спроса</p>
+                          </div>
+                        )}
+                        {Object.keys(eventStats.voteTally || {}).length > 0 && (
+                          <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Vote className="w-4 h-4 text-brand" />
+                              <span className="text-[10px] text-white/60 uppercase font-mono">Голоса за программу</span>
+                            </div>
+                            <div className="space-y-1 mt-2">
+                              {Object.entries(eventStats.voteTally as Record<string, number>)
+                                .sort((a, b) => b[1] - a[1])
+                                .map(([opt, n]) => (
+                                  <div key={opt} className="flex justify-between gap-2 text-xs">
+                                    <span className="text-white/80 truncate">{opt}</span>
+                                    <span className="text-brand font-mono shrink-0">{n}</span>
+                                  </div>
+                                ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Checklist — состояние живёт в events.checklist */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                       <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
                         <CheckSquare className="w-4 h-4 text-brand" />
                         Готовность мероприятия
+                        <span className="text-[10px] text-white/40 font-mono normal-case ml-auto">
+                          {CHECKLIST_ITEMS.filter((i) => selectedEvent.checklist?.[i.key]).length}/{CHECKLIST_ITEMS.length}
+                        </span>
                       </h4>
-                      <div className="space-y-2">
-                        {[
-                          'Голосование за программу завершено',
-                          'Программа согласована и разослана',
-                          'Меню питания утверждено',
-                          'Закупщик найден или закупка распределена',
-                          'Закупка выполнена и подтверждена',
-                          'Координаты лагеря разосланы участникам',
-                          'Мероприятие стартовало',
-                          'Мероприятие завершено',
-                          'Отзывы собраны'
-                        ].map((item, idx) => (
-                          <div key={idx} className="flex items-center gap-2 text-xs">
-                            <Square className="w-4 h-4 text-white/30" />
-                            <span className="text-white/60">{item}</span>
-                          </div>
-                        ))}
+                      <div className="space-y-1">
+                        {CHECKLIST_ITEMS.map((item) => {
+                          const done = !!selectedEvent.checklist?.[item.key];
+                          return (
+                            <button
+                              key={item.key}
+                              type="button"
+                              onClick={() => patchEvent({ checklist: { ...(selectedEvent.checklist || {}), [item.key]: !done } })}
+                              className="flex items-center gap-2 text-xs w-full text-left p-1.5 rounded-lg hover:bg-white/5 cursor-pointer bg-transparent border-none transition-colors"
+                            >
+                              {done
+                                ? <CheckSquare className="w-4 h-4 text-brand shrink-0" />
+                                : <Square className="w-4 h-4 text-white/30 shrink-0" />}
+                              <span className={done ? 'text-white/90' : 'text-white/60'}>{item.label}</span>
+                            </button>
+                          );
+                        })}
                       </div>
                     </div>
-
-                    {selectedEvent.type !== 'intellectual' && (
-                      <ShoppingGenerator event={selectedEvent} registrations={eventStats.registrations || []} />
-                    )}
                   </div>
                 )}
 
                 {activeTab === 'participants' && eventStats && (
                   <div className="space-y-4">
-                    <div className="flex gap-2 mb-4">
-                      <button className="bg-brand/20 text-brand px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1">
+                    <div className="flex flex-wrap gap-2 mb-4">
+                      <button
+                        onClick={() => setOnlyAttended(!onlyAttended)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer border-none transition-all ${onlyAttended ? 'bg-brand/20 text-brand' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                        title="Показать только тех, кто отмечен как приехавший"
+                      >
                         <UserCheck className="w-3 h-3" />
-                        Кто приехал
+                        Кто приехал ({eventStats.attended})
                       </button>
-                      <button className="bg-white/5 text-white/60 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-white/10">
+                      <button
+                        onClick={() => setShowFeedback(!showFeedback)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 cursor-pointer border-none transition-all ${showFeedback ? 'bg-brand/20 text-brand' : 'bg-white/5 text-white/60 hover:bg-white/10'}`}
+                      >
                         <Star className="w-3 h-3" />
-                        Отзывы
+                        Отзывы ({eventStats.feedback.length}) · {avgRating(eventStats.feedback)}
                       </button>
-                      <button className="bg-white/5 text-white/60 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-white/10">
+                      <button
+                        onClick={async () => {
+                          const toMark = eventStats.registrations.filter((r: any) => r.status === 'confirmed' && !r.attended);
+                          if (!toMark.length) { setActionMsg({ ok: false, text: 'Нет подтверждённых без отметки явки' }); return; }
+                          if (!window.confirm(`Отметить явку у ${toMark.length} подтверждённых участников? Каждому начислятся баллы.`)) return;
+                          for (const r of toMark) await patchRegistration(r, { attended: true });
+                          setActionMsg({ ok: true, text: `Явка отмечена: ${toMark.length}` });
+                        }}
+                        className="bg-white/5 text-white/60 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1 hover:bg-white/10 cursor-pointer border-none"
+                        title="Отметить явку всем подтверждённым разом"
+                      >
                         <CheckSquare className="w-3 h-3" />
-                        Подтвердить явку
+                        Подтвердить явку всем
                       </button>
                     </div>
 
+                    {showFeedback && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                        <h4 className="text-xs font-bold uppercase flex items-center gap-2">
+                          <Star className="w-4 h-4 text-brand" />
+                          Отзывы · средняя оценка {avgRating(eventStats.feedback)}
+                        </h4>
+                        {eventStats.feedback.length === 0 ? (
+                          <p className="text-[10px] text-white/40">Отзывов пока нет. Бот попросит их на следующий день после события.</p>
+                        ) : (
+                          eventStats.feedback.map((f: any) => (
+                            <div key={f.id} className="bg-white/5 rounded-lg p-3">
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-brand text-xs">{'★'.repeat(f.rating || 0)}</span>
+                                <span className={`text-[9px] font-mono ${f.would_return ? 'text-brand' : 'text-rose-400'}`}>
+                                  {f.would_return ? 'придёт снова' : 'не придёт'}
+                                </span>
+                              </div>
+                              {f.comment && <p className="text-[11px] text-white/70 leading-relaxed">{f.comment}</p>}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    )}
+
                     <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
                       <div className="p-3 border-b border-white/10">
-                        <h4 className="text-xs font-bold uppercase">Список участников ({eventStats.total})</h4>
+                        <h4 className="text-xs font-bold uppercase">
+                          Список участников ({onlyAttended ? eventStats.attended : eventStats.total})
+                        </h4>
                       </div>
                       <div className="max-h-96 overflow-y-auto">
-                        {eventStats.registrations.length === 0 ? (
+                        {(() => {
+                          const visible = onlyAttended
+                            ? eventStats.registrations.filter((r: any) => r.attended)
+                            : eventStats.registrations;
+                          return visible.length === 0 ? (
                           <div className="p-6 text-center text-white/40 text-xs">
-                            Пока нет зарегистрированных участников
+                            {onlyAttended ? 'Никто ещё не отмечен как приехавший' : 'Пока нет зарегистрированных участников'}
                           </div>
                         ) : (
-                          eventStats.registrations.map((reg: any, idx: number) => (
+                          visible.map((reg: any, idx: number) => (
                             <div key={idx} className="p-3 border-b border-white/5 hover:bg-white/5">
                               <div className="flex items-center justify-between mb-2">
                                 <div className="flex-1">
@@ -994,41 +1172,56 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                 </div>
                               </div>
 
+                              {/* Что человек берёт и чем помогает — из чек-листов бота */}
+                              {(reg.equipment.length > 0 || reg.roles.length > 0 || reg.guestCount > 0 || reg.childrenCount > 0 || reg.foodOptout) && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  {reg.guestCount > 0 && <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">+{reg.guestCount} гост.</span>}
+                                  {reg.childrenCount > 0 && <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">+{reg.childrenCount} дет.</span>}
+                                  {reg.foodOptout && <span className="text-[9px] bg-amber-500/15 text-amber-300 px-1.5 py-0.5 rounded">своя еда</span>}
+                                  {reg.dietary && reg.dietary !== 'all' && <span className="text-[9px] bg-emerald-500/15 text-emerald-300 px-1.5 py-0.5 rounded">{reg.dietary}</span>}
+                                  {reg.roles.map((r: string) => <span key={r} className="text-[9px] bg-brand/15 text-brand px-1.5 py-0.5 rounded">{r}</span>)}
+                                  {reg.equipment.map((e: string) => <span key={e} className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">{e}</span>)}
+                                </div>
+                              )}
+
                               <div className="flex gap-1 mt-2">
                                 <button
                                   onClick={() => patchRegistration(reg, { status: reg.status === 'confirmed' ? 'pending' : 'confirmed' })}
-                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${reg.status === 'confirmed' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer border-none ${reg.status === 'confirmed' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
                                   title="Подтвердить участие"
                                 >
                                   {reg.status === 'confirmed' ? '✓ Подтверждён' : 'Подтвердить'}
                                 </button>
                                 <button
                                   onClick={() => patchRegistration(reg, { paymentStatus: reg.paymentStatus === 'paid' ? 'pending' : 'paid' })}
-                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${reg.paymentStatus === 'paid' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer border-none ${reg.paymentStatus === 'paid' ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
                                   title="Отметить оплату"
                                 >
                                   {reg.paymentStatus === 'paid' ? '✓ Оплачено' : 'Оплата'}
                                 </button>
                                 <button
+                                  onClick={() => patchRegistration(reg, { attended: !reg.attended })}
+                                  className={`flex-1 p-1.5 rounded-lg text-[9px] font-bold uppercase transition-all cursor-pointer border-none ${reg.attended ? 'bg-brand/20 text-brand' : 'bg-white/5 hover:bg-white/10 text-white/60 hover:text-white'}`}
+                                  title="Отметить, что человек реально приехал. За это начисляются баллы."
+                                >
+                                  {reg.attended ? '✓ Был' : 'Явка'}
+                                </button>
+                                <button
                                   onClick={async () => {
-                                    if (confirm(`Удалить участника ${reg.name}?`)) {
-                                      // Пробуем удалить через API
-                                      try {
-                                        await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
-                                          method: 'DELETE',
-                                          headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
-                                        });
-                                      } catch (err) {
-                                        console.error('API delete failed, using localStorage:', err);
-                                        // Fallback на localStorage
-                                        const regs = JSON.parse(localStorage.getItem('event_registrations') || '[]');
-                                        const updated = regs.filter((r: any) => r.id !== reg.id);
-                                        localStorage.setItem('event_registrations', JSON.stringify(updated));
-                                      }
-                                      loadEventStats(selectedEvent);
+                                    if (!window.confirm(`Удалить участника ${reg.name}? Действие необратимо.`)) return;
+                                    try {
+                                      const res = await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+                                        method: 'DELETE',
+                                        headers: { 'Authorization': `Bearer ${ADMIN_TOKEN}` }
+                                      });
+                                      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                      setActionMsg({ ok: true, text: 'Участник удалён' });
+                                    } catch (err) {
+                                      setActionMsg({ ok: false, text: `Не удалось удалить: ${(err as Error).message}` });
                                     }
+                                    await refreshStats(selectedEvent);
                                   }}
-                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400"
+                                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 cursor-pointer border-none"
                                   title="Принудительно удалить"
                                 >
                                   <UserMinus className="w-3 h-3" />
@@ -1036,7 +1229,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               </div>
                             </div>
                           ))
-                        )}
+                        );
+                        })()}
                       </div>
                     </div>
                   </div>
@@ -1045,158 +1239,347 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 {activeTab === 'logistics' && eventStats && (
                   <div className="space-y-4">
                     <div className="grid grid-cols-2 gap-3">
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
+                      <button
+                        onClick={() => setLogiPanel(logiPanel === 'shopping' ? null : 'shopping')}
+                        className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'shopping' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
                         <ShoppingCart className="w-6 h-6 text-brand mb-2" />
                         <p className="text-xs font-bold uppercase">Список закупки</p>
-                        <p className="text-[10px] text-white/40 mt-1">Управление закупками</p>
+                        <p className="text-[10px] text-white/40 mt-1">ИИ считает под состав</p>
                       </button>
 
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
+                      <button
+                        onClick={() => setLogiPanel(logiPanel === 'cooking' ? null : 'cooking')}
+                        className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'cooking' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
                         <ChefHat className="w-6 h-6 text-brand mb-2" />
-                        <p className="text-xs font-bold uppercase">Распределить готовку</p>
-                        <p className="text-[10px] text-white/40 mt-1">Назначить ответственных</p>
+                        <p className="text-xs font-bold uppercase">Кто на ролях</p>
+                        <p className="text-[10px] text-white/40 mt-1">Готовка, костёр, аптечка</p>
                       </button>
 
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
-                        <Tent className="w-6 h-6 text-brand mb-2" />
-                        <p className="text-xs font-bold uppercase">Первый заезд</p>
-                        <p className="text-[10px] text-white/40 mt-1">Подготовка лагеря</p>
-                      </button>
-
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
-                        <Navigation className="w-6 h-6 text-brand mb-2" />
-                        <p className="text-xs font-bold uppercase">Авто-выдача точек</p>
-                        <p className="text-[10px] text-white/40 mt-1">ВКЛ / ВЫКЛ</p>
-                      </button>
-
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
-                        <MapPin className="w-6 h-6 text-brand mb-2" />
-                        <p className="text-xs font-bold uppercase">Координаты</p>
-                        <p className="text-[10px] text-white/40 mt-1">Отправить участникам</p>
-                      </button>
-
-                      <button className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all">
+                      <button
+                        onClick={() => setLogiPanel(logiPanel === 'gear' ? null : 'gear')}
+                        className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'gear' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
                         <Package className="w-6 h-6 text-brand mb-2" />
                         <p className="text-xs font-bold uppercase">Общее снаряжение</p>
-                        <p className="text-[10px] text-white/40 mt-1">Список и статус</p>
+                        <p className="text-[10px] text-white/40 mt-1">Кто что везёт</p>
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          const coords = selectedEvent.coordinates;
+                          const detail = selectedEvent.locationDetails || selectedEvent.location;
+                          const mapLink = coords?.lat
+                            ? `\n🗺 https://yandex.ru/maps/?pt=${coords.lng},${coords.lat}&z=16&l=map`
+                            : '';
+                          const text = `📍 <b>Точка сбора: ${selectedEvent.title}</b>\n\n${detail}${mapLink}`;
+                          if (!window.confirm('Разослать координаты всем участникам события в Telegram?')) return;
+                          await sendMessageToAll(text);
+                          await patchEvent({ checklist: { ...(selectedEvent.checklist || {}), coords: true } });
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <MapPin className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Отправить координаты</p>
+                        <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
                       </button>
                     </div>
 
-                    {/* Транспортный план */}
+                    {logiPanel === 'shopping' && selectedEvent.type !== 'intellectual' && (
+                      <ShoppingGenerator event={selectedEvent} registrations={eventStats.registrations || []} />
+                    )}
+                    {logiPanel === 'shopping' && selectedEvent.type === 'intellectual' && (
+                      <p className="text-[11px] text-white/40 bg-white/5 border border-white/10 rounded-xl p-4">
+                        Для интеллектуальных событий закупка не нужна.
+                      </p>
+                    )}
+
+                    {logiPanel === 'cooking' && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                        <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                          <ChefHat className="w-4 h-4 text-brand" /> Роли участников
+                        </h4>
+                        {(() => {
+                          const byRole: Record<string, string[]> = {};
+                          for (const r of eventStats.registrations) {
+                            for (const role of r.roles || []) (byRole[role] ||= []).push(r.name);
+                          }
+                          const roles = Object.keys(byRole);
+                          if (!roles.length) return <p className="text-[10px] text-white/40">Никто ещё не выбрал роль в боте («📋 Организация» → «Чем буду полезен»).</p>;
+                          return (
+                            <div className="space-y-2">
+                              {roles.map((role) => (
+                                <div key={role} className="bg-white/5 rounded-lg p-2">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-bold">{role}</span>
+                                    <span className="text-[10px] text-brand font-mono">{byRole[role].length} чел.</span>
+                                  </div>
+                                  <p className="text-[10px] text-white/60">{byRole[role].join(', ')}</p>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {logiPanel === 'gear' && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                        <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                          <Package className="w-4 h-4 text-brand" /> Общее снаряжение
+                        </h4>
+                        {(() => {
+                          // Снаряжение из чек-листа бота + легаси-поле inventory.
+                          const all = eventStats.registrations.flatMap((r: any) => [...(r.equipment || []), ...(r.inventory || [])]);
+                          if (!all.length) return <p className="text-[10px] text-white/40">Пока никто не отметил снаряжение.</p>;
+                          const counts = new Map<string, number>();
+                          for (const item of all) counts.set(item, (counts.get(item) || 0) + 1);
+                          return (
+                            <div className="space-y-1">
+                              {[...counts.entries()].sort((a, b) => b[1] - a[1]).map(([item, n]) => (
+                                <div key={item} className="bg-white/5 rounded-lg p-2 flex items-center justify-between">
+                                  <span className="text-xs">{item}</span>
+                                  <span className="text-[10px] text-brand font-mono">{n} шт.</span>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    )}
+
+                    {/* Транспортный план — из таблицы rides, а не из анкеты */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4">
                       <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
                         <Truck className="w-4 h-4 text-brand" />
-                        Транспортный план
+                        Кто едет ({eventStats.rides.length} машин)
                       </h4>
                       <div className="space-y-2">
-                        {eventStats.registrations.filter((r: any) => r.hasTransport).length === 0 ? (
-                          <p className="text-[10px] text-white/40">Пока нет участников с транспортом</p>
+                        {eventStats.rides.length === 0 ? (
+                          <p className="text-[10px] text-white/40">
+                            Никто ещё не заявил машину. Участники делают это сами в боте: «🚗 Логистика и брони».
+                          </p>
                         ) : (
-                          eventStats.registrations
-                            .filter((r: any) => r.hasTransport)
-                            .map((reg: any, idx: number) => (
-                              <div key={idx} className="bg-white/5 rounded-lg p-3 flex items-center justify-between">
-                                <div>
-                                  <p className="text-xs font-bold">{reg.name || 'Гость'}</p>
-                                  <p className="text-[10px] text-white/60">{reg.transportDetails || 'Автомобиль'}</p>
+                          eventStats.rides.map((ride: any) => {
+                            const free = Math.max(0, (ride.seats_total || 0) - (ride.seats_taken || 0));
+                            return (
+                              <div key={ride.id} className="bg-white/5 rounded-lg p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold">🚗 {ride.driver_name || 'Водитель'}</p>
+                                    <p className="text-[10px] text-white/60">
+                                      {ride.from_point || '—'} · {ride.depart_text || '—'}
+                                    </p>
+                                    <p className="text-[10px] text-white/40">
+                                      {ride.fuel_cost ? `⛽ ${ride.fuel_cost} ₽/чел` : '⛽ бесплатно'}
+                                    </p>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <p className="text-xs font-bold text-brand">{free} своб.</p>
+                                    <p className="text-[9px] text-white/40">из {ride.seats_total || 0}</p>
+                                  </div>
                                 </div>
-                                <div className="text-right">
-                                  <p className="text-xs font-bold text-brand">{reg.transportSeats || 0} мест</p>
-                                  <p className="text-[9px] text-white/40">Свободно: {Math.max(0, (reg.transportSeats || 0) - 1)}</p>
-                                </div>
+                                {ride.passengers?.length > 0 && (
+                                  <p className="text-[10px] text-white/60 mt-2 pt-2 border-t border-white/5">
+                                    Пассажиры: {ride.passengers.map((p: any) => p.passenger_name).join(', ')}
+                                  </p>
+                                )}
                               </div>
-                            ))
+                            );
+                          })
                         )}
                       </div>
                     </div>
 
-                    {/* Общий инвентарь */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4">
-                      <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
-                        <Package className="w-4 h-4 text-brand" />
-                        Общий инвентарь участников
-                      </h4>
-                      <div className="space-y-2">
-                        {(() => {
-                          const allInventory = eventStats.registrations
-                            .filter((r: any) => r.inventory && r.inventory.length > 0)
-                            .flatMap((r: any) => r.inventory);
-                          
-                          if (allInventory.length === 0) {
-                            return <p className="text-[10px] text-white/40">Пока нет заявленного инвентаря</p>;
-                          }
-
-                          const uniqueItems = Array.from(new Set(allInventory)) as string[];
-                          return uniqueItems.map((item, idx: number) => (
-                            <div key={idx} className="bg-white/5 rounded-lg p-2 flex items-center justify-between">
-                              <span className="text-xs">{item}</span>
-                              <span className="text-[10px] text-brand font-mono">
-                                {allInventory.filter((i: string) => i === item).length} шт.
-                              </span>
+                    {/* SOS: кому нужна попутка */}
+                    {eventStats.rideRequests.length > 0 && (
+                      <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+                        <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2 text-amber-300">
+                          <Navigation className="w-4 h-4" />
+                          Ищут попутку ({eventStats.rideRequests.length})
+                        </h4>
+                        <div className="space-y-1">
+                          {eventStats.rideRequests.map((r: any) => (
+                            <div key={r.id} className="text-xs text-white/80">
+                              🚶 {r.passenger_name}{r.from_area ? ` — ${r.from_area}` : ''}
                             </div>
-                          ));
-                        })()}
+                          ))}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 )}
 
                 {activeTab === 'settings' && (
                   <div className="space-y-4">
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <h4 className="text-xs font-bold uppercase mb-3">Управление мероприятием</h4>
-                      
+                      <h4 className="text-xs font-bold uppercase mb-1">Управление мероприятием</h4>
+                      <p className="text-[10px] text-white/40 mb-2">
+                        Сейчас: <span className="text-brand font-mono">
+                          {selectedEvent.status === 'open' ? 'набор открыт' : selectedEvent.status === 'closed' ? 'завершено' : 'набор закрыт'}
+                        </span>
+                      </p>
+
                       <div className="grid grid-cols-2 gap-2">
-                        <button className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => patchEvent({ status: 'open', statusReason: null })}
+                          disabled={selectedEvent.status === 'open'}
+                          className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none disabled:opacity-40 disabled:cursor-default"
+                          title="Открыть набор участников"
+                        >
                           <Play className="w-4 h-4" />
                           Стартовать
                         </button>
-                        <button className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
+                        <button
+                          onClick={() => patchEvent({ status: 'locked' })}
+                          disabled={selectedEvent.status === 'locked'}
+                          className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none disabled:opacity-40 disabled:cursor-default"
+                          title="Закрыть набор, событие остаётся в афише «под замком»"
+                        >
                           <Pause className="w-4 h-4" />
                           Приостановить
                         </button>
-                        <button className="bg-brand/20 hover:bg-brand/30 text-brand p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
+                        <button
+                          onClick={async () => {
+                            if (!window.confirm('Завершить мероприятие? Набор закроется, бот попросит у участников отзывы на следующий день.')) return;
+                            await patchEvent({ status: 'closed', checklist: { ...(selectedEvent.checklist || {}), finished: true } });
+                          }}
+                          className="bg-brand/20 hover:bg-brand/30 text-brand p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                        >
                           <CheckCircle className="w-4 h-4" />
                           Завершить
                         </button>
-                        <button className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
+                        <button
+                          onClick={async () => {
+                            const reason = window.prompt('Причина отмены? Она уйдёт участникам в Telegram.');
+                            if (!reason) return;
+                            await patchEvent({ status: 'closed', statusReason: reason });
+                            await sendMessageToAll(`❌ <b>${selectedEvent.title}</b> отменяется.\n\n${reason}`);
+                          }}
+                          className="bg-rose-500/20 hover:bg-rose-500/30 text-rose-400 p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                          title="Отменить и уведомить участников"
+                        >
                           <XIcon className="w-4 h-4" />
                           Отменить
                         </button>
                       </div>
                     </div>
 
+                    {/* «Под вопросом» + перенос дат — Фаза 6 */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <h4 className="text-xs font-bold uppercase mb-3">Доступ и публичность</h4>
-                      
-                      <button className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
-                        <Globe className="w-4 h-4" />
-                        Сделать публичным
+                      <h4 className="text-xs font-bold uppercase mb-1">Под вопросом и перенос</h4>
+
+                      {selectedEvent.statusReason && (
+                        <p className="text-[10px] text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-lg p-2">
+                          ⚠️ {selectedEvent.statusReason}
+                          {selectedEvent.decisionDeadline && ` · решение до ${selectedEvent.decisionDeadline}`}
+                        </p>
+                      )}
+
+                      <button
+                        onClick={async () => {
+                          if (selectedEvent.statusReason) {
+                            await patchEvent({ statusReason: null, decisionDeadline: null });
+                            return;
+                          }
+                          const reason = window.prompt('Почему событие под вопросом? (напр. «нужно ещё 4 человека»)');
+                          if (!reason) return;
+                          const deadline = window.prompt('Дедлайн решения (YYYY-MM-DD), можно пропустить:') || null;
+                          await patchEvent({ statusReason: reason, decisionDeadline: deadline });
+                        }}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                      >
+                        <Flag className="w-4 h-4" />
+                        {selectedEvent.statusReason ? 'Снять «под вопросом»' : 'Пометить «под вопросом»'}
                       </button>
 
-                      <button className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
-                        <Key className="w-4 h-4" />
-                        Сменить код доступа
-                      </button>
-
-                      <button className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
-                        <UserPlus className="w-4 h-4" />
-                        Заместитель на мероприятие
+                      <button
+                        onClick={async () => {
+                          const date = window.prompt('Новая дата начала (YYYY-MM-DD):', selectedEvent.date);
+                          if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+                            if (date) setActionMsg({ ok: false, text: 'Формат даты: YYYY-MM-DD' });
+                            return;
+                          }
+                          const dateEnd = window.prompt('Дата окончания (YYYY-MM-DD), пусто = однодневное:', selectedEvent.dateEnd || '') || null;
+                          const dateLabel = buildDateLabel(date, dateEnd || '', selectedEvent.time || '');
+                          await patchEvent({ date, dateEnd, dateLabel });
+                          if (window.confirm('Уведомить участников о переносе?')) {
+                            await sendMessageToAll(`📅 <b>${selectedEvent.title}</b> переносится.\n\nНовые даты: ${dateLabel}\n\nЕсли планы поменялись — напиши сюда.`);
+                          }
+                        }}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                      >
+                        <Clock className="w-4 h-4" />
+                        Перенести даты
                       </button>
                     </div>
 
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <h4 className="text-xs font-bold uppercase mb-3">Участники</h4>
-                      
-                      <button className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
+                      <h4 className="text-xs font-bold uppercase mb-1">Доступ и публичность</h4>
+                      <p className="text-[10px] text-white/40 mb-2">
+                        {selectedEvent.isPublic === false
+                          ? `Закрытое${selectedEvent.accessCode ? ` · код: ${selectedEvent.accessCode}` : ''}`
+                          : 'Публичное — видно всем в афише'}
+                      </p>
+
+                      <button
+                        onClick={() => patchEvent({ isPublic: selectedEvent.isPublic === false })}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                      >
+                        <Globe className="w-4 h-4" />
+                        {selectedEvent.isPublic === false ? 'Сделать публичным' : 'Сделать закрытым'}
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+                          if (!window.confirm(`Новый код доступа: ${code}\n\nСтарый перестанет работать. Применить?`)) return;
+                          patchEvent({ accessCode: code, isPublic: false });
+                        }}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                      >
+                        <Key className="w-4 h-4" />
+                        Сменить код доступа
+                      </button>
+
+                      <button
+                        onClick={() => {
+                          const candidates = (eventStats?.registrations || []).filter((r: any) => Number(r.telegramId) > 0);
+                          if (!candidates.length) { setActionMsg({ ok: false, text: 'Нет участников с Telegram-id' }); return; }
+                          const list = candidates.map((r: any, i: number) => `${i + 1}. ${r.name} (${r.telegramId})`).join('\n');
+                          const pick = window.prompt(`Кого назначить заместителем?\n\n${list}\n\nВведи номер:`);
+                          const idx = Number(pick) - 1;
+                          if (!(idx >= 0 && idx < candidates.length)) return;
+                          patchEvent({ deputyId: Number(candidates[idx].telegramId) });
+                        }}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
+                      >
+                        <UserPlus className="w-4 h-4" />
+                        {selectedEvent.deputyId ? `Заместитель: ${selectedEvent.deputyId}` : 'Заместитель на мероприятие'}
+                      </button>
+                    </div>
+
+                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                      <h4 className="text-xs font-bold uppercase mb-1">Участники</h4>
+
+                      <button
+                        onClick={async () => {
+                          const text = window.prompt('Текст объявления — уйдёт всем участникам в Telegram:');
+                          if (!text?.trim()) return;
+                          await sendMessageToAll(`📢 <b>${selectedEvent.title}</b>\n\n${text.trim()}`);
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none disabled:opacity-50"
+                      >
                         <MessageSquare className="w-4 h-4" />
                         Важное объявление всем
                       </button>
 
-                      <button className="w-full bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2">
-                        <UserMinus className="w-4 h-4" />
-                        Удалить без возврата
-                      </button>
+                      <p className="text-[10px] text-white/40">
+                        Удаление конкретного участника — на вкладке «Участники», кнопка с иконкой.
+                      </p>
                     </div>
                   </div>
                 )}
@@ -1735,7 +2118,7 @@ function AddEventModal({ onClose, onAdd }: {
             disabled={autoFilling || !formData.title.trim()}
             onClick={async () => {
               setAutoFilling(true);
-              const d = await aiAutofill({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd });
+              const { draft: d, error } = await aiAutofill({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd });
               if (d) {
                 setFormData((f) => ({
                   ...f,
@@ -1747,7 +2130,7 @@ function AddEventModal({ onClose, onAdd }: {
                   houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
                 }));
               } else {
-                alert('ИИ недоступен — проверь GEMINI_API_KEY в Vercel.');
+                alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
               }
               setAutoFilling(false);
             }}

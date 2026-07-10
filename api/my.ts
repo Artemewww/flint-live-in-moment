@@ -41,8 +41,8 @@ export default async function handler(req: any, res: any) {
 
     const { data } = await supabase
       .from('registrations')
-      .select('id,event_id,name,phone,status,payment_status,payment_amount,has_transport,transport_seats,dietary,registered_at')
-      .eq('telegram_id', String(user.id))
+      .select('*')
+      .eq('telegram_id', user.id)
       .neq('status', 'cancelled');
 
     const registrations = (data || []).map((r: any) => ({
@@ -57,6 +57,14 @@ export default async function handler(req: any, res: any) {
       transportSeats: r.transport_seats,
       dietary: r.dietary,
       registeredAt: r.registered_at,
+      // Данные регистрации 2.0 — без них «Мои участия» показывают половину анкеты.
+      days: r.days || [],
+      guestCount: r.guest_count || 0,
+      childrenCount: r.children_count || 0,
+      foodOptout: !!r.food_optout,
+      equipment: r.equipment || [],
+      roles: r.roles || [],
+      attended: !!r.attended,
     }));
 
     res.status(200).json({ ok: true, registrations });

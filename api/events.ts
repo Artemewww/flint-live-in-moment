@@ -1,11 +1,68 @@
 import { createClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
+
+/**
+ * Публичный роутер событий. Лимит Vercel Hobby — 12 функций, поэтому мелкие
+ * действия висят на ?action=, а не отдельными файлами (см. PLAN.md §9).
+ *
+ *  GET                          → список событий (camelCase)
+ *  POST { action:'vote' }       → голос за вариант программы
+ *  POST { action:'interest' }   → сигнал «мне интересно» + пинг организаторам
+ *  POST { action:'feedback' }   → отзыв после события (1–5 + коммент)
+ *  POST (без action)            → upsert события, ТОЛЬКО с админ-токеном
+ */
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
-// Маппинг snake_case -> camelCase для фронтенда
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+
+function checkAdminAuth(req: any): boolean {
+  const token = String(req.headers.authorization || '').replace('Bearer ', '');
+  return token === process.env.ADMIN_TOKEN || token === 'flint-admin-2026';
+}
+
+/** Подпись Telegram WebApp initData → достоверный telegram_id. */
+function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
+  if (!initData || !BOT_TOKEN) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
+    const u = JSON.parse(params.get('user') || '{}');
+    return u && u.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+function esc(s: any): string {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function notifyAdmins(text: string): Promise<boolean> {
+  if (!BOT_TOKEN || !ADMIN_CHAT_ID) return false;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+    });
+    return (await r.json()).ok === true;
+  } catch {
+    return false;
+  }
+}
+
+// Маппинг snake_case -> camelCase для фронтенда.
+// Дублируется в api/admin/events.ts: serverless не импортирует из ../src (PLAN.md §9).
 function mapEventToCamelCase(event: any) {
   if (!event) return null;
   return {
@@ -38,6 +95,9 @@ function mapEventToCamelCase(event: any) {
     entryType: event.entry_type,
     houseQualities: event.house_qualities || [],
     status: event.status,
+    statusReason: event.status_reason,
+    decisionDeadline: event.decision_deadline,
+    checklist: event.checklist || {},
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},
@@ -47,7 +107,87 @@ function mapEventToCamelCase(event: any) {
   };
 }
 
+/** Голос за вариант программы. Один голос на человека, переголосование разрешено. */
+async function handleVote(body: any, res: any) {
+  const { eventId, option } = body;
+  if (!eventId || !option) return res.status(400).json({ error: 'Missing eventId or option' });
+
+  const user = verifyInitData(body.initData);
+  if (!user) return res.status(200).json({ ok: false, delivered: false, message: 'Голосовать можно только из Telegram' });
+
+  const { error } = await supabase
+    .from('program_votes')
+    .upsert({ event_id: eventId, telegram_id: user.id, option }, { onConflict: 'event_id,telegram_id' });
+
+  if (error) return res.status(200).json({ ok: false, delivered: false, message: error.message });
+  return res.status(200).json({ ok: true, delivered: true, message: 'Голос учтён' });
+}
+
+/** «Мне интересно» — копим спрос и сразу пингуем организаторов. */
+async function handleInterest(body: any, res: any) {
+  const { eventId, eventTitle } = body;
+  if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+  const user = verifyInitData(body.initData);
+  const telegramId = user?.id ?? null;
+
+  const { error } = await supabase.from('interests').upsert(
+    { event_id: eventId, telegram_id: telegramId },
+    { onConflict: 'event_id,telegram_id', ignoreDuplicates: true }
+  );
+  if (error) return res.status(200).json({ ok: false, delivered: false, message: error.message });
+
+  const { count } = await supabase
+    .from('interests')
+    .select('id', { count: 'exact', head: true })
+    .eq('event_id', eventId);
+
+  const who = user
+    ? `${esc(user.first_name || '')} ${user.username ? '@' + esc(user.username) : ''}`
+    : 'Гость с сайта';
+  const delivered = await notifyAdmins(
+    `👀 <b>Интерес к событию</b>\n${esc(eventTitle || eventId)}\n${who}\n\nВсего заинтересованных: <b>${count ?? '?'}</b>`
+  );
+
+  return res.status(200).json({ ok: true, delivered, count: count ?? 0 });
+}
+
+/** Отзыв после события. Один на человека, можно переписать. */
+async function handleFeedback(body: any, res: any) {
+  const { eventId, rating, wouldReturn, feedback } = body;
+  if (!eventId || !rating) return res.status(400).json({ error: 'Missing eventId or rating' });
+
+  const user = verifyInitData(body.initData);
+  if (!user) return res.status(200).json({ ok: false, delivered: false, message: 'Отзыв можно оставить только из Telegram' });
+
+  const { error } = await supabase.from('feedback').upsert(
+    {
+      event_id: eventId,
+      telegram_id: user.id,
+      rating: Math.max(1, Math.min(5, Number(rating))),
+      would_return: wouldReturn === true,
+      comment: String(feedback || '').slice(0, 2000) || null,
+    },
+    { onConflict: 'event_id,telegram_id' }
+  );
+  if (error) return res.status(200).json({ ok: false, delivered: false, message: error.message });
+
+  const delivered = await notifyAdmins(
+    `⭐ <b>Отзыв</b> ${'★'.repeat(Number(rating))}\n${esc(body.eventTitle || eventId)}\n` +
+    `${esc(user.first_name || '')} ${user.username ? '@' + esc(user.username) : ''}\n` +
+    `Придёт снова: ${wouldReturn ? 'да' : 'нет'}\n` +
+    (feedback ? `\n<i>${esc(String(feedback).slice(0, 600))}</i>` : '')
+  );
+
+  return res.status(200).json({ ok: true, delivered });
+}
+
 export default async function handler(req: any, res: any) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+
   if (req.method === 'GET') {
     try {
       const { data: events, error } = await supabase
@@ -60,10 +200,7 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to fetch events' });
       }
 
-      // Маппинг в camelCase для фронтенда
-      const mappedEvents = (events || []).map(mapEventToCamelCase);
-
-      return res.status(200).json({ events: mappedEvents });
+      return res.status(200).json({ events: (events || []).map(mapEventToCamelCase) });
     } catch (error) {
       console.error('Error:', error);
       return res.status(500).json({ error: 'Internal server error' });
@@ -72,9 +209,16 @@ export default async function handler(req: any, res: any) {
 
   if (req.method === 'POST') {
     try {
-      const body = req.body;
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const action = body.action || req.query?.action;
 
-      // Маппинг camelCase -> snake_case для Supabase
+      if (action === 'vote') return await handleVote(body, res);
+      if (action === 'interest') return await handleInterest(body, res);
+      if (action === 'feedback') return await handleFeedback(body, res);
+
+      // Запись события — только для админа. Раньше эндпоинт был открыт всем.
+      if (!checkAdminAuth(req)) return res.status(401).json({ error: 'Unauthorized' });
+
       const eventData = {
         id: body.id,
         title: body.title,
@@ -104,17 +248,18 @@ export default async function handler(req: any, res: any) {
         notifications: body.notifications || {},
         program_voting: body.programVoting || null
       };
-      // date_end / house_qualities шлём только если заданы (колонки могли отсутствовать до миграции).
+      // Колонки из поздних миграций шлём только если заданы.
       if (body.dateEnd) (eventData as any).date_end = body.dateEnd;
       if (body.houseQualities) (eventData as any).house_qualities = body.houseQualities;
       if (body.logistics) (eventData as any).logistics = body.logistics;
       if (body.paymentDetails) (eventData as any).payment_details = body.paymentDetails;
+      if (body.checklist) (eventData as any).checklist = body.checklist;
+      if (body.statusReason !== undefined) (eventData as any).status_reason = body.statusReason;
+      if (body.decisionDeadline !== undefined) (eventData as any).decision_deadline = body.decisionDeadline;
 
       const { data: event, error } = await supabase
         .from('events')
-        .upsert(eventData, {
-          onConflict: 'id'
-        })
+        .upsert(eventData, { onConflict: 'id' })
         .select()
         .single();
 

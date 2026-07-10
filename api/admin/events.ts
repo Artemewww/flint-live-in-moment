@@ -45,6 +45,12 @@ function mapEventToCamelCase(event: any) {
     entryType: event.entry_type,
     houseQualities: event.house_qualities || [],
     status: event.status,
+    statusReason: event.status_reason,
+    decisionDeadline: event.decision_deadline,
+    checklist: event.checklist || {},
+    isPublic: event.is_public !== false,
+    accessCode: event.access_code,
+    deputyId: event.deputy_id,
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},
@@ -123,6 +129,7 @@ export default async function handler(req: any, res: any) {
       if (body.houseQualities) (eventData as any).house_qualities = body.houseQualities;
       if (body.logistics) (eventData as any).logistics = body.logistics;
       if (body.paymentDetails) (eventData as any).payment_details = body.paymentDetails;
+      if (body.checklist) (eventData as any).checklist = body.checklist;
 
       const { data: event, error } = await supabase
         .from('events')
@@ -135,6 +142,58 @@ export default async function handler(req: any, res: any) {
       if (error) {
         console.error('Event save error:', error);
         return res.status(500).json({ error: 'Failed to save event', details: error.message });
+      }
+
+      return res.status(200).json({ success: true, event: mapEventToCamelCase(event) });
+    } catch (error) {
+      console.error('Error:', error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+  }
+
+  if (req.method === 'PATCH') {
+    // Точечное обновление события: жизненный цикл, чек-лист, публичность,
+    // перенос дат, «под вопросом». Не трогает поля, которых нет в теле.
+    try {
+      const { eventId } = req.query;
+      if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+
+      // camelCase → snake_case только для явно переданных ключей.
+      const FIELDS: Record<string, string> = {
+        status: 'status',
+        statusReason: 'status_reason',
+        decisionDeadline: 'decision_deadline',
+        checklist: 'checklist',
+        isPublic: 'is_public',
+        accessCode: 'access_code',
+        deputyId: 'deputy_id',
+        date: 'date',
+        dateEnd: 'date_end',
+        dateLabel: 'date_label',
+        lockedHint: 'locked_hint',
+        maxParticipants: 'max_participants',
+        paymentDetails: 'payment_details',
+        logistics: 'logistics',
+      };
+
+      const patch: Record<string, unknown> = {};
+      for (const [camel, snake] of Object.entries(FIELDS)) {
+        if (body[camel] !== undefined) patch[snake] = body[camel];
+      }
+      if (Object.keys(patch).length === 0) return res.status(400).json({ error: 'Nothing to update' });
+
+      const { data: event, error } = await supabase
+        .from('events')
+        .update(patch)
+        .eq('id', eventId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Event patch error:', error);
+        return res.status(500).json({ error: 'Failed to update event', details: error.message });
       }
 
       return res.status(200).json({ success: true, event: mapEventToCamelCase(event) });

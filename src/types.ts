@@ -64,6 +64,18 @@ export interface CommunityEvent {
   needsOnboarding?: boolean; // Фильтр/Табель отбора
   /** Текущий статус набора. По умолчанию — 'open'. */
   status?: EventStatus;
+  /** «Под вопросом»: почему событие может не состояться. */
+  statusReason?: string;
+  /** Дата, до которой решается судьба события (YYYY-MM-DD). */
+  decisionDeadline?: string;
+  /** Чек-лист готовности: ключ пункта → отмечен ли. Хранится в events.checklist. */
+  checklist?: Record<string, boolean>;
+  /** Публичное событие или закрытое по кодовому слову. */
+  isPublic?: boolean;
+  /** Кодовое слово для закрытого события. */
+  accessCode?: string;
+  /** Заместитель организатора на это событие (telegram_id). */
+  deputyId?: number;
   /** Текст-подсказка для события «под замочком», напр. «Даты уточняются». */
   lockedHint?: string;
   /** Программа мероприятия */

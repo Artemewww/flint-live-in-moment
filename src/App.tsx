@@ -18,6 +18,7 @@ import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
 import GateScreen from './components/GateScreen';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
+import { submitFeedback } from './api';
 
 // Маппинг snake_case -> camelCase для данных из Supabase
 function mapEventToCamelCase(event: any): CommunityEvent {
@@ -28,6 +29,8 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     description: event.description,
     type: event.type,
     date: event.date,
+    // Без dateEnd многодневное событие «протухает» в первый же день (getEventPhase).
+    dateEnd: event.date_end || event.dateEnd || undefined,
     dateLabel: event.date_label || event.dateLabel || event.date,
     time: event.time || '',
     timeEnd: event.time_end || event.timeEnd || '',
@@ -49,6 +52,12 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     entryType: event.entry_type || event.entryType || 'all',
     needsOnboarding: event.needs_onboarding ?? event.needsOnboarding ?? false,
     status: event.status || 'locked',
+    statusReason: event.status_reason || event.statusReason,
+    decisionDeadline: event.decision_deadline || event.decisionDeadline,
+    checklist: event.checklist || {},
+    isPublic: event.is_public ?? event.isPublic ?? true,
+    accessCode: event.access_code || event.accessCode,
+    deputyId: event.deputy_id ?? event.deputyId,
     lockedHint: event.locked_hint || event.lockedHint,
     program: event.program || [],
     notifications: event.notifications || {},
@@ -783,8 +792,14 @@ export default function App() {
           eventId={feedbackEvent.id}
           eventTitle={feedbackEvent.title}
           onClose={() => setFeedbackEvent(null)}
-          onSubmit={(data) => {
-            console.log('Feedback submitted:', data);
+          onSubmit={async (data) => {
+            await submitFeedback({
+              eventId: data.eventId,
+              eventTitle: feedbackEvent.title,
+              rating: data.rating,
+              wouldReturn: data.wouldReturn,
+              feedback: data.feedback,
+            });
             setFeedbackEvent(null);
           }}
         />

@@ -5,12 +5,13 @@ import { CommunityEvent } from '../types';
 
 interface ProgramVotingProps {
   event: CommunityEvent;
-  onVote: (eventId: string, option: string) => void;
+  onVote: (eventId: string, option: string) => Promise<{ ok: boolean; message?: string }>;
 }
 
 export default function ProgramVoting({ event, onVote }: ProgramVotingProps) {
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
   const [hasVoted, setHasVoted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   if (!event.programVoting || !event.programVoting.enabled) {
     return null;
@@ -20,11 +21,18 @@ export default function ProgramVoting({ event, onVote }: ProgramVotingProps) {
   const today = new Date().toISOString().split('T')[0];
   const isExpired = deadline < today;
 
-  const handleVote = (option: string) => {
+  // Голос подтверждаем только после ответа сервера — иначе «учтён» врёт.
+  const handleVote = async (option: string) => {
     if (hasVoted || isExpired) return;
     setSelectedOption(option);
-    setHasVoted(true);
-    onVote(event.id, option);
+    setError(null);
+    const res = await onVote(event.id, option);
+    if (res.ok) {
+      setHasVoted(true);
+    } else {
+      setSelectedOption(null);
+      setError(res.message || 'Не удалось отправить голос');
+    }
   };
 
   const daysLeft = Math.ceil((new Date(deadline).getTime() - new Date(today).getTime()) / (1000 * 60 * 60 * 24));
@@ -92,6 +100,12 @@ export default function ProgramVoting({ event, onVote }: ProgramVotingProps) {
         <div className="bg-brand/10 border border-brand/30 rounded-xl p-3 flex items-center gap-2">
           <Check className="w-4 h-4 text-brand shrink-0" />
           <span className="text-xs text-brand font-medium">Ваш голос учтён!</span>
+        </div>
+      )}
+
+      {error && (
+        <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-3">
+          <span className="text-xs text-rose-400">{error}</span>
         </div>
       )}
 

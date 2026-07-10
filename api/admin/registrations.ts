@@ -52,8 +52,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Получаем статистику
-      const { data: statsData, error: statsError } = await supabase
-        .rpc('get_event_stats', { event_id: eventId });
+      const { data: statsData } = await supabase.rpc('get_event_stats', { event_id: eventId });
 
       const stats = statsData || {
         total: registrations.length,
@@ -63,9 +62,47 @@ export default async function handler(req: any, res: any) {
         total_amount: registrations.reduce((sum, r) => sum + (r.payment_amount || 0), 0)
       };
 
+      // Живая логистика: машины, которые участники заявили сами, их пассажиры и
+      // SOS-заявки. Это не то же, что has_transport из анкеты — это реальные брони.
+      const { data: rides } = await supabase
+        .from('rides').select('*').eq('event_id', eventId).eq('active', true).order('created_at');
+
+      const rideIds = (rides || []).map((r: any) => r.id);
+      const { data: bookings } = rideIds.length
+        ? await supabase.from('ride_bookings').select('*').in('ride_id', rideIds)
+        : { data: [] as any[] };
+
+      const { data: rideRequests } = await supabase
+        .from('ride_requests').select('*').eq('event_id', eventId).eq('active', true);
+
+      const { data: feedback } = await supabase
+        .from('feedback').select('*').eq('event_id', eventId).order('created_at', { ascending: false });
+
+      const { count: interestCount } = await supabase
+        .from('interests').select('id', { count: 'exact', head: true }).eq('event_id', eventId);
+
+      const { data: programVotes } = await supabase
+        .from('program_votes').select('option').eq('event_id', eventId);
+
+      const voteTally: Record<string, number> = {};
+      for (const v of programVotes || []) {
+        const opt = (v as any).option;
+        voteTally[opt] = (voteTally[opt] || 0) + 1;
+      }
+
+      const ridesWithPax = (rides || []).map((r: any) => ({
+        ...r,
+        passengers: (bookings || []).filter((b: any) => b.ride_id === r.id),
+      }));
+
       return res.status(200).json({
         registrations: registrations || [],
-        stats
+        stats,
+        rides: ridesWithPax,
+        rideRequests: rideRequests || [],
+        feedback: feedback || [],
+        interestCount: interestCount || 0,
+        voteTally,
       });
     } catch (error) {
       console.error('Error:', error);
@@ -119,16 +156,16 @@ export default async function handler(req: any, res: any) {
     // Обновить статус регистрации
     try {
       const { registrationId } = req.query;
-      const { status, paymentStatus, paymentAmount } = req.body;
+      const { status, paymentStatus, paymentAmount, attended } = req.body;
 
       if (!registrationId) {
         return res.status(400).json({ error: 'Missing registrationId' });
       }
 
-      // Текущее состояние — чтобы поймать переход pending→confirmed (для баллов).
+      // Текущее состояние — чтобы поймать переход «не был» → «был» (для баллов).
       const { data: before } = await supabase
         .from('registrations')
-        .select('status,telegram_id')
+        .select('status,attended,telegram_id')
         .eq('id', registrationId)
         .single();
 
@@ -136,6 +173,7 @@ export default async function handler(req: any, res: any) {
       if (status) updateData.status = status;
       if (paymentStatus) updateData.payment_status = paymentStatus;
       if (paymentAmount !== undefined) updateData.payment_amount = paymentAmount;
+      if (attended !== undefined) updateData.attended = !!attended;
 
       const { data: registration, error } = await supabase
         .from('registrations')
@@ -149,17 +187,18 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to update registration' });
       }
 
-      // Баллы — ТОЛЬКО за достижение: подтверждённое участие (переход в confirmed).
-      if (status === 'confirmed' && before && before.status !== 'confirmed' && before.telegram_id) {
+      // Баллы — ТОЛЬКО за достижение: человек реально пришёл и админ это отметил.
+      // Регистрация и подтверждение статуса баллов не дают (PLAN.md §5.3).
+      if (attended === true && before && before.attended !== true && before.telegram_id) {
         const memberId = Number(before.telegram_id);
         await bumpPoints(memberId, POINTS_ATTEND);
         try {
-          // Первое подтверждённое событие участника → награда пригласившему.
+          // Первое посещённое событие участника → награда пригласившему.
           const { count } = await supabase
             .from('registrations')
             .select('id', { count: 'exact', head: true })
             .eq('telegram_id', memberId)
-            .eq('status', 'confirmed')
+            .eq('attended', true)
             .neq('id', registrationId);
           if (!count) {
             const { data: m } = await supabase.from('members').select('referred_by').eq('telegram_id', memberId).maybeSingle();

@@ -335,6 +335,17 @@ export default function EventDetailModal({
             {/* Погода на даты (open-meteo) */}
             <WeatherBlock event={event} />
 
+            {/* «Под вопросом» — честно предупреждаем до того, как человек запишется */}
+            {event.statusReason && (
+              <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl" id={`detail-at-risk-${event.id}`}>
+                <p className="text-amber-300 text-[10px] font-mono uppercase tracking-widest mb-1">⚠️ Мероприятие под вопросом</p>
+                <p className="text-xs text-white/85 leading-relaxed">{event.statusReason}</p>
+                {event.decisionDeadline && (
+                  <p className="text-[10px] text-white/50 mt-1 font-mono">Решение до {event.decisionDeadline}</p>
+                )}
+              </div>
+            )}
+
             {/* Pain Point Solution Panel (PAIN) */}
             <div className="bg-white/5 border border-white/10 p-4.5 rounded-2xl flex items-start gap-3.5" id={`detail-pain-block-${event.id}`}>
               <div className="bg-[#E6FD3A]/10 border border-[#E6FD3A]/30 text-brand font-black text-[9px] px-2 py-0.5 rounded uppercase font-mono tracking-widest shrink-0 mt-0.5">
@@ -419,9 +430,10 @@ export default function EventDetailModal({
             {/* Program Voting */}
             <ProgramVoting
               event={event}
-              onVote={(eventId, option) => {
-                submitVote(eventId, option);
-                haptic('success');
+              onVote={async (eventId, option) => {
+                const res = await submitVote(eventId, option);
+                haptic(res.ok ? 'success' : 'error');
+                return res;
               }}
             />
 
