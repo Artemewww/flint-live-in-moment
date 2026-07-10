@@ -153,6 +153,18 @@ create table if not exists tasks (
 create index if not exists idx_tasks_event on tasks(event_id);
 
 -- ─────────────────────────────────────────────────────────────
+-- 9b. rides.seats_taken — счётчик занятых мест.
+-- Миграция Фазы 4 (2026-phase4-rides.sql) эту колонку не создала, хотя бот на
+-- неё опирался: занятые места не считались, «свободно» всегда равнялось всего.
+-- Создаём и пересчитываем из фактических броней.
+-- ─────────────────────────────────────────────────────────────
+alter table rides add column if not exists seats_taken int default 0;
+
+update rides
+   set seats_taken = (select count(*) from ride_bookings b where b.ride_id = rides.id)
+ where seats_taken is distinct from (select count(*) from ride_bookings b where b.ride_id = rides.id);
+
+-- ─────────────────────────────────────────────────────────────
 -- 10. RPC
 -- ─────────────────────────────────────────────────────────────
 
