@@ -160,19 +160,44 @@ async function ensureRefCode(tgId: number): Promise<string | null> {
   return null;
 }
 
-/** Зафиксировать пригласившего по ref-коду (однократно). */
-async function bindReferrer(from: any, code: string) {
+/**
+ * Приглашение по цепочке: код действующего участника открывает двери сразу.
+ * Приглашать может только тот, кто сам внутри (approved или костяк) — иначе
+ * отклонённый мог бы наплодить себе «клуб» из своей же ссылки.
+ * Возвращает true, если человек принят в клуб по этой ссылке.
+ */
+async function bindReferrer(from: any, code: string): Promise<boolean> {
   await supabase.from('members').upsert(
     { telegram_id: from.id, username: from.username || null, first_name: from.first_name || null },
     { onConflict: 'telegram_id' }
   );
-  const { data: me } = await supabase.from('members').select('referred_by').eq('telegram_id', from.id).maybeSingle();
-  if (me && (me as any).referred_by) return;
-  const { data: inv } = await supabase.from('members').select('telegram_id').eq('ref_code', code).maybeSingle();
-  if (inv && inv.telegram_id !== from.id) {
-    await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', from.id);
-    try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch {}
+
+  const { data: me } = await supabase.from('members').select('referred_by,status').eq('telegram_id', from.id).maybeSingle();
+  if ((me as any)?.status === 'blocked') return false;
+  // Уже внутри — ссылка ничего не меняет.
+  if ((me as any)?.status === 'approved') return true;
+
+  const { data: inv } = await supabase
+    .from('members').select('telegram_id,status,is_core').eq('ref_code', code).maybeSingle();
+  if (!inv || inv.telegram_id === from.id) return false;
+  const inviterInside = (inv as any).status === 'approved' || (inv as any).is_core === true;
+  if (!inviterInside) return false;
+
+  const patch: Record<string, unknown> = { status: 'approved', approved_by: inv.telegram_id };
+  if (!(me as any)?.referred_by) patch.referred_by = inv.telegram_id;
+  await supabase.from('members').update(patch).eq('telegram_id', from.id);
+
+  if (!(me as any)?.referred_by) {
+    try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch { /* аудит best-effort */ }
+    // Пригласившему приятно знать, что ссылка сработала.
+    try {
+      await tg('sendMessage', {
+        chat_id: inv.telegram_id, parse_mode: 'HTML',
+        text: `🤝 По твоей ссылке пришёл <b>${esc(from.first_name || 'новый участник')}</b>. Баллы придут, когда он побывает на первом событии.`,
+      });
+    } catch { /* мог не начинать чат */ }
   }
+  return true;
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
@@ -215,8 +240,11 @@ function eventCardButtons(ev: any, openBtn: any): any[] {
   return rows;
 }
 
-// --- Закрытый клуб (за флагом GATE_ENABLED) ---
-function gateOn(): boolean { return process.env.GATE_ENABLED === '1'; }
+// --- Закрытый клуб ---
+// Клуб закрытый по определению: попасть можно только по реф-ссылке участника.
+// Раньше флаг был выключен по умолчанию, и зарегистрироваться мог кто угодно.
+// Аварийно открыть двери: GATE_ENABLED=0.
+function gateOn(): boolean { return process.env.GATE_ENABLED !== '0'; }
 async function memberOf(tgId: number): Promise<{ status?: string; is_core?: boolean } | null> {
   const { data } = await supabase.from('members').select('status,is_core').eq('telegram_id', tgId).maybeSingle();
   return (data as any) || null;
@@ -807,17 +835,30 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         if (!ev) return res.status(200).json({ ok: true });
         const code = await ensureRefCode(tgId);
-        const link = `https://t.me/${BOT_USERNAME}?start=${code ? `ref_${code}_ev_${ev.id}` : `event_${ev.id}`}`;
+        // Ссылка на страницу-приглашение сайта: у неё og-разметка, поэтому
+        // в Telegram и Viber друг увидит большую картинку события и описание.
+        // Прямая t.me-ссылка превью не даёт.
+        const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
         const invite = `${ev.title} — ${dayPhrase(ev.date)} (${whenPhrase(ev.date)}). Идём вместе?`;
         const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}`;
-        await tg('sendMessage', {
-          chat_id: chatId, parse_mode: 'HTML',
-          text:
-            `📤 <b>Позови друга</b>\n\n${esc(invite)}\n\n` +
-            `Твоя ссылка на это событие:\n<code>${esc(link)}</code>\n\n` +
-            `<i>Нажми на ссылку — скопируется. Друг придёт по ней, и это засчитается тебе.</i>`,
-          reply_markup: kb([[{ text: '📤 Отправить в Telegram', url: shareUrl }]]),
-        });
+
+        // Картинку прикладываем и в сам чат — чтобы приглашение можно было переслать.
+        const photo = ev.image && !String(ev.image).startsWith('data:')
+          ? String(ev.image)
+          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`;
+        const caption =
+          `📤 <b>Позови друга</b>\n\n${esc(invite)}\n\n` +
+          `Твоя ссылка:\n<code>${esc(link)}</code>\n\n` +
+          `<i>Нажми на ссылку — скопируется. Друг откроет её, увидит событие и попадёт в клуб по твоему приглашению.</i>`;
+        const markup = kb([[{ text: '📤 Отправить другу', url: shareUrl }]]);
+
+        const sentPhoto = ev.image
+          ? await tg('sendPhoto', { chat_id: chatId, photo, parse_mode: 'HTML', caption, reply_markup: markup })
+          : null;
+        // Нет картинки или Telegram её не забрал — уходим на обычный текст.
+        if (!sentPhoto || (sentPhoto as any).ok !== true) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: caption, reply_markup: markup });
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -1143,12 +1184,19 @@ export default async function handler(req: any, res: any) {
       if (text.startsWith('/start')) {
         let payload = text.split(' ')[1] || '';
         // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
+        let invitedIn = false;
         if (payload.startsWith('ref_')) {
           const rest = payload.slice('ref_'.length);
           const sep = rest.indexOf('_ev_');
           const code = sep === -1 ? rest : rest.slice(0, sep);
-          try { await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
+          try { invitedIn = await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
           payload = sep === -1 ? '' : `event_${rest.slice(sep + '_ev_'.length)}`;
+          if (invitedIn) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Смотри события ниже.',
+            });
+          }
         }
 
         // Закрытый клуб: незнакомец не видит события — сначала согласие ПД + заявка костяку.

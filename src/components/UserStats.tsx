@@ -67,37 +67,30 @@ export default function UserStats({ registrations, events, onClose }: UserStatsP
   };
   useEffect(() => { loadProfile(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
-  // Вычисляем статистику
-  const totalEvents = registrations.length;
+  /**
+   * Посещённые события — это те, где админ отметил явку (attended), а НЕ число
+   * регистраций. Раньше считали registrations.length, и человек, который только
+   * записался, видел награду «посетил 3 мероприятия».
+   */
+  const attendedEvents = registrations.filter((r) => (r as any).attended).length;
+  const totalEvents = attendedEvents;
+  const signedUp = registrations.length;
 
   // Баллы — реальные, начисляются ТОЛЬКО за достижения (подтверждённое участие).
   const totalPoints = profile?.points ?? 0;
-
-  // Подсчитываем развитые векторы
-  const vectorStats = React.useMemo(() => {
-    const stats: Record<string, number> = {};
-    registrations.forEach(reg => {
-      const event = events.find(e => e.id === reg.eventId);
-      if (event) {
-        event.houseQualities.forEach(q => {
-          stats[q.key] = (stats[q.key] || 0) + 1;
-        });
-      }
-    });
-    return stats;
-  }, [registrations, events]);
+  const invited = profile?.referralsCount ?? 0;
 
   // Определяем уровень — только если есть посещения
   const level = totalEvents > 0 ? Math.floor(totalPoints / 500) + 1 : 1;
   const levelTitle = totalEvents === 0 ? 'Не начато' : level <= 2 ? 'Новичок' : level <= 5 ? 'Участник' : level <= 10 ? 'Ветеран' : 'Мастер';
-  
-  // Достижения — открываются ТОЛЬКО при реальных достижениях
+
+  // Достижения — открываются ТОЛЬКО за реально посещённые события и приглашённых.
   const achievements = [
-    { id: 'first', name: 'Первый шаг', desc: 'Первое мероприятие', icon: Star, unlocked: totalEvents >= 1 },
-    { id: 'three', name: 'Регулярный', desc: '3 мероприятия', icon: Flame, unlocked: totalEvents >= 3 },
-    { id: 'five', name: 'Активный', desc: '5 мероприятий', icon: Zap, unlocked: totalEvents >= 5 },
-    { id: 'ten', name: 'Ветеран', desc: '10 мероприятий', icon: Trophy, unlocked: totalEvents >= 10 },
-    { id: 'all_vectors', name: 'Разносторонний', desc: 'Все 6 векторов развития', icon: Target, unlocked: Object.keys(vectorStats).length >= 6 },
+    { id: 'first', name: 'Первый шаг', desc: 'Побывать на первом', icon: Star, unlocked: totalEvents >= 1 },
+    { id: 'three', name: 'Регулярный', desc: 'Побывать на 3', icon: Flame, unlocked: totalEvents >= 3 },
+    { id: 'five', name: 'Активный', desc: 'Побывать на 5', icon: Zap, unlocked: totalEvents >= 5 },
+    { id: 'ten', name: 'Ветеран', desc: 'Побывать на 10', icon: Trophy, unlocked: totalEvents >= 10 },
+    { id: 'inviter', name: 'Проводник', desc: 'Привести друга', icon: Target, unlocked: invited >= 1 },
     { id: 'level5', name: 'Эксперт', desc: 'Достичь 5 уровня', icon: Award, unlocked: level >= 5 }
   ];
 
@@ -174,51 +167,19 @@ export default function UserStats({ registrations, events, onClose }: UserStatsP
           {/* Реферальная ссылка */}
           <ReferralSection data={profile} onRotate={() => { setRotating(true); loadProfile('rotate'); }} rotating={rotating} />
 
-          {/* Stats Grid */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Stats Grid — «посетил» и «записан» это разные вещи */}
+          <div className="grid grid-cols-3 gap-3">
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-1">
-              <div className="text-white/40 text-[10px] uppercase font-mono tracking-widest">Мероприятия</div>
+              <div className="text-white/40 text-[10px] uppercase font-mono tracking-widest">Посетил</div>
               <div className="font-display font-black text-3xl text-white">{totalEvents}</div>
+            </div>
+            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-1">
+              <div className="text-white/40 text-[10px] uppercase font-mono tracking-widest">Записан</div>
+              <div className="font-display font-black text-3xl text-white/70">{signedUp}</div>
             </div>
             <div className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-1">
               <div className="text-white/40 text-[10px] uppercase font-mono tracking-widest">Очки</div>
               <div className="font-display font-black text-3xl text-brand">{totalPoints}</div>
-            </div>
-          </div>
-
-          {/* Vector Progress */}
-          <div className="space-y-3">
-            <h3 className="text-white/40 uppercase text-[9px] tracking-wider font-mono">Развитие векторов</h3>
-            <div className="space-y-2">
-              {Object.entries(vectorStats).map(([key, count]) => {
-                const vectorNames: Record<string, string> = {
-                  foundation: 'Предназначение',
-                  wall: 'Воля',
-                  roof: 'Совесть',
-                  decor: 'Творчество',
-                  heat: 'Любовь',
-                  life: 'Счастье'
-                };
-                const maxCount = Math.max(...Object.values(vectorStats), 1);
-                const percentage = (count / maxCount) * 100;
-                
-                return (
-                  <div key={key} className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-white/70 font-mono">{vectorNames[key] || key}</span>
-                      <span className="text-brand font-bold">{count}</span>
-                    </div>
-                    <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
-                      <motion.div
-                        className="bg-brand h-full"
-                        initial={{ width: 0 }}
-                        animate={{ width: `${percentage}%` }}
-                        transition={{ duration: 0.8, ease: 'easeOut' }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           </div>
 

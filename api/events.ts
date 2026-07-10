@@ -20,6 +20,7 @@ const supabase = createClient(
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 
 
 
@@ -248,6 +249,90 @@ async function handleHealth(res: any) {
   return res.status(200).json({ migrationApplied: broken.length === 0, checks: out });
 }
 
+/**
+ * Картинка события отдельным ресурсом. В БД она лежит как data-URL (Base64),
+ * а Telegram/Viber в og:image принимают только настоящий URL.
+ */
+async function handleImage(req: any, res: any) {
+  const id = String(req.query.id || '');
+  const { data: ev } = await supabase.from('events').select('image').eq('id', id).maybeSingle();
+  const img = (ev as any)?.image || '';
+
+  const m = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(img);
+  if (!m) {
+    // Картинки нет или это обычный путь — отправляем туда.
+    if (img) { res.setHeader('Location', img); return res.status(302).end(); }
+    return res.status(404).end();
+  }
+  const buf = Buffer.from(m[2], 'base64');
+  res.setHeader('Content-Type', m[1]);
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  return res.status(200).send(buf);
+}
+
+/**
+ * Страница-приглашение с og-разметкой: /e/<id>?ref=<code>.
+ * Именно её видит друг в Telegram/Viber — с большой картинкой, названием,
+ * датой и описанием. Кнопка ведёт в бота, реф-код сохраняется.
+ */
+async function handleOg(req: any, res: any) {
+  const id = String(req.query.id || '');
+  const ref = String(req.query.ref || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
+
+  const { data: ev } = await supabase
+    .from('events').select('id,title,description,date,date_label,location,image').eq('id', id).maybeSingle();
+
+  if (!ev) {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.status(404).send('<!doctype html><meta charset="utf-8"><title>Событие не найдено</title><p>Событие не найдено.</p>');
+  }
+
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  const site = `https://${host}`;
+  const imageUrl = (ev as any).image ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}` : `${site}/assets/images/og-default.png`;
+  const botUrl = `https://t.me/${BOT_USERNAME}?start=${ref ? `ref_${ref}_ev_${id}` : `event_${id}`}`;
+
+  const title = `${(ev as any).title} — Живи в моменте`;
+  const desc = [((ev as any).date_label || (ev as any).date), (ev as any).location]
+    .filter(Boolean).join(' · ') + (((ev as any).description) ? ` — ${String((ev as any).description).slice(0, 160)}` : '');
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  return res.status(200).send(`<!doctype html>
+<html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(title)}</title>
+<meta name="description" content="${esc(desc)}">
+<meta property="og:type" content="website">
+<meta property="og:title" content="${esc(title)}">
+<meta property="og:description" content="${esc(desc)}">
+<meta property="og:image" content="${esc(imageUrl)}">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta property="og:url" content="${esc(`${site}/e/${id}`)}">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+ body{margin:0;background:#0b0b0b;color:#fff;font-family:system-ui,-apple-system,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
+ .card{max-width:520px;width:100%;background:#141414;border:1px solid #262626;border-radius:24px;overflow:hidden}
+ .card img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover}
+ .body{padding:24px}
+ h1{font-size:24px;margin:0 0 8px}
+ p{color:#a3a3a3;font-size:14px;line-height:1.6;margin:0 0 20px}
+ a{display:block;text-align:center;background:#E6FD3A;color:#000;font-weight:700;padding:16px;border-radius:14px;text-decoration:none}
+</style>
+</head><body>
+<div class="card">
+  ${(ev as any).image ? `<img src="${esc(imageUrl)}" alt="">` : ''}
+  <div class="body">
+    <h1>${esc((ev as any).title)}</h1>
+    <p>${esc(desc)}</p>
+    <a href="${esc(botUrl)}">Открыть в Telegram</a>
+  </div>
+</div>
+<script>setTimeout(function(){location.href=${JSON.stringify(botUrl)}},1200)</script>
+</body></html>`);
+}
+
 // ─── Админская авторизация ───────────────────────────────────────────────
 // Дублируется по файлам сознательно: Vercel не включает в бандл функции
 // модули из папок на «_», а импорт из ../src роняет FUNCTION_INVOCATION_FAILED
@@ -305,6 +390,9 @@ export default async function handler(req: any, res: any) {
       if (!isAdmin(req)) return res.status(401).json({ error: 'Unauthorized' });
       return await handleHealth(res);
     }
+    // Публичные: превью-страница приглашения и картинка события.
+    if (req.query?.action === 'og') return await handleOg(req, res);
+    if (req.query?.action === 'image') return await handleImage(req, res);
     try {
       const { data: events, error } = await supabase
         .from('events')

@@ -84,8 +84,8 @@ export default function App() {
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
-  // Шлюз закрытого клуба (за флагом VITE_GATE_ENABLED, по умолчанию выключен).
-  const gateEnabled = import.meta.env.VITE_GATE_ENABLED === '1';
+  // Клуб закрытый: без реф-ссылки афиша не видна. Аварийно открыть: VITE_GATE_ENABLED=0.
+  const gateEnabled = import.meta.env.VITE_GATE_ENABLED !== '0';
   const [gatePassed, setGatePassed] = useState<boolean>(() => {
     if (!gateEnabled) return true;
     try { return localStorage.getItem('flint_gate_ok') === '1'; } catch { return false; }

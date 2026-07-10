@@ -5,5 +5,11 @@
             "path": "/api/cron/reminders",
             "schedule": "0 9 * * *"
         }
+    ],
+    "rewrites": [
+        {
+            "source": "/e/:id",
+            "destination": "/api/events?action=og&id=:id"
+        }
     ]
 }
