@@ -2027,6 +2027,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         >
                           {m.isCore ? 'Убрать из костяка' : '★ Сделать костяком'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => patchMember(m.telegramId, { status: m.status === 'blocked' ? 'approved' : 'blocked' })}
+                          className={`text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${m.status === 'blocked' ? 'bg-brand/15 text-brand hover:bg-brand/25' : 'bg-rose-500/15 text-rose-400 hover:bg-rose-500/25'}`}
+                        >
+                          {m.status === 'blocked' ? 'Разблокировать' : 'Заблокировать'}
+                        </button>
                       </div>
                     </div>
                   ))
