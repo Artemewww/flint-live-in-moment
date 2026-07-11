@@ -562,6 +562,35 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
+  /** Отфильтрованный+отсортированный список аудитории (общий для рендера и экспорта). */
+  const visibleAudience = (): any[] => {
+    const q = audienceQuery.trim().toLowerCase();
+    let list = ((audience?.members) || []).filter((m: any) => {
+      if (audienceFilter === 'core' && !m.isCore) return false;
+      if (audienceFilter === 'blocked' && m.status !== 'blocked') return false;
+      if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
+      return true;
+    });
+    if (audienceSort === 'points') list = [...list].sort((a: any, b: any) => (b.points || 0) - (a.points || 0));
+    else if (audienceSort === 'attended') list = [...list].sort((a: any, b: any) => (b.attendedCount || 0) - (a.attendedCount || 0));
+    else if (audienceSort === 'name') list = [...list].sort((a: any, b: any) => (a.firstName || '').localeCompare(b.firstName || ''));
+    return list;
+  };
+
+  /** Скопировать текущий список аудитории в буфер (для выгрузки организатором). */
+  const copyAudience = async () => {
+    const list = visibleAudience();
+    const text = list
+      .map((m: any) => `${m.firstName || 'Без имени'}${m.username ? ' @' + m.username : ''} · ${m.points || 0} баллов · был ${m.attendedCount || 0} · привёл ${m.invitedCount || 0}`)
+      .join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setActionMsg({ ok: true, text: `Скопировано: ${list.length} участников` });
+    } catch {
+      setActionMsg({ ok: false, text: 'Не удалось скопировать (буфер недоступен)' });
+    }
+  };
+
   // Тост гаснет сам — чтобы не копился поверх интерфейса.
   useEffect(() => {
     if (!actionMsg) return;
@@ -1990,9 +2019,19 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     </p>
                   )}
                 </div>
-                <button onClick={() => setShowAudience(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white">
-                  <X className="w-5 h-5" />
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  {audience && (audience.members || []).length > 0 && (
+                    <button
+                      onClick={copyAudience}
+                      className="text-[10px] px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 font-bold uppercase cursor-pointer border-none"
+                    >
+                      📋 Копировать
+                    </button>
+                  )}
+                  <button onClick={() => setShowAudience(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
               {audience && (audience.members || []).length > 0 && (
                 <div className="px-4 md:px-6 pt-3 space-y-2">
@@ -2036,16 +2075,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 ) : audience.members?.length === 0 ? (
                   <p className="text-white/40 text-xs text-center py-8">Пока только ты.</p>
                 ) : (() => {
-                  const q = audienceQuery.trim().toLowerCase();
-                  const list = (audience.members || []).filter((m: any) => {
-                    if (audienceFilter === 'core' && !m.isCore) return false;
-                    if (audienceFilter === 'blocked' && m.status !== 'blocked') return false;
-                    if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
-                    return true;
-                  });
-                  if (audienceSort === 'points') list.sort((a: any, b: any) => (b.points || 0) - (a.points || 0));
-                  else if (audienceSort === 'attended') list.sort((a: any, b: any) => (b.attendedCount || 0) - (a.attendedCount || 0));
-                  else if (audienceSort === 'name') list.sort((a: any, b: any) => (a.firstName || '').localeCompare(b.firstName || ''));
+                  const list = visibleAudience();
                   if (list.length === 0) {
                     return <p className="text-white/40 text-xs text-center py-8">Никого не нашлось{audienceQuery ? ` по «${audienceQuery}»` : ''}.</p>;
                   }
