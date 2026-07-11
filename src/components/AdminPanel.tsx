@@ -518,6 +518,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Аудитория клуба (все участники, не по событию). */
   const [showAudience, setShowAudience] = useState(false);
   const [audience, setAudience] = useState<any>(null);
+  /** Поиск по аудитории (имя / @ник). */
+  const [audienceQuery, setAudienceQuery] = useState('');
 
   /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
   const openParticipants = (filter: typeof partFilter, attended = false) => {
@@ -1988,13 +1990,31 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   <X className="w-5 h-5" />
                 </button>
               </div>
+              {audience && (audience.members || []).length > 0 && (
+                <div className="px-4 md:px-6 pt-3">
+                  <input
+                    type="text"
+                    value={audienceQuery}
+                    onChange={(e) => setAudienceQuery(e.target.value)}
+                    placeholder="Поиск по имени или @нику"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
+                  />
+                </div>
+              )}
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
                 {!audience ? (
                   <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
                 ) : audience.members?.length === 0 ? (
                   <p className="text-white/40 text-xs text-center py-8">Пока только ты.</p>
-                ) : (
-                  (audience.members || []).map((m: any) => (
+                ) : (() => {
+                  const q = audienceQuery.trim().toLowerCase();
+                  const list = (audience.members || []).filter((m: any) =>
+                    !q || (m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q)
+                  );
+                  if (list.length === 0) {
+                    return <p className="text-white/40 text-xs text-center py-8">Никого не нашлось по «{audienceQuery}».</p>;
+                  }
+                  return list.map((m: any) => (
                     <div key={m.telegramId} className="bg-white/5 border border-white/10 rounded-xl p-3">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
@@ -2036,8 +2056,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         </button>
                       </div>
                     </div>
-                  ))
-                )}
+                  ));
+                })()}
               </div>
             </motion.div>
           </div>
