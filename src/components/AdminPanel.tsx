@@ -539,6 +539,23 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
+  /** Изменить права участника (костяк/статус) и обновить список аудитории. */
+  const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string }) => {
+    try {
+      const res = await fetch(`/api/admin/registrations?action=member&telegramId=${telegramId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) { setActionMsg({ ok: false, text: 'Не удалось изменить права участника' }); return; }
+      await loadAudience();
+      setActionMsg({ ok: true, text: 'Права участника обновлены' });
+    } catch {
+      setActionMsg({ ok: false, text: 'Ошибка сети' });
+    }
+  };
+
   // Тост гаснет сам — чтобы не копился поверх интерфейса.
   useEffect(() => {
     if (!actionMsg) return;
@@ -2001,6 +2018,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           <p className="text-brand font-black text-sm">{m.points} 🏅</p>
                           <p className="text-[9px] text-white/40 font-mono">был: {m.attendedCount} · привёл: {m.invitedCount}</p>
                         </div>
+                      </div>
+                      <div className="mt-2 pt-2 border-t border-white/5 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => patchMember(m.telegramId, { isCore: !m.isCore })}
+                          className={`text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${m.isCore ? 'bg-white/10 text-white/60 hover:bg-white/20' : 'bg-brand/15 text-brand hover:bg-brand/25'}`}
+                        >
+                          {m.isCore ? 'Убрать из костяка' : '★ Сделать костяком'}
+                        </button>
                       </div>
                     </div>
                   ))
