@@ -591,6 +591,31 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
+  /** Скопировать список участников события (с учётом активного фильтра) — контакты + логистика. */
+  const copyParticipants = async () => {
+    const regs = ((eventStats?.registrations) || []).filter((r: any) =>
+      onlyAttended ? r.attended
+      : partFilter === 'pending' ? r.status === 'pending'
+      : partFilter === 'confirmed' ? r.status === 'confirmed'
+      : partFilter === 'paid' ? r.paymentStatus === 'paid'
+      : true);
+    const statusRu = (r: any) => r.status === 'confirmed' ? 'подтверждён' : r.status === 'pending' ? 'ждёт' : (r.status || '');
+    const text = regs.map((r: any) => {
+      const parts: string[] = [r.name || 'Гость'];
+      if (r.telegram) parts.push(/^[\d@]/.test(r.telegram) ? r.telegram : '@' + r.telegram);
+      if (r.phone) parts.push(r.phone);
+      parts.push(statusRu(r));
+      if (r.hasTransport) parts.push(r.transportSeats ? `🚗 ${r.transportSeats} мест` : '🚗');
+      return parts.join(' · ');
+    }).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setActionMsg({ ok: true, text: `Скопировано: ${regs.length} участников` });
+    } catch {
+      setActionMsg({ ok: false, text: 'Не удалось скопировать (буфер недоступен)' });
+    }
+  };
+
   // Тост гаснет сам — чтобы не копился поверх интерфейса.
   useEffect(() => {
     if (!actionMsg) return;
@@ -1476,7 +1501,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     )}
 
                     <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
-                      <div className="p-3 border-b border-white/10">
+                      <div className="p-3 border-b border-white/10 flex items-center justify-between gap-2">
                         <h4 className="text-xs font-bold uppercase">
                           {onlyAttended ? 'Кто приехал' : partFilter === 'pending' ? 'Ждут подтверждения'
                             : partFilter === 'confirmed' ? 'Подтверждённые' : partFilter === 'paid' ? 'Оплатившие' : 'Все участники'}
@@ -1490,6 +1515,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             return v.length;
                           })()})
                         </h4>
+                        <button
+                          onClick={copyParticipants}
+                          className="text-[10px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 font-bold uppercase cursor-pointer border-none shrink-0"
+                        >
+                          📋 Копировать
+                        </button>
                       </div>
                       <div className="max-h-96 overflow-y-auto">
                         {(() => {
