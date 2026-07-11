@@ -522,6 +522,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audienceQuery, setAudienceQuery] = useState('');
   /** Фильтр аудитории по категории. */
   const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked'>('all');
+  /** Сортировка аудитории. */
+  const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name'>('default');
 
   /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
   const openParticipants = (filter: typeof partFilter, attended = false) => {
@@ -2013,6 +2015,19 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </button>
                     ))}
                   </div>
+                  <div className="flex gap-2 items-center">
+                    <span className="text-[9px] text-white/30 uppercase font-mono">Сортировка:</span>
+                    {([['default', 'По умолч.'], ['points', 'Баллы'], ['attended', 'Визиты'], ['name', 'Имя']] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setAudienceSort(key)}
+                        className={`text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceSort === key ? 'bg-white/20 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -2028,6 +2043,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
                     return true;
                   });
+                  if (audienceSort === 'points') list.sort((a: any, b: any) => (b.points || 0) - (a.points || 0));
+                  else if (audienceSort === 'attended') list.sort((a: any, b: any) => (b.attendedCount || 0) - (a.attendedCount || 0));
+                  else if (audienceSort === 'name') list.sort((a: any, b: any) => (a.firstName || '').localeCompare(b.firstName || ''));
                   if (list.length === 0) {
                     return <p className="text-white/40 text-xs text-center py-8">Никого не нашлось{audienceQuery ? ` по «${audienceQuery}»` : ''}.</p>;
                   }
