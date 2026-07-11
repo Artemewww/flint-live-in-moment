@@ -520,6 +520,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audience, setAudience] = useState<any>(null);
   /** Поиск по аудитории (имя / @ник). */
   const [audienceQuery, setAudienceQuery] = useState('');
+  /** Фильтр аудитории по категории. */
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked'>('all');
 
   /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
   const openParticipants = (filter: typeof partFilter, attended = false) => {
@@ -1991,7 +1993,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 </button>
               </div>
               {audience && (audience.members || []).length > 0 && (
-                <div className="px-4 md:px-6 pt-3">
+                <div className="px-4 md:px-6 pt-3 space-y-2">
                   <input
                     type="text"
                     value={audienceQuery}
@@ -1999,6 +2001,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     placeholder="Поиск по имени или @нику"
                     className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
                   />
+                  <div className="flex gap-2">
+                    {([['all', 'Все'], ['core', 'Костяк'], ['blocked', 'Заблокированные']] as const).map(([key, label]) => (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => setAudienceFilter(key)}
+                        className={`text-[10px] px-2.5 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceFilter === key ? 'bg-brand text-black' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
               <div className="flex-1 overflow-y-auto p-4 space-y-2">
@@ -2008,11 +2022,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   <p className="text-white/40 text-xs text-center py-8">Пока только ты.</p>
                 ) : (() => {
                   const q = audienceQuery.trim().toLowerCase();
-                  const list = (audience.members || []).filter((m: any) =>
-                    !q || (m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q)
-                  );
+                  const list = (audience.members || []).filter((m: any) => {
+                    if (audienceFilter === 'core' && !m.isCore) return false;
+                    if (audienceFilter === 'blocked' && m.status !== 'blocked') return false;
+                    if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
+                    return true;
+                  });
                   if (list.length === 0) {
-                    return <p className="text-white/40 text-xs text-center py-8">Никого не нашлось по «{audienceQuery}».</p>;
+                    return <p className="text-white/40 text-xs text-center py-8">Никого не нашлось{audienceQuery ? ` по «${audienceQuery}»` : ''}.</p>;
                   }
                   return list.map((m: any) => (
                     <div key={m.telegramId} className="bg-white/5 border border-white/10 rounded-xl p-3">
