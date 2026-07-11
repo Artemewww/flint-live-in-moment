@@ -13,12 +13,16 @@ export interface RegisterPayload {
   inviter: string;
   /** Откуда пришла заявка. */
   source: 'website' | 'telegram-mini-app';
+  /** Код доступа к закрытому событию (проверяется на сервере). */
+  accessCode?: string;
 }
 
 export interface RegisterResult {
   ok: boolean;
   delivered: boolean; // доставлено ли реально в Telegram (зависит от настройки токена)
   message?: string;
+  /** Машиночитаемая причина отказа, напр. 'access_denied'. */
+  code?: string;
 }
 
 /**
@@ -55,7 +59,10 @@ export async function submitRegistration(payload: RegisterPayload): Promise<Regi
     });
 
     if (!res.ok) {
-      return { ok: false, delivered: false, message: `HTTP ${res.status}` };
+      // Читаем тело, чтобы поднять причину отказа (напр. неверный код доступа).
+      let body: any = {};
+      try { body = await res.json(); } catch { /* пустое тело */ }
+      return { ok: false, delivered: false, code: body.code, message: body.error || `HTTP ${res.status}` };
     }
     const data = (await res.json()) as Partial<RegisterResult>;
     return { ok: true, delivered: Boolean(data.delivered), message: data.message };

@@ -97,6 +97,8 @@ function mapEventToCamelCase(event: any) {
     statusReason: event.status_reason,
     decisionDeadline: event.decision_deadline,
     checklist: event.checklist || {},
+    // Флаг «закрытое» — чтобы фронт показал поле кода. Сам access_code НЕ отдаём.
+    isPublic: event.is_public !== false,
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},

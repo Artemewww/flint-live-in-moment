@@ -38,6 +38,9 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   // Referral flow inputs
   const [inviter, setInviter] = useState('');
   const [isCopied, setIsCopied] = useState(false);
+  // Код доступа к закрытому событию (нужен только когда event.isPublic === false).
+  const [accessCode, setAccessCode] = useState('');
+  const isClosedEvent = event.isPublic === false;
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDone, setIsDone] = useState(false);
@@ -77,7 +80,16 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
       phone: phoneVal,
       inviter: inviter.trim(),
       source: insideTg ? 'telegram-mini-app' : 'website',
+      accessCode: isClosedEvent ? accessCode.trim() : undefined,
     });
+
+    // Закрытое событие с неверным кодом — сервер вернул отказ. Не показываем «успех».
+    if (!result.ok && result.code === 'access_denied') {
+      setError(result.message || 'Неверный код доступа к закрытому событию');
+      setIsSubmitting(false);
+      haptic('error');
+      return;
+    }
 
     const reg: Registration = {
       id: `reg-${Date.now()}`,
@@ -115,6 +127,11 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
       haptic('error');
       return;
     }
+    if (isClosedEvent && !accessCode.trim()) {
+      setError('Это закрытое событие — введите код доступа');
+      haptic('error');
+      return;
+    }
     finishSuccess(fullName || 'Гость', tgUsername, phone);
   };
 
@@ -124,6 +141,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     if (!fullName.trim()) return setError('Пожалуйста, введите Ваше имя');
     if (!phone.trim()) return setError('Пожалуйста, укажите телефон для связи');
     if (!inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
+    if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
 
     // Вне Telegram идентификатор — телефон с префиксом (уходит в отрицательный id, без коллизий с реальными TG).
     finishSuccess(fullName, `web-${phone.replace(/\D/g, '')}`, phone);
@@ -241,6 +259,22 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       </div>
                     </div>
 
+                    {isClosedEvent && (
+                      <div className="text-left bg-black/40 p-4 rounded-2xl border border-[#E6FD3A]/20 space-y-2">
+                        <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5">
+                          🔒 Код доступа к закрытому событию *
+                        </label>
+                        <input
+                          type="text"
+                          value={accessCode}
+                          onChange={(e) => setAccessCode(e.target.value)}
+                          placeholder="Кодовое слово из приглашения"
+                          autoComplete="off"
+                          className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-[#E6FD3A] focus:ring-1 focus:ring-[#E6FD3A]/30 outline-none text-xs transition-all bg-[#121212] text-white font-mono"
+                        />
+                      </div>
+                    )}
+
                     <div className="text-left">
                       <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50 mb-1.5">
                         Ваше имя
@@ -343,6 +377,23 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         disabled={isSubmitting}
                       />
                     </div>
+
+                    {isClosedEvent && (
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5">
+                          🔒 Код доступа к закрытому событию *
+                        </label>
+                        <input
+                          type="text"
+                          value={accessCode}
+                          onChange={(e) => setAccessCode(e.target.value)}
+                          placeholder="Кодовое слово из приглашения"
+                          autoComplete="off"
+                          className="w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                    )}
 
                     <div>
                       <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50 mb-1.5">

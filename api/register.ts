@@ -70,6 +70,25 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Missing required fields', delivered: false });
     }
 
+    // Гейт закрытого события: без верного кода доступа заявку не принимаем.
+    // Проверка ТОЛЬКО серверная — сам код на публичный фронт не отдаётся.
+    const { data: evGate } = await supabase
+      .from('events')
+      .select('is_public, access_code')
+      .eq('id', eventId)
+      .maybeSingle();
+    if (evGate && evGate.is_public === false && evGate.access_code) {
+      const provided = String(body.accessCode || '').trim().toLowerCase();
+      const expected = String(evGate.access_code).trim().toLowerCase();
+      if (!provided || provided !== expected) {
+        return res.status(403).json({
+          error: 'Неверный код доступа к закрытому событию',
+          code: 'access_denied',
+          delivered: false,
+        });
+      }
+    }
+
     // Достоверная личность из Telegram (если заявка из Mini App).
     const verified = initData ? verifyInitData(initData) : null;
     const handle = String(telegram).replace(/^@/, '').trim();
