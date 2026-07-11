@@ -490,6 +490,83 @@ function tabId(): string {
   } catch { return 'anon'; }
 }
 
+// Пост-сверка общих расходов события: делёж по головам + матрица «кто кому».
+function ExpenseSplitter({ registrations }: { registrations: any[] }) {
+  const attended = registrations.filter((r) => r.attended);
+  const confirmed = registrations.filter((r) => r.status === 'confirmed');
+  const base = (attended.length ? attended : confirmed.length ? confirmed : registrations).map((r) => r.name || 'Гость');
+  // Уникализируем совпадающие имена (Гость, Гость → Гость, Гость 2).
+  const seen: Record<string, number> = {};
+  const people = base.map((n) => { seen[n] = (seen[n] || 0) + 1; return seen[n] > 1 ? `${n} ${seen[n]}` : n; });
+
+  const [expenses, setExpenses] = useState<{ payer: string; label: string; amount: number }[]>([]);
+  const addExpense = () => setExpenses((e) => [...e, { payer: people[0] || '', label: '', amount: 0 }]);
+  const upd = (i: number, patch: Partial<{ payer: string; label: string; amount: number }>) =>
+    setExpenses((e) => e.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const rm = (i: number) => setExpenses((e) => e.filter((_, idx) => idx !== i));
+
+  const total = expenses.reduce((s, e) => s + (e.amount || 0), 0);
+  const share = people.length ? total / people.length : 0;
+  const balance: Record<string, number> = {};
+  people.forEach((p) => (balance[p] = -share));
+  expenses.forEach((e) => { if (balance[e.payer] !== undefined) balance[e.payer] += e.amount || 0; });
+
+  // Матрица переводов — жадно минимизируем число транзакций.
+  const creditors = people.filter((p) => balance[p] > 0.5).map((p) => ({ p, amt: balance[p] })).sort((a, b) => b.amt - a.amt);
+  const debtors = people.filter((p) => balance[p] < -0.5).map((p) => ({ p, amt: -balance[p] })).sort((a, b) => b.amt - a.amt);
+  const transfers: { from: string; to: string; amount: number }[] = [];
+  let di = 0, ci = 0;
+  while (di < debtors.length && ci < creditors.length) {
+    const pay = Math.min(debtors[di].amt, creditors[ci].amt);
+    if (pay > 0.5) transfers.push({ from: debtors[di].p, to: creditors[ci].p, amount: Math.round(pay) });
+    debtors[di].amt -= pay; creditors[ci].amt -= pay;
+    if (debtors[di].amt < 0.5) di++;
+    if (creditors[ci].amt < 0.5) ci++;
+  }
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+      <h4 className="text-xs font-bold uppercase flex items-center gap-2">
+        <DollarSign className="w-4 h-4 text-brand" /> Делёж расходов · {people.length} чел · доля {Math.round(share)} ₽
+      </h4>
+      {expenses.length === 0 && (
+        <p className="text-[11px] text-white/40 italic">Добавь общие покупки (мясо, угли, аренда) — кто платил и сколько. Поделим поровну и покажем, кто кому переводит.</p>
+      )}
+      {expenses.map((e, i) => (
+        <div key={i} className="bg-black/20 border border-white/10 rounded-lg p-2.5 space-y-2">
+          <div className="flex gap-2">
+            <select value={e.payer} onChange={(ev) => upd(i, { payer: ev.target.value })} className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs">
+              {people.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+            <button type="button" onClick={() => rm(i)} className="text-white/40 hover:text-red-400 border-none bg-transparent cursor-pointer" aria-label="Удалить"><Trash2 className="w-4 h-4" /></button>
+          </div>
+          <div className="flex gap-2">
+            <input type="text" value={e.label} onChange={(ev) => upd(i, { label: ev.target.value })} placeholder="За что (мясо, угли…)" className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs placeholder:text-white/30" />
+            <input type="number" value={e.amount || ''} onChange={(ev) => upd(i, { amount: parseInt(ev.target.value) || 0 })} placeholder="₽" className="w-24 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs placeholder:text-white/30" />
+          </div>
+        </div>
+      ))}
+      <button type="button" onClick={addExpense} className="flex items-center gap-1.5 text-[11px] text-brand hover:text-brand-hover font-bold uppercase border-none bg-transparent cursor-pointer">
+        <Plus className="w-3.5 h-3.5" /> Добавить расход
+      </button>
+      {transfers.length > 0 && (
+        <div className="mt-2 pt-3 border-t border-white/10 space-y-2">
+          <p className="text-[10px] text-white/40 uppercase font-mono">Итого {total} ₽ · доля {Math.round(share)} ₽ · кто кому:</p>
+          {transfers.map((t, i) => (
+            <div key={i} className="flex items-center justify-between bg-brand/5 border border-brand/15 rounded-lg px-3 py-2 text-xs">
+              <span><b>{t.from}</b> → {t.to}</span>
+              <span className="text-brand font-black">{t.amount} ₽</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {expenses.length > 0 && transfers.length === 0 && total > 0 && (
+        <p className="text-[11px] text-white/40 italic">Все в расчёте — переводить никому не нужно.</p>
+      )}
+    </div>
+  );
+}
+
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(readSession);
   const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
@@ -512,7 +589,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Фильтр списка участников. Клик по карточке на «Обзоре» ставит нужный. */
   const [partFilter, setPartFilter] = useState<'all' | 'confirmed' | 'pending' | 'paid'>('all');
   /** Какая панель раскрыта во вкладке «Логистика». */
-  const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | null>(null);
+  const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | 'split' | null>(null);
   /** Модалка ввода вместо системных window.prompt (даты, причины, объявления). */
   const [inputModal, setInputModal] = useState<InputModalSpec | null>(null);
   /** Аудитория клуба (все участники, не по событию). */
@@ -1660,6 +1737,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
                 {activeTab === 'logistics' && eventStats && (
                   <div className="space-y-4">
+                    {(() => {
+                      const regs = eventStats.registrations || [];
+                      const cars = regs.filter((r: any) => r.hasTransport);
+                      const seats = cars.reduce((s: number, r: any) => s + (r.transportSeats || 0), 0);
+                      const gear = regs.flatMap((r: any) => r.inventory || []);
+                      const tents = regs.filter((r: any) => (r.inventory || []).some((i: string) => /палат|тент/i.test(i))).length;
+                      return (
+                        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                          <p className="text-[10px] text-white/40 uppercase font-mono mb-3">Сводка логистики</p>
+                          <div className="grid grid-cols-3 gap-2 text-center">
+                            <div><p className="text-2xl font-black">{cars.length}</p><p className="text-[9px] text-white/50 uppercase leading-tight">машин · {seats} мест</p></div>
+                            <div><p className="text-2xl font-black">{tents}</p><p className="text-[9px] text-white/50 uppercase leading-tight">с палаткой</p></div>
+                            <div><p className="text-2xl font-black">{gear.length}</p><p className="text-[9px] text-white/50 uppercase leading-tight">единиц снаряж.</p></div>
+                          </div>
+                          {gear.length > 0 && <p className="text-[10px] text-white/60 mt-3">🎒 {[...new Set(gear)].join(', ')}</p>}
+                        </div>
+                      );
+                    })()}
                     <div className="grid grid-cols-2 gap-3">
                       <button
                         onClick={() => setLogiPanel(logiPanel === 'shopping' ? null : 'shopping')}
@@ -1686,6 +1781,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <Package className="w-6 h-6 text-brand mb-2" />
                         <p className="text-xs font-bold uppercase">Общее снаряжение</p>
                         <p className="text-[10px] text-white/40 mt-1">Кто что везёт</p>
+                      </button>
+
+                      <button
+                        onClick={() => setLogiPanel(logiPanel === 'split' ? null : 'split')}
+                        className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'split' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
+                        <DollarSign className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Делёж расходов</p>
+                        <p className="text-[10px] text-white/40 mt-1">Свести чеки по головам</p>
                       </button>
 
                       <button
@@ -1770,6 +1874,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           );
                         })()}
                       </div>
+                    )}
+
+                    {logiPanel === 'split' && (
+                      <ExpenseSplitter registrations={eventStats.registrations || []} />
                     )}
 
                     {/* Транспортный план — из таблицы rides, а не из анкеты */}
