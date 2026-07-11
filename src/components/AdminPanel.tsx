@@ -1099,10 +1099,53 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           {/* Event Details Panel */}
           <div className="flex-1 overflow-y-auto p-4 md:p-6 min-h-0">
             {!selectedEvent ? (
-              <div className="flex flex-col items-center justify-center h-full text-white/40">
-                <Calendar className="w-16 h-16 mb-4" />
-                <p className="text-sm">Выберите мероприятие для управления</p>
-              </div>
+              (() => {
+                const today = new Date().toISOString().slice(0, 10);
+                const total = events.length;
+                const open = events.filter(e => e.status === 'open').length;
+                const upcoming = events.filter(e => e.date >= today).length;
+                const totalParticipants = events.reduce((s, e) => s + (e.participantsCount || 0), 0);
+                const totalCapacity = events.reduce((s, e) => s + (e.maxParticipants || 0), 0);
+                const fill = totalCapacity > 0 ? Math.round((totalParticipants / totalCapacity) * 100) : 0;
+                const cards: { icon: any; label: string; value: string | number; sub?: string; bar?: number }[] = [
+                  { icon: Calendar, label: 'Событий всего', value: total, sub: `${open} открыто · ${upcoming} впереди` },
+                  { icon: Users, label: 'Участников', value: totalParticipants, sub: `из ${totalCapacity} мест по всем событиям` },
+                  { icon: Activity, label: 'Заполненность', value: `${fill}%`, bar: fill },
+                  { icon: Clock, label: 'Предстоящих', value: upcoming, sub: `${total - upcoming} завершено` },
+                ];
+                return (
+                  <div className="space-y-4">
+                    <div className="flex items-center gap-2">
+                      <BarChart3 className="w-5 h-5 text-brand" />
+                      <h3 className="font-display font-black text-lg uppercase">Сводка по всем событиям</h3>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      {cards.map((c, i) => {
+                        const Icon = c.icon;
+                        return (
+                          <div key={i} className="bg-white/5 border border-white/10 rounded-xl p-4">
+                            <div className="flex items-center gap-2 mb-2">
+                              <Icon className="w-4 h-4 text-brand" />
+                              <span className="text-[10px] text-white/60 uppercase font-mono">{c.label}</span>
+                            </div>
+                            <p className="text-2xl font-black">{c.value}</p>
+                            {c.bar !== undefined ? (
+                              <div className="w-full bg-white/10 rounded-full h-2 mt-2">
+                                <div className="bg-brand h-2 rounded-full transition-all" style={{ width: `${Math.min(100, c.bar)}%` }} />
+                              </div>
+                            ) : (
+                              <p className="text-xs text-white/40">{c.sub}</p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <p className="text-xs text-white/40 flex items-center gap-2 pt-1">
+                      <Calendar className="w-4 h-4 shrink-0" /> Выбери мероприятие слева — детальная статистика, участники и логистика.
+                    </p>
+                  </div>
+                );
+              })()
             ) : (
               <div className="space-y-6">
                 {/* На мобильном — вернуться к списку событий */}
