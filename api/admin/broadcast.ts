@@ -120,7 +120,14 @@ export default async function handler(req: any, res: any) {
         fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+          body: JSON.stringify({
+            chat_id: chatId,
+            text,
+            parse_mode: 'HTML',
+            disable_web_page_preview: true,
+            // Кнопка подтверждения прочтения: тап → отметка админам в группе.
+            reply_markup: { inline_keyboard: [[{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }]] },
+          }),
         })
           .then((r) => r.json())
           .then((j) => ({ chatId, ok: j?.ok === true, code: j?.error_code, desc: j?.description }))

@@ -972,6 +972,29 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Подтверждение прочтения рассылки: тап «✅ Понял(а)».
+      if (data.startsWith('ack_')) {
+        const evId = data.slice('ack_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо, отметил! ✅' });
+        // Убираем кнопку — визуальное подтверждение и защита от повторов.
+        if (msgId) {
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch {}
+        }
+        // Отмечаем костяку в группе, кто подтвердил прочтение.
+        if (ADMIN_CHAT_ID) {
+          const ev = await getEvent(evId);
+          const who = `${esc(cq.from.first_name || '')}${cq.from.username ? ' @' + esc(cq.from.username) : ''} (id ${tgId})`;
+          try {
+            await tg('sendMessage', {
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `✅ <b>Прочитано</b> · ${esc(ev?.title || evId)}\n${who}`,
+              disable_web_page_preview: true,
+            });
+          } catch {}
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       // Программа события.
       if (data.startsWith('prog_')) {
         const ev = await getEvent(data.slice('prog_'.length));
