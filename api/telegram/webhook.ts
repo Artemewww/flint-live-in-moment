@@ -803,6 +803,15 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         if (!ev) return res.status(200).json({ ok: true });
         await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ Правила приняты. Продолжаем запись 👇' });
+        // Закрытое событие — сначала код доступа (проверяется на сервере).
+        if (ev.is_public === false && ev.access_code) {
+          await setSession(tgId, 'reg_code', { evId: ev.id });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🔒 Это <b>закрытое событие</b>. Введи <b>код доступа</b> из приглашения — одним сообщением:',
+          });
+          return res.status(200).json({ ok: true });
+        }
         await beginReg(ev);
         return res.status(200).json({ ok: true });
       }
@@ -1344,6 +1353,38 @@ export default async function handler(req: any, res: any) {
         }
         if (sess && sess.state === 'apply_source') {
           await finishApplication(msg.from, chatId, { ...sess.context, source: text.slice(0, 200) });
+          return res.status(200).json({ ok: true });
+        }
+
+        // ── Закрытое событие: ввод кода доступа → регистрация ─────────────
+        if (sess && sess.state === 'reg_code') {
+          const ev = await getEvent(sess.context.evId);
+          if (!ev) {
+            await clearSession(msg.from.id);
+            await tg('sendMessage', { chat_id: chatId, text: 'Событие не найдено.' });
+            return res.status(200).json({ ok: true });
+          }
+          const provided = text.trim().toLowerCase();
+          const expected = String(ev.access_code || '').trim().toLowerCase();
+          if (!expected || provided !== expected) {
+            // Остаёмся в состоянии reg_code — можно попробовать снова.
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '❌ Неверный код доступа. Проверь приглашение и введи код ещё раз.' });
+            return res.status(200).json({ ok: true });
+          }
+          await clearSession(msg.from.id);
+          const r = await registerFromBot(msg.from, ev);
+          if (r === 'error') {
+            await tg('sendMessage', { chat_id: chatId, text: 'Ошибка записи, попробуйте позже.' });
+            return res.status(200).json({ ok: true });
+          }
+          if (r === 'already') {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `Ты уже записан(а) на «<b>${esc(ev.title)}</b>».` });
+            return res.status(200).json({ ok: true });
+          }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Код верный! Записал тебя на «<b>${esc(ev.title)}</b>».\n\nДетали и напоминания придут в бот.`,
+          });
           return res.status(200).json({ ok: true });
         }
 
