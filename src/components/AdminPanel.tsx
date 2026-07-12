@@ -1960,6 +1960,34 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </div>
                     )}
 
+                    {/* Инвентарь без машины — распределяем по водителям равномерно */}
+                    {(() => {
+                      const needCarry = (eventStats.registrations || []).filter((r: any) => (r.inventory || []).length > 0 && !r.hasTransport);
+                      if (needCarry.length === 0) return null;
+                      const cars = (eventStats.rides || []);
+                      return (
+                        <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+                          <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2 text-amber-300">
+                            <Package className="w-4 h-4" /> Инвентарь без машины ({needCarry.length})
+                          </h4>
+                          <div className="space-y-2">
+                            {needCarry.map((r: any, i: number) => {
+                              const driver = cars.length ? cars[i % cars.length] : null;   // равномерно по машинам
+                              return (
+                                <div key={r.id || i} className="text-[11px] text-white/80 bg-white/5 rounded-lg p-2">
+                                  🎒 <b>{r.name}</b>: {(r.inventory || []).join(', ')}
+                                  <span className="text-white/50">
+                                    {' → '}{driver ? `подвезёт 🚗 ${driver.driver_name || 'Водитель'}` : 'нет свободной машины — нужен водитель'}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <p className="text-[9px] text-white/40 mt-2 italic">Предложение по равномерному распределению — согласуйте с водителями.</p>
+                        </div>
+                      );
+                    })()}
+
                     {/* SOS: кому нужна попутка */}
                     {eventStats.rideRequests.length > 0 && (
                       <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
