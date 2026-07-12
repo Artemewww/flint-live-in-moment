@@ -44,6 +44,8 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDone, setIsDone] = useState(false);
+  /** Сервер сообщил, что заявка уже была (анти-дубль) — показываем «вы уже записаны». */
+  const [alreadyReg, setAlreadyReg] = useState(false);
   const [delivered, setDelivered] = useState<boolean | null>(null);
   const [error, setError] = useState('');
   const [consentGiven, setConsentGiven] = useState(false);
@@ -90,6 +92,9 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
       haptic('error');
       return;
     }
+
+    // Анти-дубль: сервер уже видел заявку — всё равно отмечаем «записан», но текст другой.
+    setAlreadyReg(!!result.alreadyRegistered);
 
     const reg: Registration = {
       id: `reg-${Date.now()}`,
@@ -659,13 +664,17 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
 
               <div className="space-y-1.5">
                 <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A] bg-[#E6FD3A]/10 px-3 py-1 rounded-full font-black">
-                  Гость в базе • Синхронизация завершена
+                  {alreadyReg ? 'Вы уже записаны' : 'Гость в базе • Синхронизация завершена'}
                 </span>
                 <h4 className="font-display font-black text-2xl text-white uppercase tracking-tight">
-                  Добро пожаловать в круг!
+                  {alreadyReg ? 'Вы уже в списке!' : 'Добро пожаловать в круг!'}
                 </h4>
                 <p className="text-xs text-white/70 max-w-sm mx-auto font-sans leading-relaxed">
-                  Поздравляем! Вы записаны по приглашению от <strong className="text-[#E6FD3A] font-mono">{inviter}</strong>. Ваш аккаунт <strong className="text-brand">@{tgUsername}</strong> в заявке на «{event.title}».
+                  {alreadyReg ? (
+                    <>Вы уже записаны на «{event.title}». Повторная заявка не нужна — ждите деталей и напоминаний. Подтвердить участие можно в боте ниже.</>
+                  ) : (
+                    <>Поздравляем! Вы записаны по приглашению от <strong className="text-[#E6FD3A] font-mono">{inviter}</strong>. Ваш аккаунт <strong className="text-brand">@{tgUsername}</strong> в заявке на «{event.title}».</>
+                  )}
                 </p>
               </div>
 

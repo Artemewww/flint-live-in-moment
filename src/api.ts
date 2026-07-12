@@ -23,6 +23,8 @@ export interface RegisterResult {
   message?: string;
   /** Машиночитаемая причина отказа, напр. 'access_denied'. */
   code?: string;
+  /** Сервер уже видел эту заявку (анти-дубль) — новая запись не создана. */
+  alreadyRegistered?: boolean;
 }
 
 /**
@@ -65,7 +67,7 @@ export async function submitRegistration(payload: RegisterPayload): Promise<Regi
       return { ok: false, delivered: false, code: body.code, message: body.error || `HTTP ${res.status}` };
     }
     const data = (await res.json()) as Partial<RegisterResult>;
-    return { ok: true, delivered: Boolean(data.delivered), message: data.message };
+    return { ok: true, delivered: Boolean(data.delivered), message: data.message, alreadyRegistered: Boolean(data.alreadyRegistered) };
   } catch (err) {
     // Оффлайн / функция недоступна (напр. локальный `vite` без serverless).
     return { ok: false, delivered: false, message: (err as Error).message };
