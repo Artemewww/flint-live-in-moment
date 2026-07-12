@@ -1,7 +1,6 @@
 import { GoogleGenAI, Type } from '@google/genai';
 import * as crypto from 'crypto';
 
-
 /**
  * ИИ-помощник-наставник сообщества «Живи в моменте» (Google Gemini).
  * Каждый ответ проходит через «фильтр эмпатии»: 
@@ -14,8 +13,6 @@ import * as crypto from 'crypto';
  */
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
-
-
 
 /**
  * Какие модели реально доступны этому ключу. Захардкоженный список угадывать
@@ -38,7 +35,6 @@ async function listModels(): Promise<string[]> {
   const usable = (j.models || [])
     .filter((m: any) => (m.supportedGenerationMethods || []).includes('generateContent'))
     .map((m: any) => String(m.name).replace(/^models\//, ''))
-    // Картиночные/голосовые/эмбеддинги для JSON-генерации не годятся.
     .filter((n: string) => !/embedding|aqa|image|tts|audio|vision|live/i.test(n));
 
   modelCache = { at: Date.now(), models: usable };
@@ -49,9 +45,9 @@ async function listModels(): Promise<string[]> {
 function rankModels(available: string[]): string[] {
   const score = (n: string): number => {
     let s = 0;
-    if (/flash/.test(n)) s += 100;          // дёшево и быстро — то, что нам нужно
+    if (/flash/.test(n)) s += 100;
     if (/lite/.test(n)) s -= 20;
-    if (/preview|exp/.test(n)) s -= 30;     // экспериментальные — в последнюю очередь
+    if (/preview|exp/.test(n)) s -= 30;
     const ver = n.match(/(\d+)\.(\d+)/);
     if (ver) s += Number(ver[1]) * 10 + Number(ver[2]);
     if (/latest/.test(n)) s += 5;
@@ -65,14 +61,6 @@ function rankModels(available: string[]): string[] {
   return ranked;
 }
 
-/**
- * Вызов Gemini с JSON-схемой. Модели отваливаются по-разному, и лечится это
- * тоже по-разному:
- *   503 — модель временно перегружена, имеет смысл вернуться к ней позже;
- *   404 — модель недоступна этому ключу, второй раз пробовать бессмысленно;
- *   429 — выбрана квота, идём к следующей модели.
- * Функция на Vercel Hobby живёт 10 секунд, поэтому длинных пауз себе не позволяем.
- */
 async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
   const available = await listModels();
   if (!available.length) throw new Error('У ключа нет ни одной модели с generateContent');
@@ -87,8 +75,6 @@ async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
       config: { responseMimeType: 'application/json', responseSchema: schema },
     });
     const parsed = JSON.parse(resp.text || '{}');
-    // Некоторые модели отвечают 200 и пустым объектом. Молча принимать это нельзя:
-    // наружу уйдут дефолты, и будет выглядеть, будто ИИ «ничего не придумал».
     if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
       throw new Error('вернула пустой JSON');
     }
@@ -106,7 +92,6 @@ async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
     }
   }
 
-  // Второй заход по тем, кто был просто перегружен.
   for (const model of retryable.slice(0, 2)) {
     await new Promise((r) => setTimeout(r, 800));
     try {
@@ -128,13 +113,6 @@ const TYPE_RU: Record<string, string> = {
   intellectual: 'интеллектуальный клуб', active: 'активный выезд на природе',
 };
 
-// ─── Админская авторизация ───────────────────────────────────────────────
-// Дублируется по файлам сознательно: Vercel не включает в бандл функции
-// модули из папок на «_», а импорт из ../src роняет FUNCTION_INVOCATION_FAILED
-// (PLAN.md §9). Тот же приём, что с mapEventToCamelCase.
-//
-// Секрет живёт только в env. Раньше здесь был фолбэк на строку-пароль, и она
-// уезжала в публичный JS-бандл вместе с фронтом.
 const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
 const ADMIN_COOKIE = 'flint_admin';
 
@@ -153,7 +131,6 @@ function readCookie(req: any, name: string): string | null {
   return null;
 }
 
-/** Кука вида <срок>.<подпись>: подпись не даёт продлить срок вручную. */
 function validSession(value: string): boolean {
   const [expRaw, mac] = String(value).split('.');
   const exp = Number(expRaw);
@@ -161,7 +138,6 @@ function validSession(value: string): boolean {
   return safeEq(mac, crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex'));
 }
 
-/** Пускать ли запрос: заголовок (крон, curl) или подписанная кука (браузер). */
 function isAdmin(req: any): boolean {
   if (!ADMIN_SECRET) return false;
   const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
@@ -184,9 +160,8 @@ export default async function handler(req: any, res: any) {
     const task: string = body.task || 'program';
     const ev = body.event || {};
     const people = Number(body.people) || Number(ev.maxParticipants) || 10;
-    const diet = body.diet || {}; // { vegan, vegetarian, children }
+    const diet = body.diet || {};
 
-    // Диагностика: что за модели вообще доступны этому ключу.
     if (task === 'models') {
       const available = await listModels();
       return res.status(200).json({ available, ranked: rankModels(available).slice(0, 6) });
@@ -198,9 +173,11 @@ export default async function handler(req: any, res: any) {
 
     if (task === 'autofill') {
       const prompt =
-        `Ты — опытный организатор трезвого мужского/семейного сообщества «Живи в моменте» (Минск). ` +
-        `По короткому названию придумай ПОЛНОЕ наполнение события — живо, вдохновляюще, по-русски, без алкоголя.\n` +
-        `Название: «${ev.title || 'Событие'}».` + (ev.date ? ` Дата: ${ev.date}${ev.dateEnd && ev.dateEnd !== ev.date ? ` — ${ev.dateEnd}` : ''}.` : '') + `\n` +
+        `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +
+        `Твоя задача — помогать организаторам наполнять события смыслом и заботой.\n\n` +
+        `Название события: «${ev.title || 'Событие'}».` + (ev.date ? ` Дата: ${ev.date}${ev.dateEnd && ev.dateEnd !== ev.date ? ` — ${ev.dateEnd}` : ''}.` : '') + `\n\n` +
+        `Мы верим, что каждое событие — это возможность для человека прикоснуться к чему-то важному. ` +
+        `Помоги нам сделать это наполнение тёплым, вдохновляющим и по-настоящему ценным.\n\n` +
         `Верни JSON с полями:\n` +
         `- type: один из male|mixed|intellectual|active (male=мужское, mixed=смешанное/семейное, intellectual=интеллект, active=активный выезд);\n` +
         `- description: 2–4 живых предложения о сути и атмосфере;\n` +
@@ -222,7 +199,6 @@ export default async function handler(req: any, res: any) {
             items: { type: Type.STRING, enum: ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] },
           },
         },
-        // Без required модель вправе вернуть пустой объект — так и происходило.
         required: ['type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities'],
       });
       const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
@@ -243,9 +219,15 @@ export default async function handler(req: any, res: any) {
     if (task === 'generate_event') {
       const prompt = body.prompt || '';
       const sys =
-        `Ты — опытный организатор трезвого сообщества «Живи в моменте» (Минск). ` +
-        `По одной короткой фразе сгенерируй ПОЛНОЕ готовое событие — живо, вдохновляюще, по-русски, без алкоголя.\n` +
-        `Идея: «${prompt}».\n` +
+        `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +
+        `Твоя миссия — создавать события, которые дарят людям радость, вдохновение и пространство для роста.\n\n` +
+        `Человек поделился своей идеей: «${prompt}». ` +
+        `Этот запрос очень ценен — он отражает то, что действительно важно для человека прямо сейчас. ` +
+        `Мы с благодарностью принимаем его и хотим создать нечто особенное, что принесёт ему именно тот опыт, который ему нужен.\n\n` +
+        `Зачем мы это делаем: чтобы человек получил возможность попробовать что-то новое, встретить единомышленников, ` +
+        `чувствовать себя комфортно и безопасно, открываясь новому опыту.\n\n` +
+        `Сгенерируй ПОЛНОЕ готовое событие — тепло, по-русски, без алкоголя. ` +
+        `В описании и программе передавай заботу о комфорте каждого участника.\n\n` +
         `Верни JSON с полями:\n` +
         `- title: короткое яркое название (до 60 символов);\n` +
         `- type: один из male|mixed|intellectual|active (male=мужское, mixed=смешанное/семейное, intellectual=интеллект, active=активный выезд);\n` +
@@ -312,10 +294,14 @@ export default async function handler(req: any, res: any) {
     if (task === 'detect_goal') {
       const text = body.text || '';
       const sys =
-        `Ты — психолог и коуч сообщества «Живи в моменте» (Минск). ` +
-        `Человек ответил на вопрос о своём развитии. Определи, какое из 6 качеств личности ` +
-        `ему сейчас важнее всего проработать. Ответ был:\n«${text}»\n\n` +
-        `Качества:\n` +
+        `Ты — чуткий психолог и наставник сообщества «Живи в моменте» (Минск). ` +
+        `Человек доверил тебе свои мысли о развитии. Это очень ценно — спасибо, что поделился.\n\n` +
+        `Ответ человека:\n«${text}»\n\n` +
+        `Зачем мы это спрашиваем: чтобы понять, какое направление развития сейчас важнее всего для человека, ` +
+        `и предложить ему события, которые действительно помогут расти в этом направлении. ` +
+        `Твои данные — это твой личный компас развития. Доступ к ним имеешь только ты и система для планирования. ` +
+        `Мы храним их с максимальным уважением к приватности.\n\n` +
+        `Определи, какое из 6 качеств личности ему сейчас важнее всего проработать:\n` +
         `- foundation (Предназначение): смысл, цели, призвание, ценности, направление\n` +
         `- wall (Воля): дисциплина, сила, преодоление, выдержка, характер\n` +
         `- roof (Совесть): честность, ответственность, справедливость, мораль\n` +
@@ -344,10 +330,14 @@ export default async function handler(req: any, res: any) {
     if (task === 'clarifying_questions') {
       const event = body.event || {};
       const sys =
-        `Ты — организатор трезвого сообщества «Живи в моменте» (Минск). ` +
-        `Событие сгенерировано. Сформулируй 3–5 КОРОТКИХ уточняющих вопросов организатору, ` +
-        `чтобы не забыть важные детали. Вопросы должны быть конкретными, с вариантами на выбор.\n` +
-        `Тип: ${event.type || 'mixed'}. Название: «${event.title || 'Событие'}».\n` +
+        `Ты — заботливый организатор сообщества «Живи в моменте» (Минск). ` +
+        `Событие уже сгенерировано, и это здорово! Теперь нам важно убедиться, что ничего не упущено, ` +
+        `чтобы каждый участник чувствовал себя комфортно и всё прошло гладко.\n\n` +
+        `Зачем мы задаём эти вопросы: чтобы организатор мог заранее продумать детали, ` +
+        `которые превращают хорошее событие в незабываемое. Мелочей не бывает — именно из них складывается забота.\n\n` +
+        `Тип: ${event.type || 'mixed'}. Название: «${event.title || 'Событие'}».\n\n` +
+        `Сформулируй 3–5 КОРОТКИХ уточняющих вопросов организатору. ` +
+        `Вопросы должны быть конкретными, с вариантами на выбор, и передавать заботу о комфорте участников.\n` +
         `Примеры: «Нужна ли колонка/звук?», «Кто ведёт машину?», «Нужен ли стол/стулья?», ` +
         `«Будет ли ночёвка?», «Нужен ли инструктор?».\n` +
         `Верни JSON: { questions: string[] } — массив из 3–5 вопросов.`;
@@ -364,10 +354,13 @@ export default async function handler(req: any, res: any) {
 
     if (task === 'shopping') {
       const prompt =
-        `Ты — помощник организатора трезвого сообщества «Живи в моменте» (Минск, Беларусь). ` +
-        `Составь список ПРОДУКТОВ для закупки на мероприятие.\n` +
+        `Ты — заботливый помощник организатора сообщества «Живи в моменте» (Минск, Беларусь). ` +
+        `Мы готовимся к событию и хотим, чтобы каждый участник чувствовал себя желанным гостем, ` +
+        `а его предпочтения в еде были учтены с вниманием и уважением.\n\n` +
         `Название: «${ev.title || 'Событие'}». Тип: ${typeRu}. Длительность: ${days}.\n` +
-        `Людей: ${people} (из них веганов: ${diet.vegan || 0}, вегетарианцев: ${diet.vegetarian || 0}, детей: ${diet.children || 0}).\n` +
+        `Людей: ${people} (из них веганов: ${diet.vegan || 0}, вегетарианцев: ${diet.vegetarian || 0}, детей: ${diet.children || 0}).\n\n` +
+        `Зачем мы это делаем: чтобы никто не остался голодным, а каждый чувствовал, что о нём позаботились. ` +
+        `Хорошая еда — это проявление любви к участникам.\n\n` +
         `Правила: здоровое питание, БЕЗ алкоголя и вредного; учитывай веганов/вегетарианцев/детей; ` +
         `количества — реалистичные на указанное число людей; цены ориентировочные по рынку Минска в BYN. ` +
         `Верни JSON: массив items с полями item (продукт), qty (количество, напр. «3 кг»), note (примечание/примерная цена).`;
@@ -385,10 +378,14 @@ export default async function handler(req: any, res: any) {
 
     // task === 'program'
     const prompt =
-      `Ты — помощник организатора трезвого сообщества «Живи в моменте» (Минск). ` +
-      `Составь ПРОГРАММУ мероприятия — живо, по-русски, без алкоголя, под тип и длительность.\n` +
+      `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +
+      `Мы создаём программу для события, и нам важно, чтобы каждый её пункт нёс тепло, ` +
+      `вдохновение и пользу для участников.\n\n` +
       `Название: «${ev.title || 'Событие'}». Тип: ${typeRu}. Длительность: ${days}. Ожидается людей: ${people}.\n` +
       (ev.painPoint ? `Смысл/запрос: ${ev.painPoint}.\n` : '') +
+      `Зачем мы это делаем: чтобы каждый участник ушёл с чувством, что время прошло не зря — ` +
+      `он получил новые впечатления, знания или тёплые воспоминания.\n\n` +
+      `Составь ПРОГРАММУ — живо, по-русски, без алкоголя, под тип и длительность. ` +
       `Верни JSON: массив program из 5–9 пунктов (каждый — короткая строка шага программы, можно со временем).`;
     const parsed = await genJSON(ai, prompt, {
       type: Type.OBJECT,
