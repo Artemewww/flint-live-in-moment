@@ -104,6 +104,11 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder, aiHint }:
     [c[i], c[j]] = [c[j], c[i]];
     onChange(c);
   };
+  const addBlock = () => {
+    const day = Math.floor(items.length / 5) + 1;
+    const time = items.length % 5 === 0 ? '10:00' : '';
+    onChange([...items, `[День ${day}] ${time ? time + ' — ' : ''}`]);
+  };
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -122,9 +127,14 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder, aiHint }:
             <button type="button" onClick={() => del(i)} className="text-red-400/70 hover:text-red-400 px-1 cursor-pointer bg-transparent border-none" title="Удалить">✕</button>
           </div>
         ))}
-        <button type="button" onClick={() => onChange([...items, ''])} className="text-[11px] text-white/50 hover:text-white border border-dashed border-white/15 hover:border-white/30 rounded-lg px-2 py-1.5 w-full cursor-pointer bg-transparent transition-colors">
-          ＋ Добавить пункт
-        </button>
+        <div className="flex gap-2">
+          <button type="button" onClick={() => onChange([...items, ''])} className="flex-1 text-[11px] text-white/50 hover:text-white border border-dashed border-white/15 hover:border-white/30 rounded-lg px-2 py-1.5 cursor-pointer bg-transparent transition-colors">
+            ＋ Пункт
+          </button>
+          <button type="button" onClick={addBlock} className="text-[11px] text-brand hover:text-brand-hover border border-brand/20 hover:border-brand/40 rounded-lg px-2 py-1.5 cursor-pointer bg-transparent transition-colors">
+            ＋ День
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -2779,7 +2789,8 @@ function AddEventModal({ onClose, onAdd }: {
     program: [] as string[],
     logistics: {} as Record<string, any>,
     paymentDetails: {} as Record<string, any>,
-    houseQualities: [] as HouseQuality[]
+    houseQualities: [] as HouseQuality[],
+    distanceFromMinsk: 0 as number | undefined,
   });
 
   const handleAdd = () => {
@@ -2813,6 +2824,7 @@ function AddEventModal({ onClose, onAdd }: {
       program: formData.program,
       logistics: formData.logistics,
       paymentDetails: formData.paymentDetails,
+      distanceFromMinsk: formData.distanceFromMinsk,
       notifications: {
         reminder7d: true,
         reminder3d: true,
@@ -2994,6 +3006,31 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, location: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
+
+          {/* Логистика: удаленность + Яндекс.Карты */}
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+            <label className="text-[10px] text-white/40 uppercase font-mono block">🚗 Логистика</label>
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                type="number"
+                placeholder="Удаленность от Минска (км)"
+                value={formData.distanceFromMinsk || ''}
+                onChange={(e) => setFormData({...formData, distanceFromMinsk: parseInt(e.target.value) || 0})}
+                className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const url = `https://yandex.ru/maps/?text=${encodeURIComponent(formData.location || 'Минск')}`;
+                  window.open(url, '_blank');
+                }}
+                className="text-[11px] text-brand hover:text-brand-hover border border-brand/20 hover:border-brand/40 rounded-lg px-2 py-1.5 cursor-pointer bg-transparent transition-colors"
+              >
+                🗺 Открыть Яндекс.Карты
+              </button>
+            </div>
+            <p className="text-[9px] text-white/35">Укажи км для оценки времени в пути. Кнопка откроет карты для выбора точки.</p>
+          </div>
 
           {formData.priceType === 'paid' && (
             <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />

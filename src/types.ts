@@ -49,6 +49,8 @@ export interface CommunityEvent {
     lat: number;
     lng: number;
   };
+  /** Удаленность от Минска по прямой/дороге, км (для логистики). */
+  distanceFromMinsk?: number;
   painPoint: string; // "Главная боль, которую закрывает"
   houseQualities: HouseQuality[];
   image: string;
