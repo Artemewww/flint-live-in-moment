@@ -1120,6 +1120,8 @@ export default async function handler(req: any, res: any) {
             [{ text: '🚗 Еду на машине — предложить места', callback_data: `ridenew_${evId}` }],
             [{ text: '👀 Кто едет / занять место', callback_data: `rides_${evId}` }],
             [{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }],
+            [{ text: '⛺ Своя палатка — предложить места', callback_data: `tentnew_${evId}` }],
+            [{ text: '🛌 Места в палатках', callback_data: `tents_${evId}` }],
           ]),
         });
         return res.status(200).json({ ok: true });
@@ -1180,7 +1182,9 @@ export default async function handler(req: any, res: any) {
       if (data.startsWith('rides_')) {
         const evId = data.slice('rides_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        const { data: rides } = await supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at');
+        const { data: allActive } = await supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at');
+        // Палатки (kind='tent') живут в той же таблице — в список машин их не пускаем.
+        const rides = (allActive || []).filter((r: any) => r.kind !== 'tent');
         if (!rides || rides.length === 0) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Пока никто не заявил машину. Будь первым — «🚗 Еду на машине», или оставь заявку «🚶 Нужна попутка».', reply_markup: kb([[{ text: '🚗 Еду на машине', callback_data: `ridenew_${evId}` }], [{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }]]) });
           return res.status(200).json({ ok: true });
@@ -1305,6 +1309,151 @@ export default async function handler(req: any, res: any) {
         for (const did of uniq) {
           try { await tg('sendMessage', { chat_id: did, parse_mode: 'HTML', text: `🚶 ${esc(cq.from.first_name || 'Участник')} ищет попутку на событие. Если есть место — напиши ему или добавь мест.` }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // ===== ПАЛАТКИ: места как в машине (kind='tent' в rides, брони через те же RPC) =====
+      // Предложить палатку → выбор числа мест.
+      if (data.startsWith('tentnew_')) {
+        const evId = data.slice('tentnew_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '⛺ <b>Своя палатка</b>\n\nСколько свободных спальных мест готов отдать?',
+          reply_markup: kb([[
+            { text: '1', callback_data: `tspots_1_${evId}` },
+            { text: '2', callback_data: `tspots_2_${evId}` },
+            { text: '3', callback_data: `tspots_3_${evId}` },
+            { text: '4', callback_data: `tspots_4_${evId}` },
+          ]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Число мест выбрано → правило подселения.
+      if (data.startsWith('tspots_')) {
+        const p = data.slice('tspots_'.length).split('_');
+        const n = Number(p[0]) || 0;
+        const evId = p.slice(1).join('_');
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `⛺ ${n} мест. Кого можно подселять?`,
+          reply_markup: kb([[
+            { text: '👥 Любых', callback_data: `tmake_${n}_any_${evId}` },
+            { text: '♂ Только М', callback_data: `tmake_${n}_male_${evId}` },
+            { text: '♀ Только Ж', callback_data: `tmake_${n}_female_${evId}` },
+          ]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Создать палатку.
+      if (data.startsWith('tmake_')) {
+        const p = data.slice('tmake_'.length).split('_');
+        const n = Number(p[0]) || 0;
+        const gender = p[1] || 'any';
+        const evId = p.slice(2).join('_');
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Палатка добавлена!' });
+        const { error } = await supabase.from('rides').insert({
+          event_id: evId, driver_id: tgId, driver_name: cq.from.first_name || cq.from.username || 'Хозяин',
+          from_point: `Палатка ${cq.from.first_name || ''}`.trim(), seats_total: n, kind: 'tent', gender_rule: gender,
+        });
+        if (error) {
+          await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '⚠️ Не удалось добавить палатку. Возможно, ещё не применена миграция палаток (2026-tents-booking.sql).' });
+          return res.status(200).json({ ok: true });
+        }
+        const grLabel = gender === 'male' ? 'только М' : gender === 'female' ? 'только Ж' : 'любые';
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ Палатка добавлена: ${n} мест · подселение — ${grLabel}.\n\nУчастники увидят её в «🛌 Места в палатках» и смогут занять место.`,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Список палаток + занять место.
+      if (data.startsWith('tents_')) {
+        const evId = data.slice('tents_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: allActive } = await supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at');
+        const tents = (allActive || []).filter((r: any) => r.kind === 'tent');
+        if (tents.length === 0) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Пока никто не предложил палатку. Есть своя со свободными местами? Нажми «⛺ Своя палатка».', reply_markup: kb([[{ text: '⛺ Своя палатка', callback_data: `tentnew_${evId}` }]]) });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: myB } = await supabase.from('ride_bookings').select('ride_id').in('ride_id', tents.map((r: any) => r.id)).eq('passenger_id', tgId);
+        const booked = new Set((myB || []).map((b: any) => b.ride_id));
+        for (const t of tents) {
+          const taken = (t as any).seats_taken || 0;
+          const free = Math.max(0, ((t as any).seats_total || 0) - taken);
+          const gr = (t as any).gender_rule === 'male' ? '♂ только М' : (t as any).gender_rule === 'female' ? '♀ только Ж' : '👥 любые';
+          const mine = (t as any).driver_id === tgId;
+          const rows: any[] = [];
+          if (mine) rows.push([{ text: '❌ Убрать мою палатку', callback_data: `tentcancel_${(t as any).id}` }]);
+          else if (booked.has((t as any).id)) rows.push([{ text: '❌ Освободить моё место', callback_data: `tunbook_${(t as any).id}` }]);
+          else if (free > 0) rows.push([{ text: `✅ Занять место (${free} своб.)`, callback_data: `tbook_${(t as any).id}` }]);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `⛺ <b>Палатка ${esc((t as any).driver_name || '')}</b>\n💺 Свободно ${free} из ${(t as any).seats_total || 0} · подселение ${gr}`,
+            reply_markup: rows.length ? kb(rows) : undefined,
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+      // Занять место в палатке (с проверкой правила подселения по категории заявки).
+      if (data.startsWith('tbook_')) {
+        const rideId = Number(data.slice('tbook_'.length));
+        const { data: tent } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        if (!tent || !(tent as any).active) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Палатка недоступна' }); return res.status(200).json({ ok: true }); }
+        const gr = (tent as any).gender_rule || 'any';
+        if (gr === 'male' || gr === 'female') {
+          const { data: myReg } = await supabase.from('registrations').select('category').eq('event_id', (tent as any).event_id).eq('telegram_id', tgId).maybeSingle();
+          const cat = (myReg as any)?.category;
+          if (cat && cat !== gr) {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: gr === 'male' ? 'Палатка только для мужчин' : 'Палатка только для женщин' });
+            return res.status(200).json({ ok: true });
+          }
+        }
+        const name = cq.from.first_name || cq.from.username || 'Гость';
+        const { data: outcome } = await supabase.rpc('book_ride_seat', { p_ride_id: rideId, p_passenger: tgId, p_name: name });
+        if (outcome !== 'ok') {
+          const why = outcome === 'dup' ? 'Ты уже в этой палатке' : outcome === 'full' ? 'Мест уже нет' : outcome === 'gone' ? 'Палатка убрана' : 'Не получилось';
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: why });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место в палатке твоё ✅' });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ <b>Место в палатке «${esc((tent as any).driver_name || '')}» твоё.</b>\n\nХозяин уведомлён — он подскажет детали ночёвки.`,
+          reply_markup: kb([[{ text: '❌ Освободить место', callback_data: `tunbook_${rideId}` }]]),
+        });
+        try {
+          const { data: paxInfo } = await supabase.from('members').select('phone').eq('telegram_id', tgId).maybeSingle();
+          await tg('sendMessage', {
+            chat_id: (tent as any).driver_id, parse_mode: 'HTML',
+            text: `⛺ <b>К тебе в палатку заселился ${esc(cq.from.first_name || '')}</b>${cq.from.username ? ` @${esc(cq.from.username)}` : ''}\n${(paxInfo as any)?.phone ? `📞 <code>${esc((paxInfo as any).phone)}</code>` : ''}`,
+          });
+        } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+      // Освободить место в палатке.
+      if (data.startsWith('tunbook_')) {
+        const rideId = Number(data.slice('tunbook_'.length));
+        const { data: outcome } = await supabase.rpc('cancel_ride_seat', { p_ride_id: rideId, p_passenger: tgId });
+        if (outcome !== 'ok') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ты не занимал здесь место' }); return res.status(200).json({ ok: true }); }
+        const { data: tent } = await supabase.from('rides').select('driver_id').eq('id', rideId).maybeSingle();
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место освобождено' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Ты освободил место в палатке. Оно снова доступно.' });
+        if (tent) { try { await tg('sendMessage', { chat_id: (tent as any).driver_id, parse_mode: 'HTML', text: `⛺ ${esc(cq.from.first_name || 'Участник')} освободил место в твоей палатке.` }); } catch { /* no-op */ } }
+        return res.status(200).json({ ok: true });
+      }
+      // Убрать свою палатку — уведомить заселившихся.
+      if (data.startsWith('tentcancel_')) {
+        const rideId = Number(data.slice('tentcancel_'.length));
+        const { data: tent } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        if (!tent || (tent as any).driver_id !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это не твоя палатка' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('rides').update({ active: false }).eq('id', rideId);
+        const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').eq('ride_id', rideId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Палатка убрана' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Твоя палатка убрана. Заселившиеся уведомлены.' });
+        for (const p of (pax || [])) { try { await tg('sendMessage', { chat_id: (p as any).passenger_id, text: '⚠️ Хозяин убрал палатку, в которую ты заселился. Поищи место в «🛌 Места в палатках».' }); } catch { /* no-op */ } }
         return res.status(200).json({ ok: true });
       }
 

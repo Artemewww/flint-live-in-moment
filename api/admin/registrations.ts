@@ -211,15 +211,19 @@ export default async function handler(req: any, res: any) {
         voteTally[opt] = (voteTally[opt] || 0) + 1;
       }
 
-      const ridesWithPax = (rides || []).map((r: any) => ({
+      const withPax = (rides || []).map((r: any) => ({
         ...r,
         passengers: (bookings || []).filter((b: any) => b.ride_id === r.id),
       }));
+      // Палатки живут в той же таблице rides (kind='tent') — разделяем для админки.
+      const ridesWithPax = withPax.filter((r: any) => r.kind !== 'tent');
+      const tentsWithPax = withPax.filter((r: any) => r.kind === 'tent');
 
       return res.status(200).json({
         registrations: registrations || [],
         stats,
         rides: ridesWithPax,
+        tents: tentsWithPax,
         rideRequests: rideRequests || [],
         feedback: feedback || [],
         interestCount: interestCount || 0,

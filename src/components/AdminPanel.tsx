@@ -310,6 +310,7 @@ function buildStats(regs: any[], extra: Record<string, any> = {}) {
     totalAmount: regs.reduce((s, r) => s + (r.paymentAmount || 0), 0),
     registrations: regs,
     rides: [] as any[],
+    tents: [] as any[],
     rideRequests: [] as any[],
     feedback: [] as any[],
     interestCount: 0,
@@ -932,6 +933,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         const regs = (data.registrations || []).map(mapRegistration);
         setEventStats(buildStats(regs, {
           rides: data.rides || [],
+          tents: data.tents || [],
           rideRequests: data.rideRequests || [],
           feedback: data.feedback || [],
           interestCount: data.interestCount || 0,
@@ -1922,6 +1924,41 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         )}
                       </div>
                     </div>
+
+                    {/* Палатки — те же rides с kind='tent' */}
+                    {eventStats.tents.length > 0 && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                        <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                          <Tent className="w-4 h-4 text-brand" />
+                          Палатки ({eventStats.tents.length})
+                        </h4>
+                        <div className="space-y-2">
+                          {eventStats.tents.map((t: any) => {
+                            const free = Math.max(0, (t.seats_total || 0) - (t.seats_taken || 0));
+                            const gr = t.gender_rule === 'male' ? '♂ М' : t.gender_rule === 'female' ? '♀ Ж' : '👥 любые';
+                            return (
+                              <div key={t.id} className="bg-white/5 rounded-lg p-3">
+                                <div className="flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <p className="text-xs font-bold">⛺ {t.driver_name || 'Хозяин'}</p>
+                                    <p className="text-[10px] text-white/40">подселение: {gr}</p>
+                                  </div>
+                                  <div className="text-right shrink-0">
+                                    <p className="text-xs font-bold text-brand">{free} своб.</p>
+                                    <p className="text-[9px] text-white/40">из {t.seats_total || 0}</p>
+                                  </div>
+                                </div>
+                                {t.passengers?.length > 0 && (
+                                  <p className="text-[10px] text-white/60 mt-2 pt-2 border-t border-white/5">
+                                    В палатке: {t.passengers.map((p: any) => p.passenger_name).join(', ')}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
 
                     {/* SOS: кому нужна попутка */}
                     {eventStats.rideRequests.length > 0 && (
