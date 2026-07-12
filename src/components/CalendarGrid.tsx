@@ -24,38 +24,23 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const currentMonth = now.getMonth(); // 0-based
   const todayDayNum = now.getDate();
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-  const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Окторябрь', 'Ноябрь', 'Декабрь'];
+  const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
   const currentMonthName = monthNames[currentMonth];
   const currentMonthStr = String(currentMonth + 1).padStart(2, '0');
 
   // Форматируем сегодняшнюю дату для сравнения
   const todayFormatted = `${currentYear}-${currentMonthStr}-${String(todayDayNum).padStart(2, '0')}`;
 
-  // Месяц из monthsData (напр. «Июль 2026») уже прошёл? Прошедшие в годовом
-  // календаре не показываем — только текущий и будущие.
-  const RU_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
-  const isMonthPast = (monthName: string): boolean => {
-    const parts = monthName.trim().split(/\s+/);
-    const mi = RU_MONTHS.indexOf((parts[0] || '').toLowerCase());
-    const yr = parseInt(parts[1] || '', 10) || currentYear;
-    if (mi < 0) return false; // не распарсили — на всякий случай показываем
-    return yr < currentYear || (yr === currentYear && mi < currentMonth);
-  };
+  const pad2 = (n: number) => String(n).padStart(2, '0');
+
+  // События, попадающие на конкретную дату: честный диапазон date..dateEnd (§12.4),
+  // многодневные видны каждый свой день без хардкода id.
+  const eventsOnDate = (dateStr: string): CommunityEvent[] =>
+    events.filter(evt => evt.date <= dateStr && dateStr <= (evt.dateEnd || evt.date));
 
   // Helper to map current month day to event(s)
-  const getEventsForDay = (dayNum: number): CommunityEvent[] => {
-    const formattedDate = `${currentYear}-${currentMonthStr}-${dayNum.toString().padStart(2, '0')}`;
-    return events.filter(evt => {
-      // Мультидневные события только в своём месяце
-      if (evt.id === 'isloch-challenges-male') {
-        return evt.date.startsWith(`${currentYear}-${currentMonthStr}`) && dayNum >= 26 && dayNum <= 28;
-      }
-      if (evt.id === 'conscious-fasting') {
-        return evt.date.startsWith(`${currentYear}-${currentMonthStr}`) && dayNum >= 22 && dayNum <= 25;
-      }
-      return evt.date === formattedDate;
-    });
-  };
+  const getEventsForDay = (dayNum: number): CommunityEvent[] =>
+    eventsOnDate(`${currentYear}-${currentMonthStr}-${pad2(dayNum)}`);
 
   // Реальный день недели из даты
   const getWeekdayForDay = (dayNum: number): string => {
@@ -107,70 +92,29 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     onOpenDetail(dayEvents[0]);
   };
 
-  // Mock database for Year round planning
-  const monthsData = [
-    {
-      name: 'Июнь 2026',
-      days: 30,
-      season: 'Лето 2026',
-      startOffset: 0,
-      focus: 'Мужской огонь & Лесные переходы',
-      desc: 'Каноническая мужская баня Redhouse, походы по реке Ислочь, тренинги ораторов и запуск Braslav-слетов.',
-      events: [
-        { id: 'banya-flint-weekly', title: 'Мужская баня FLINT', day: 4, type: 'male', desc: 'Прогрев дубовыми вениками, закалка ледяной купелью.', duration: '19:00', label: 'Баня' },
-        { id: 'kettlebell-walk-weekly', title: 'Гиревой вояж у воды', day: 6, type: 'active', desc: 'Утренняя силовая пробежка у Минского моря.', duration: '10:00', label: 'Гири' },
-        { id: 'existential-cinema', title: 'Экзистенциальный Кинотеатр', day: 11, type: 'intellectual', desc: 'Рефлексия и глубокий разбор великих кинокартин.', duration: '19:30', label: 'Кино' },
-        { id: 'reading-smysly', title: 'Читательский круг "Смыслы"', day: 14, type: 'intellectual', desc: 'Интеллектуальный разбор психологических трудов.', duration: '16:00', label: 'Книга' },
-        { id: 'forest-hiking-isloch', title: 'Лесной поход к Ислочи', day: 19, type: 'active', desc: 'Проводники, дикий костер и лесные переходы.', duration: '08:00', label: 'Поход' },
-        { id: 'orator-art-practice', title: 'Ораторский Orator-Практикум', day: 22, type: 'intellectual', desc: 'Раскрытие естественного голоса и искусство аргументов.', duration: '19:00', label: 'Спич' },
-        { id: 'conscious-fasting', title: 'Осознанное голодание «Путь чистоты»', day: 22, type: 'active', desc: 'Телесный детокс от 2 до 4 дней в загородной тишине.', duration: '2-4 дня', label: 'Голод' },
-        { id: 'poker-no-smoke', title: 'Покерный заезд "Трезвый круг"', day: 25, type: 'mixed', desc: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.', duration: '18:00', label: 'Покер' },
-        { id: 'isloch-challenges-male', title: 'Лагерь "Закалка" Ислочь', day: 26, type: 'male', desc: 'Мужские лесные перегрузки и банный ритуал возрождения.', duration: '3 дня', label: 'Лагерь' },
-        { id: 'braslav-family-zen', title: 'Браславский Семейный Слет I', day: 29, type: 'mixed', desc: 'Уютный дзен у воды для резидентов и их семей.', duration: '2 дня', label: 'Слет' }
-      ]
-    },
-    {
-      name: 'Июль 2026',
-      days: 31,
-      season: 'Лето 2026',
-      startOffset: 2,
-      focus: 'Озера, Дзен & Каяки на рассвете',
-      desc: 'Месяц тишины и уединения. Расширенные заезды на Браславские озера и палаточные лагеря в глубине пущи.',
-      events: [
-        { id: 'jul-braslav-family', title: 'Браславский Семейный Слет II', day: 10, type: 'mixed', desc: 'Семейная палаточная усадьба у озера, лекции о психогеографии.', duration: '3 дня', label: 'Слет' },
-        { id: 'jul-kayaks', title: 'Сплав в молчании на каяках', day: 18, type: 'active', desc: 'Медитативный переход по зеркальной глади воды на рассвете.', duration: '05:00', label: 'Сплав' },
-        { id: 'jul-flint-stars', title: 'Баня FLINT под звездами', day: 23, type: 'male', desc: 'Мужская перезагрузка под созвездиями на берегу реки.', duration: '19:00', label: 'Баня' },
-        { id: 'jul-reading', title: 'Читательский круг "Рассвет"', day: 30, type: 'intellectual', desc: 'Книжный вечер у камина во флигеле.', duration: '19:00', label: 'Книга' }
-      ]
-    },
-    {
-      name: 'Август 2026',
-      days: 31,
-      season: 'Лето 2026',
-      startOffset: 5,
-      focus: 'Творческий синтез & Спичбатлы у костра',
-      desc: 'Раскрытие естественного голоса, утренние пробежки босиком, трезвый покер и джем-сейшены у огня.',
-      events: [
-        { id: 'aug-orator', title: 'Летний Orator-Практикум', day: 7, type: 'intellectual', desc: 'Речевая харизма и снятие телесных зажимов у костра.', duration: '18:30', label: 'Спич' },
-        { id: 'aug-poker', title: 'Покерный заезд "Трезвый круг"', day: 14, type: 'mixed', desc: 'Интеллектуальная колода карт и лесной дзен.', duration: '18:00', label: 'Покер' },
-        { id: 'aug-banya', title: 'Мужское банное таинство', day: 20, type: 'male', desc: 'Мягкий глубокий пар в усадьбе с сеновалом.', duration: '19:00', label: 'Баня' },
-        { id: 'aug-slet', title: 'Августовский слет у воды', day: 28, type: 'mixed', desc: 'Прощание с летом, теплый чай со специями у огня.', duration: '3 дня', label: 'Слет' }
-      ]
-    },
-    {
-      name: 'Сентябрь 2026',
-      days: 30,
-      season: 'Осень 2026',
-      startOffset: 1,
-      focus: 'Каминные круги, Чтение & Самопознание',
-      desc: 'Перенос встреч в теплые загородные усадьбы с живым камином, упор на психологическую безопасность и чтение книг.',
-      events: [
-        { id: 'sep-reading', title: 'Читательский клуб СМЫСЛЫ', day: 3, type: 'intellectual', desc: 'Философский вечер при свечах.', duration: '19:00', label: 'Книга' },
-        { id: 'sep-therapy', title: 'Парная терапия у камина', day: 17, type: 'mixed', desc: 'Психологическая рефлексия взаимопонимания в тепле камина.', duration: '18:00', label: 'Семинар' },
-        { id: 'sep-flint', title: 'Баня Flint Осенний Жар', day: 24, type: 'male', desc: 'Горячий целебный пар для укрепления иммунитета осенью.', duration: '19:00', label: 'Баня' }
-      ]
-    }
-  ];
+  // Годовой календарь (§12.1): единственный источник — реальные события (props.events,
+  // т.е. БД). Месяцы: с текущего по декабрь + будущие месяцы, где есть события.
+  const yearMonthKeys = new Set<string>();
+  for (let m = currentMonth; m < 12; m++) yearMonthKeys.add(`${currentYear}-${pad2(m + 1)}`);
+  events.forEach(evt => {
+    const key = evt.date.slice(0, 7);
+    if (key > `${currentYear}-12`) yearMonthKeys.add(key);
+  });
+  const yearMonths = [...yearMonthKeys].sort().map(key => {
+    const [y, m] = key.split('-').map(Number);
+    const monthIdx = m - 1;
+    const monthEvents = events
+      .filter(evt => evt.date.slice(0, 7) === key || (evt.dateEnd || '').slice(0, 7) === key)
+      .sort((a, b) => a.date.localeCompare(b.date));
+    return {
+      key,
+      name: `${monthNames[monthIdx]} ${y}`,
+      days: new Date(y, m, 0).getDate(),
+      startOffset: (new Date(y, monthIdx, 1).getDay() + 6) % 7, // Пн=0
+      events: monthEvents,
+    };
+  });
+  const activeYearMonth = yearMonths[Math.min(modalActiveMonth, yearMonths.length - 1)];
 
   // Подсветка типа события для иконок
   const getTypeColor = (type: string) => {

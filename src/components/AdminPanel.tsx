@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote } from 'lucide-react';
 import { CommunityEvent, HouseQuality } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
+import { EVENT_TEMPLATES, EventTemplate } from '../data/eventTemplates';
 import { generateProgram, generateThreshold } from '../eventGuide';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
@@ -582,6 +583,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [eventStats, setEventStats] = useState<any>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'participants' | 'logistics' | 'settings'>('overview');
   const [showTemplates, setShowTemplates] = useState(false);
+  /** Дата события при создании из шаблона (§12.1: выбор пресета → дата → событие). */
+  const [templateDate, setTemplateDate] = useState<string>(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 7);
+    return d.toISOString().split('T')[0];
+  });
   /** Тост результата последнего действия админа (сохранение, рассылка). */
   const [actionMsg, setActionMsg] = useState<{ ok: boolean; text: string } | null>(null);
   /** Вкладка «Участники»: показывать всех или только тех, кто реально приехал. */
@@ -701,139 +708,25 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     return () => clearTimeout(t);
   }, [actionMsg]);
 
-  // Шаблоны мероприятий
-  const eventTemplates = [
-    {
-      title: 'Мужская баня FLINT',
-      type: 'male' as const,
-      time: '19:00',
-      timeEnd: '23:00',
-      maxParticipants: 12,
-      priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 ₽/чел',
-      priceAmount: 500,
-      entryThreshold: 'Только мужчины • 100% трезвость • личный веник',
-      entryType: 'male' as const,
-      description: 'Каноническая перезагрузка ума и тела. Профессиональный пар, закалка ледяной купелью, глубокий прогрев дубовыми вениками и честные разговоры по душам у открытого камина.',
-      image: '/assets/images/nano_banya_flint_1780473778276.png',
-      program: [
-        '18:30 - Сбор, знакомство',
-        '19:00 - Парилка (дубовые веники)',
-        '20:30 - Перекус, чай',
-        '21:00 - Честные разговоры у камина',
-        '23:00 - Завершение'
-      ]
-    },
-    {
-      title: 'Гиревой вояж у воды',
-      type: 'active' as const,
-      time: '10:00',
-      timeEnd: '12:00',
-      maxParticipants: 15,
-      priceLabel: 'Свободный вход',
-      priceAmount: 0,
-      entryThreshold: '100% трезвость • спортивная форма',
-      entryType: 'all' as const,
-      description: 'Утренняя силовая пробежка у Минского моря. Гири, зарядка, свежий воздух.',
-      image: '/assets/images/kettlebell_walk.png',
-      program: [
-        '10:00 - Сбор, разминка',
-        '10:15 - Силовая тренировка',
-        '11:30 - Закалка, купание',
-        '12:00 - Завершение'
-      ]
-    },
-    {
-      title: 'Экзистенциальный Кинотеатр',
-      type: 'intellectual' as const,
-      time: '19:30',
-      timeEnd: '22:00',
-      maxParticipants: 20,
-      priceLabel: 'Свободный вход',
-      priceAmount: 0,
-      entryThreshold: '100% трезвость',
-      entryType: 'all' as const,
-      description: 'Рефлексия и глубокий разбор великих кинокартин. Философские дискуссии после просмотра.',
-      image: '/assets/images/cinema.png',
-      program: [
-        '19:30 - Знакомство',
-        '19:45 - Просмотр фильма',
-        '21:30 - Философская дискуссия',
-        '22:00 - Завершение'
-      ]
-    },
-    {
-      title: 'Читательский круг "Смыслы"',
-      type: 'intellectual' as const,
-      time: '16:00',
-      timeEnd: '19:00',
-      maxParticipants: 15,
-      priceLabel: 'Свободный вход',
-      priceAmount: 0,
-      entryThreshold: '100% трезвость • книга прочитана',
-      entryType: 'all' as const,
-      description: 'Интеллектуальный разбор психологических трудов. Глубокие вопросы и честные ответы.',
-      image: '/assets/images/reading.png',
-      program: [
-        '16:00 - Знакомство',
-        '16:15 - Обсуждение книги',
-        '17:30 - Глубокие вопросы',
-        '19:00 - Завершение'
-      ]
-    },
-    {
-      title: 'Лесной поход к Ислочи',
-      type: 'active' as const,
-      time: '08:00',
-      timeEnd: '20:00',
-      maxParticipants: 12,
-      priceLabel: 'Аренда делится на всех',
-      priceAmount: 300,
-      entryThreshold: '100% трезвость • спортивная форма • палатка',
-      entryType: 'all' as const,
-      description: 'Проводники, дикий костер и лесные переходы. Полный день на природе.',
-      image: '/assets/images/hiking.png',
-      program: [
-        '08:00 - Сбор, выезд',
-        '10:00 - Начало перехода',
-        '13:00 - Обед у костра',
-        '16:00 - Осмотр достопримечательностей',
-        '18:00 - Возвращение',
-        '20:00 - Завершение'
-      ]
-    },
-    {
-      title: 'Покерный заезд "Трезвый круг"',
-      type: 'mixed' as const,
-      time: '18:00',
-      timeEnd: '23:00',
-      maxParticipants: 16,
-      priceLabel: 'Свободный вход',
-      priceAmount: 0,
-      entryThreshold: '100% трезвость',
-      entryType: 'all' as const,
-      description: 'Тлеющие угольки, мандарины, апельсиновый сок и глубокая математика.',
-      image: '/assets/images/poker.png',
-      program: [
-        '18:00 - Знакомство, раздача карт',
-        '18:30 - Турнир',
-        '21:00 - Перерыв, угощения',
-        '21:30 - Финальный стол',
-        '23:00 - Завершение'
-      ]
-    }
-  ];
 
-  const createFromTemplate = (template: typeof eventTemplates[0]) => {
-    const eventDate = new Date();
-    eventDate.setDate(eventDate.getDate() + 7); // +7 дней
-    
+  const createFromTemplate = (template: EventTemplate) => {
+    const date = templateDate;
+    // Многодневный шаблон → dateEnd от выбранной даты.
+    let dateEnd = '';
+    if (template.durationDays && template.durationDays > 1) {
+      const end = new Date(`${date}T00:00:00`);
+      end.setDate(end.getDate() + template.durationDays - 1);
+      dateEnd = end.toISOString().split('T')[0];
+    }
+
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
       title: template.title,
       description: template.description,
       type: template.type,
-      date: eventDate.toISOString().split('T')[0],
-      dateLabel: `Через 7 дней (${eventDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' })})`,
+      date,
+      dateEnd: dateEnd || undefined,
+      dateLabel: buildDateLabel(date, dateEnd, template.time),
       time: template.time || '19:00',
       timeEnd: template.timeEnd || '23:00',
       location: 'Уточняется',
@@ -2384,10 +2277,21 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 </button>
               </div>
 
-              <p className="text-xs text-white/60 mb-4">Выберите шаблон для быстрого создания мероприятия</p>
+              <p className="text-xs text-white/60 mb-2">Выберите дату и шаблон — событие сразу попадёт в календарь</p>
+
+              <div className="flex items-center gap-3 mb-4">
+                <label className="text-[10px] text-white/40 uppercase font-mono shrink-0">Дата события</label>
+                <input
+                  type="date"
+                  value={templateDate}
+                  min={new Date().toISOString().split('T')[0]}
+                  onChange={(e) => setTemplateDate(e.target.value)}
+                  className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm"
+                />
+              </div>
 
               <div className="grid grid-cols-2 gap-3 max-h-[60vh] overflow-y-auto">
-                {eventTemplates.map((template, idx) => (
+                {EVENT_TEMPLATES.map((template, idx) => (
                   <button
                     key={idx}
                     onClick={() => createFromTemplate(template)}
@@ -2400,6 +2304,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       <span>{template.time}</span>
                       <Users className="w-3 h-3 ml-2" />
                       <span>до {template.maxParticipants}</span>
+                      {template.durationDays && template.durationDays > 1 && (
+                        <span className="text-brand/70">• {template.durationDays} дн.</span>
+                      )}
                     </div>
                   </button>
                 ))}
