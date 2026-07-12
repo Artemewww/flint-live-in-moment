@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { CommunityEvent } from '../types';
-import { Sparkles, Calendar, Compass, Info, Users, MapPin, Heart, X, ChevronRight, Lock } from 'lucide-react';
+import { Sparkles, Calendar, Compass, Users, X, ChevronRight, Lock } from 'lucide-react';
 
 interface CalendarGridProps {
   events: CommunityEvent[];
@@ -154,7 +154,11 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
           type="button"
           onClick={() => {
             // Открываем на первом НЕ прошедшем месяце (текущий или ближайший будущий).
-            const firstIdx = monthsData.findIndex(m => !isMonthPast(m.name));
+            const now = new Date();
+            const firstIdx = yearMonths.findIndex(m => {
+              const [y, mon] = m.key.split('-').map(Number);
+              return y > now.getFullYear() || (y === now.getFullYear() && mon - 1 >= now.getMonth());
+            });
             setModalActiveMonth(firstIdx >= 0 ? firstIdx : 0);
             setShowYearModal(true);
           }}
@@ -370,8 +374,10 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
             {/* MONTH SELECTOR */}
             <div className="bg-[#121212] border-b border-white/5 p-3 flex flex-wrap gap-2 justify-center">
-              {monthsData.map((mObj, idx) => (
-                isMonthPast(mObj.name) ? null : (
+              {yearMonths.map((mObj, idx) => {
+                const [y, mon] = mObj.key.split('-').map(Number);
+                const isPast = y < currentYear || (y === currentYear && mon - 1 < currentMonth);
+                return isPast ? null : (
                 <button
                   key={idx}
                   type="button"
@@ -384,30 +390,32 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                 >
                   {mObj.name}
                 </button>
-                )
-              ))}
+                );
+              })}
             </div>
 
             {/* MODAL CONTENT */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
               
+              {activeYearMonth && (
+              <>
               <div className="bg-gradient-to-r from-[#161616] to-[#0A0A0A] rounded-2xl px-4 py-2.5 border border-white/10">
                 <button
                   type="button"
                   onClick={() => setMonthInfoOpen(o => !o)}
                   className="w-full flex items-center justify-between gap-3 cursor-pointer bg-transparent text-left"
                 >
-                  <h4 className="text-base font-black uppercase text-brand tracking-wide">{monthsData[modalActiveMonth].name}</h4>
+                  <h4 className="text-base font-black uppercase text-brand tracking-wide">{activeYearMonth.name}</h4>
                   <span className="shrink-0 text-white/40 text-[10px] font-mono uppercase tracking-wider flex items-center gap-1">
-                    {monthInfoOpen ? 'Свернуть' : 'О месяце'}
+                    {activeYearMonth.events.length} событий
                     <span className={`transition-transform ${monthInfoOpen ? 'rotate-180' : ''}`}>▾</span>
                   </span>
                 </button>
                 {monthInfoOpen && (
                   <div className="mt-2 space-y-1.5">
-                    <p className="text-xs text-white/40 uppercase font-mono tracking-wider">Фокус: {monthsData[modalActiveMonth].focus}</p>
                     <p className="text-sm text-white/80 leading-relaxed font-sans max-w-xl">
-                      {monthsData[modalActiveMonth].desc}
+                      В этом месяце запланировано {activeYearMonth.events.length} мероприятий.
+                      Нажми на день с событием, чтобы открыть карточку.
                     </p>
                   </div>
                 )}
@@ -416,15 +424,16 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
               {/* Month grid */}
               <div>
                 <div className="grid grid-cols-4 sm:grid-cols-7 gap-2.5">
-                  {Array.from({ length: monthsData[modalActiveMonth].startOffset }, (_, index) => (
+                  {Array.from({ length: activeYearMonth.startOffset }, (_, index) => (
                     <div key={`offset-${index}`} className="hidden sm:block h-[100px]" />
                   ))}
 
-                  {Array.from({ length: monthsData[modalActiveMonth].days }, (_, idx) => {
+                  {Array.from({ length: activeYearMonth.days }, (_, idx) => {
                     const dayNum = idx + 1;
-                    const monthEvents = monthsData[modalActiveMonth].events.filter(e => e.day === dayNum);
-                    const hasEvt = monthEvents.length > 0;
-                    const primaryEv = monthEvents[0];
+                    const dayStr = `${activeYearMonth.key}-${pad2(dayNum)}`;
+                    const dayEvents = events.filter(evt => evt.date <= dayStr && dayStr <= (evt.dateEnd || evt.date));
+                    const hasEvt = dayEvents.length > 0;
+                    const primaryEv = dayEvents[0];
                     
                     let cellBorderColor = 'border-white/5 bg-black/40';
                     
@@ -445,29 +454,26 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                         key={`modal-day-${dayNum}`}
                         type="button"
                         onClick={() => {
-                          if (hasEvt && modalActiveMonth === 0) {
-                            const targetId = primaryEv.id.includes('conscious-fasting') ? 'conscious-fasting' : primaryEv.id;
-                            onSelectEvent(targetId);
+                          if (hasEvt) {
+                            onSelectEvent(primaryEv.id);
                             setShowYearModal(false);
                             setTimeout(() => {
-                              const targetCard = document.getElementById(`event-card-${targetId}`);
+                              const targetCard = document.getElementById(`event-card-${primaryEv.id}`);
                               if (targetCard) targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
                             }, 100);
-                          } else if (hasEvt) {
-                            alert(`"${primaryEv.title}" в ${monthsData[modalActiveMonth].name}. Запись откроется ближе к дате. Следите в боте.`);
                           }
                         }}
                         className={`h-[100px] rounded-xl border p-2 flex flex-col justify-between text-left transition-all outline-none cursor-pointer ${cellBorderColor} hover:bg-white/5`}
                       >
                         <span className="text-[10px] font-mono font-bold text-white/50">
-                          {weekdays[(idx + monthsData[modalActiveMonth].startOffset) % 7]}
+                          {weekdays[(idx + activeYearMonth.startOffset) % 7]}
                         </span>
                         <span className="text-xl font-display font-black leading-none text-white">
                           {dayNum}
                         </span>
                         {hasEvt && (
                           <span className="text-[8px] font-mono block truncate text-brand font-bold uppercase leading-none mt-1">
-                            {primaryEv.label} {monthEvents.length > 1 && `+${monthEvents.length - 1}`}
+                            {getShortEventName(primaryEv.id, primaryEv.type)} {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
                           </span>
                         )}
                       </button>
@@ -479,25 +485,37 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
               {/* Events list */}
               <div className="space-y-3">
                 <h4 className="text-[10px] uppercase font-mono tracking-widest text-brand font-black">
-                  Анонсы — {monthsData[modalActiveMonth].name}
+                  Анонсы — {activeYearMonth.name}
                 </h4>
                 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {monthsData[modalActiveMonth].events.map((evt, eIdx) => (
+                  {activeYearMonth.events.map((evt) => (
                     <div 
-                      key={eIdx}
-                      className="bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl p-4 text-xs transition-all"
+                      key={evt.id}
+                      className="bg-white/5 hover:bg-white/10 border border-white/5 rounded-xl p-4 text-xs transition-all cursor-pointer"
+                      onClick={() => {
+                        onSelectEvent(evt.id);
+                        setShowYearModal(false);
+                        setTimeout(() => {
+                          const targetCard = document.getElementById(`event-card-${evt.id}`);
+                          if (targetCard) targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }, 100);
+                      }}
                     >
                       <div className="flex items-center gap-1.5 mb-1">
                         <span className={`w-1.5 h-1.5 rounded-full ${getTypeColor(evt.type)}`} />
                         <span className="font-bold text-white text-sm uppercase font-display">{evt.title}</span>
                       </div>
-                      <span className="text-[10px] text-white/50 font-mono block">{evt.duration} • {evt.day} {monthsData[modalActiveMonth].name}</span>
-                      <p className="text-[11px] text-white/60 leading-normal italic mt-1">{evt.desc}</p>
+                      <span className="text-[10px] text-white/50 font-mono block">
+                        {evt.dateLabel || evt.date}{evt.time ? ` • ${evt.time}` : ''}
+                      </span>
+                      <p className="text-[11px] text-white/60 leading-normal italic mt-1">{evt.description}</p>
                     </div>
                   ))}
                 </div>
               </div>
+              </>
+              )}
             </div>
 
             {/* Modal Footer */}
