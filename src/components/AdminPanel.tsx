@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote } from 'lucide-react';
-import { CommunityEvent, HouseQuality } from '../types';
+import { CommunityEvent, HouseQuality, UserProfile } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
+import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
 import { EVENT_TEMPLATES, EventTemplate } from '../data/eventTemplates';
 import { generateProgram, generateThreshold } from '../eventGuide';
 

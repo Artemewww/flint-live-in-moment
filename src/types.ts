@@ -4,7 +4,12 @@ export interface HouseQuality {
   key: 'foundation' | 'wall' | 'roof' | 'decor' | 'heat' | 'life';
   name: string;      // e.g. "Воля"
   part: string;      // e.g. "Стены"
+  emoji: string;     // e.g. "🧱"
   description: string; // e.g. "Укрепляет внутренний стержень и дисциплину"
+  /** Рекомендуемый формат события для развития этого качества. */
+  recommendedFormat?: string;
+  /** Ключевые слова-маркеры для ИИ-анализа. */
+  markers?: string[];
 }
 
 /**
@@ -53,6 +58,8 @@ export interface CommunityEvent {
   distanceFromMinsk?: number;
   /** Примерное время в пути в минутах (рассчитывается по distance). */
   travelTime?: number;
+  /** Формат события: офлайн/онлайн/гибрид. */
+  format?: 'offline' | 'online' | 'hybrid';
   painPoint: string; // "Главная боль, которую закрывает"
   houseQualities: HouseQuality[];
   image: string;
@@ -114,7 +121,6 @@ export function getToday(): string {
  * и в API (которое отдаёт данные боту), чтобы состояние совпадало везде.
  */
 export function getEventPhase(event: CommunityEvent, today: string = getToday()): EventPhase {
-  // Для многодневных «прошедшее» считается по дате ОКОНЧАНИЯ, а не начала.
   if ((event.dateEnd || event.date) < today) return 'past';
   if (event.status === 'closed') return 'closed';
   if (event.status === 'locked') return 'locked';
@@ -154,6 +160,8 @@ export interface Registration {
   equipment?: string[];
   roles?: string[];
   source?: string;
+  /** Приоритетная цель развития (ключ качества из houseQualities). */
+  developmentGoal?: HouseQuality['key'];
 }
 
 export interface UserProfile {
@@ -165,6 +173,10 @@ export interface UserProfile {
   totalEvents: number;
   totalEventsAttended: number;
   createdAt: string;
+  /** Приоритетная цель развития (ключ качества). */
+  developmentGoal?: HouseQuality['key'];
+  /** Запрос на развитие (текст, введённый пользователем). */
+  developmentRequest?: string;
 }
 
 export interface Achievement {
@@ -216,13 +228,10 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   label: string;
   factors: string[];
 } {
-  // Бесплатно — либо явно free, либо платно без суммы (или легаси-значения).
   const total = Number((event as any).priceAmount) || 0;
   if (event.priceType !== 'paid' || total <= 0) {
     return { price: 0, label: 'Взнос отсутствует', factors: [] };
   }
-
-  // Платно: аренда делится ПОРОВНУ на текущее число участников + прогноз к порогу.
   const threshold = Number((event as any).minParticipants) || 10;
   const current = event.participantsCount || 0;
   const perNow = Math.ceil(total / Math.max(current, 1));
@@ -240,4 +249,3 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
 
   return { price: perNow, label: `≈ ${perNow} ₽/чел`, factors };
 }
-

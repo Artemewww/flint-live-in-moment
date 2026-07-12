@@ -305,6 +305,38 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ draft, model: usedModel });
     }
 
+    if (task === 'detect_goal') {
+      const text = body.text || '';
+      const sys =
+        `Ты — психолог и коуч сообщества «Живи в моменте» (Минск). ` +
+        `Человек ответил на вопрос о своём развитии. Определи, какое из 6 качеств личности ` +
+        `ему сейчас важнее всего проработать. Ответ был:\n«${text}»\n\n` +
+        `Качества:\n` +
+        `- foundation (Предназначение): смысл, цели, призвание, ценности, направление\n` +
+        `- wall (Воля): дисциплина, сила, преодоление, выдержка, характер\n` +
+        `- roof (Совесть): честность, ответственность, справедливость, мораль\n` +
+        `- decor (Творчество): креатив, вдохновение, самовыражение, искусство\n` +
+        `- heat (Любовь): отношения, близость, доверие, эмпатия, принятие\n` +
+        `- life (Счастье): радость, легкость, благодарность, удовольствие\n\n` +
+        `Верни JSON: { quality: string, confidence: number (0..1), explanation: string }.\n` +
+        `Если определить не удалось — quality: null.`;
+      const p = await genJSON(ai, sys, {
+        type: Type.OBJECT,
+        properties: {
+          quality: { type: Type.STRING },
+          confidence: { type: Type.NUMBER },
+          explanation: { type: Type.STRING },
+        },
+        required: ['quality', 'confidence', 'explanation'],
+      });
+      return res.status(200).json({
+        goal: p.quality || null,
+        confidence: Number(p.confidence) || 0,
+        explanation: p.explanation || '',
+        model: usedModel,
+      });
+    }
+
     if (task === 'clarifying_questions') {
       const event = body.event || {};
       const sys =
