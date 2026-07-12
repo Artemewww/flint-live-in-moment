@@ -48,23 +48,24 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     return weekdays[date.getDay() === 0 ? 6 : date.getDay() - 1]; // Пн=0 ... Вс=6
   };
 
-  // Human readable short Russian labels for different events
-  const getShortEventName = (eventId: string, type: string): string => {
-    if (eventId === 'banya-flint-weekly') return 'Баня';
-    if (eventId === 'kettlebell-walk-weekly') return 'Гири';
-    if (eventId === 'existential-cinema') return 'Кино';
-    if (eventId === 'reading-smysly') return 'Книга';
-    if (eventId === 'forest-hiking-isloch') return 'Поход';
-    if (eventId === 'orator-art-practice') return 'Спич';
-    if (eventId === 'poker-no-smoke') return 'Покер';
-    if (eventId === 'isloch-challenges-male') return 'Лагерь';
-    if (eventId === 'braslav-family-zen') return 'Слет';
-    if (eventId === 'conscious-fasting' || eventId.startsWith('conscious-fasting')) return 'Голод';
-    
-    if (type === 'male') return 'Муж';
-    if (type === 'mixed') return 'Микс';
-    if (type === 'intellectual') return 'Ум';
-    return 'Дзен';
+  // Короткое читаемое название события: у известных id — каноническая кличка,
+  // у остальных — обрезанный тайтл или тип.
+  const getShortEventLabel = (evt: CommunityEvent): string => {
+    const id = evt.id;
+    if (id === 'banya-flint-weekly') return 'Баня';
+    if (id === 'kettlebell-walk-weekly') return 'Гири';
+    if (id === 'existential-cinema') return 'Кино';
+    if (id === 'reading-smysly') return 'Книга';
+    if (id === 'forest-hiking-isloch') return 'Поход';
+    if (id === 'orator-art-practice') return 'Спич';
+    if (id === 'poker-no-smoke') return 'Покер';
+    if (id === 'isloch-challenges-male') return 'Лагерь';
+    if (id === 'braslav-family-zen') return 'Слет';
+    if (id === 'conscious-fasting' || id.startsWith('conscious-fasting')) return 'Голод';
+    // Для остальных — короткий заголовок (до ~18 символов)
+    const short = evt.title || '';
+    if (short.length <= 18) return short;
+    return short.slice(0, 16) + '…';
   };
 
   // Находим ближайшее событие для сжатия пустых дней
@@ -82,14 +83,20 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     const dayEvents = getEventsForDay(dayNum);
     if (dayEvents.length === 0) return;
     
-    // Если одно событие — сразу открываем Popup с деталями
+    // Если одно событие — сразу открываем детальную карточку
     if (dayEvents.length === 1) {
       onOpenDetail(dayEvents[0]);
       return;
     }
     
-    // Если несколько — открываем попап для каждого по очереди (первое сразу)
-    onOpenDetail(dayEvents[0]);
+    // Если несколько — показываем компактный поповер со списком всех событий дня
+    setSelectedDayEvents(dayEvents);
+  };
+
+  // Закрыть поповер и открыть конкретное событие из списка
+  const openFromDayPopup = (evt: CommunityEvent) => {
+    setSelectedDayEvents(null);
+    onOpenDetail(evt);
   };
 
   // Годовой календарь (§12.1): единственный источник — реальные события (props.events,
@@ -244,11 +251,11 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                       {dayNum}
                     </span>
 
-                    {/* Event micro label */}
+                    {/* Event label — теперь читаемое название или тех.тип если нет тайтла */}
                     {hasEvents ? (
                       <div className="flex flex-col items-center gap-0.5 w-full">
                         <span className="text-[6px] sm:text-[8px] font-mono uppercase tracking-widest text-brand/90 font-black block text-center truncate max-w-full">
-                          {getShortEventName(primaryEvent.id, primaryEvent.type)}
+                          {getShortEventLabel(primaryEvent)}
                           {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
                         </span>
                         
@@ -272,15 +279,15 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
         })}
       </div>
 
-      {/* Popup с событиями дня при клике на день с несколькими событиями */}
-      {selectedDayEvents && selectedDayEvents.length > 0 && (
+      {/* Popup с событиями дня — появляется при клике на день с несколькими событиями */}
+      {selectedDayEvents && selectedDayEvents.length > 1 && (
         <div className="bg-[#161616] border border-white/10 rounded-2xl p-4 relative">
           {/* Header */}
           <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
             <div className="flex items-center gap-2">
               <Calendar className="w-3.5 h-3.5 text-brand" />
               <span className="text-xs font-mono font-bold text-brand uppercase tracking-wider">
-                {selectedDayEvents[0].dateLabel}
+                {selectedDayEvents[0].dateLabel || selectedDayEvents[0].date}
               </span>
               <span className="text-[10px] text-white/40 font-mono">
                 {selectedDayEvents.length} {selectedDayEvents.length === 1 ? 'событие' : 'события'}
@@ -299,14 +306,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
             {selectedDayEvents.map((evt) => (
               <button
                 key={evt.id}
-                onClick={() => {
-                  onSelectEvent(evt.id);
-                  setSelectedDayEvents(null);
-                  const targetCard = document.getElementById(`event-card-${evt.id}`);
-                  if (targetCard) {
-                    targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                  }
-                }}
+                onClick={() => openFromDayPopup(evt)}
                 className="w-full text-left bg-[#121212] hover:bg-brand/5 border border-white/5 hover:border-brand/30 rounded-xl p-3 transition-all flex items-center gap-3 cursor-pointer group"
               >
                 {/* Type indicator */}
@@ -331,6 +331,9 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                       <Users className="w-3 h-3" /> {evt.participantsCount}
                     </span>
                     <span>{evt.time}</span>
+                    {evt.dateEnd && evt.dateEnd !== evt.date && (
+                      <span className="text-brand/60">• {evt.dateLabel || `${evt.date}–${evt.dateEnd}`}</span>
+                    )}
                   </div>
                 </div>
 
@@ -454,14 +457,20 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                         key={`modal-day-${dayNum}`}
                         type="button"
                         onClick={() => {
-                          if (hasEvt) {
-                            onSelectEvent(primaryEv.id);
+                          if (!hasEvt) return;
+                          // Если несколько событий — показываем поповер на главном экране
+                          if (dayEvents.length > 1) {
+                            setSelectedDayEvents(dayEvents);
                             setShowYearModal(false);
-                            setTimeout(() => {
-                              const targetCard = document.getElementById(`event-card-${primaryEv.id}`);
-                              if (targetCard) targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                            }, 100);
+                            return;
                           }
+                          // Если одно — сразу открываем карточку
+                          onSelectEvent(primaryEv.id);
+                          setShowYearModal(false);
+                          setTimeout(() => {
+                            const targetCard = document.getElementById(`event-card-${primaryEv.id}`);
+                            if (targetCard) targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                          }, 100);
                         }}
                         className={`h-[100px] rounded-xl border p-2 flex flex-col justify-between text-left transition-all outline-none cursor-pointer ${cellBorderColor} hover:bg-white/5`}
                       >
@@ -472,9 +481,15 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                           {dayNum}
                         </span>
                         {hasEvt && (
-                          <span className="text-[8px] font-mono block truncate text-brand font-bold uppercase leading-none mt-1">
-                            {getShortEventName(primaryEv.id, primaryEv.type)} {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
-                          </span>
+                          <div className="flex flex-col gap-0.5 mt-1">
+                            <span className="text-[8px] font-mono block truncate text-brand font-bold uppercase leading-none">
+                              {getShortEventLabel(primaryEv)}
+                              {dayEvents.length > 1 && `+${dayEvents.length - 1}`}
+                            </span>
+                            {dayEvents.length > 1 && (
+                              <span className="text-[6px] font-mono text-white/40 uppercase">ещё {dayEvents.length - 1}</span>
+                            )}
+                          </div>
                         )}
                       </button>
                     );
