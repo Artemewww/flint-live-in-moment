@@ -13,6 +13,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const [showYearModal, setShowYearModal] = useState(false);
   const [modalActiveMonth, setModalActiveMonth] = useState<number>(0);
   const [selectedDayEvents, setSelectedDayEvents] = useState<CommunityEvent[] | null>(null);
+  // Описание месяца (фокус/текст) свёрнуто по умолчанию — чтобы не занимало место.
+  const [monthInfoOpen, setMonthInfoOpen] = useState<boolean>(false);
 
   const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
@@ -445,16 +447,26 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
             {/* MODAL CONTENT */}
             <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
               
-              <div className="bg-gradient-to-r from-[#161616] to-[#0A0A0A] rounded-2xl p-4 border border-white/10">
-                <div className="flex items-center justify-between flex-wrap gap-4">
-                  <div>
-                    <h4 className="text-lg font-black uppercase text-brand tracking-wide">{monthsData[modalActiveMonth].name}</h4>
-                    <p className="text-xs text-white/40 uppercase font-mono tracking-wider mt-0.5">Фокус: {monthsData[modalActiveMonth].focus}</p>
-                    <p className="text-sm text-white/80 leading-relaxed font-sans mt-2 max-w-xl">
+              <div className="bg-gradient-to-r from-[#161616] to-[#0A0A0A] rounded-2xl px-4 py-2.5 border border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setMonthInfoOpen(o => !o)}
+                  className="w-full flex items-center justify-between gap-3 cursor-pointer bg-transparent text-left"
+                >
+                  <h4 className="text-base font-black uppercase text-brand tracking-wide">{monthsData[modalActiveMonth].name}</h4>
+                  <span className="shrink-0 text-white/40 text-[10px] font-mono uppercase tracking-wider flex items-center gap-1">
+                    {monthInfoOpen ? 'Свернуть' : 'О месяце'}
+                    <span className={`transition-transform ${monthInfoOpen ? 'rotate-180' : ''}`}>▾</span>
+                  </span>
+                </button>
+                {monthInfoOpen && (
+                  <div className="mt-2 space-y-1.5">
+                    <p className="text-xs text-white/40 uppercase font-mono tracking-wider">Фокус: {monthsData[modalActiveMonth].focus}</p>
+                    <p className="text-sm text-white/80 leading-relaxed font-sans max-w-xl">
                       {monthsData[modalActiveMonth].desc}
                     </p>
                   </div>
-                </div>
+                )}
               </div>
 
               {/* Month grid */}
