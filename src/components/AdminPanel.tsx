@@ -2906,6 +2906,7 @@ function AddEventModal({ onClose, onAdd }: {
                     image: d.image || f.image,
                     houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
                   }));
+                  setQuestions(d._questions || []);
                   setAiProgress('');
                 } else {
                   alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
@@ -2916,6 +2917,22 @@ function AddEventModal({ onClose, onAdd }: {
             >
               {aiProgress ? 'Генерация…' : '🚀 Сгенерировать событие'}
             </button>
+            
+            {/* Уточняющие вопросы от ИИ — отображаются после генерации */}
+            {questions.length > 0 && (
+              <div className="bg-brand/5 border border-brand/20 rounded-xl p-3 space-y-2">
+                <label className="text-[10px] text-brand uppercase font-mono block">💡 Рекомендации по организации</label>
+                <p className="text-[9px] text-white/40">Не забудьте учесть эти детали при подготовке:</p>
+                <div className="space-y-1.5">
+                  {questions.map((q, i) => (
+                    <label key={i} className="flex items-start gap-2 text-[11px] text-white/80 cursor-pointer hover:text-white/90 transition-colors">
+                      <input type="checkbox" className="mt-0.5 accent-brand" />
+                      <span>{q}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           <button
