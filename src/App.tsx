@@ -307,6 +307,16 @@ export default function App() {
 
   const handleDeleteRegistration = (eventId: string) => {
     if (window.confirm('Вы действительно хотите отменить участие в этом событии?')) {
+      // Внутри Telegram — снимаем заявку и в БД (иначе на перезагрузке вернётся).
+      const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
+      if (initData) {
+        fetch('/api/my', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'cancel', eventId, initData }),
+        }).catch(() => {});
+      }
+
       const updatedIds = registeredEventIds.filter(id => id !== eventId);
       const updatedRegs = userRegistrations.filter(reg => reg.eventId !== eventId);
 

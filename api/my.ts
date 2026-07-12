@@ -39,6 +39,30 @@ export default async function handler(req: any, res: any) {
     const user = verifyInitData(body.initData);
     if (!user) return res.status(200).json({ ok: true, registrations: [] });
 
+    // Отмена участия: снимаем активную заявку в БД и зеркально уменьшаем счётчик
+    // события — освобождённое место сразу доступно другим (в т.ч. листу ожидания).
+    if (body.action === 'cancel' && body.eventId) {
+      const { data: reg } = await supabase
+        .from('registrations')
+        .select('id')
+        .eq('telegram_id', user.id)
+        .eq('event_id', body.eventId)
+        .neq('status', 'cancelled')
+        .maybeSingle();
+      if (!reg) return res.status(200).json({ ok: true, cancelled: false });
+
+      await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
+
+      try {
+        const { data: ev } = await supabase
+          .from('events').select('participants_count').eq('id', body.eventId).maybeSingle();
+        const next = Math.max(0, (Number((ev as any)?.participants_count) || 0) - 1);
+        await supabase.from('events').update({ participants_count: next }).eq('id', body.eventId);
+      } catch { /* счётчик не критичен */ }
+
+      return res.status(200).json({ ok: true, cancelled: true });
+    }
+
     const { data } = await supabase
       .from('registrations')
       .select('*')
