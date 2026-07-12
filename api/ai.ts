@@ -3,10 +3,14 @@ import * as crypto from 'crypto';
 
 
 /**
- * ИИ-помощник организатора (Google Gemini). Генерирует под контекст события:
- *  - task='program'  → программу мероприятия (по типу/дням/числу участников);
- *  - task='shopping' → список закупки (по числу людей и раскладке по питанию).
- * Админ-эндпоинт. Требует env GEMINI_API_KEY (или GOOGLE_API_KEY / API_KEY).
+ * ИИ-помощник-наставник сообщества «Живи в моменте» (Google Gemini).
+ * Каждый ответ проходит через «фильтр эмпатии»: 
+ *   - дружелюбный, поддерживающий и уважительный тон
+ *   - признание ценности пользователя в каждом ответе
+ *   - объяснение ЗАЧЕМ мы просим информацию
+ *   - прозрачность использования данных
+ * 
+ * Tasks: generate_event, program, shopping, clarifying_questions, detect_goal, autofill
  */
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
