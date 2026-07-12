@@ -148,6 +148,26 @@ async function updateReg(evId: string, tgId: any, patch: Record<string, unknown>
   await supabase.from('registrations').update(patch).eq('event_id', evId).eq('telegram_id', tgId);
 }
 
+// Очередь ожидания: место освободилось → зовём первого в очереди на эту машину/палатку.
+async function notifyWaitlist(rideId: number, kind: 'car' | 'tent') {
+  const { data: next } = await supabase.from('ride_requests')
+    .select('passenger_id').eq('ride_id', rideId).eq('active', true)
+    .order('created_at', { ascending: true }).limit(1).maybeSingle();
+  if (!next) return;
+  // Снимаем его с очереди — свой шанс он получил (кто первый нажал, того и бронь).
+  await supabase.from('ride_requests').update({ active: false })
+    .eq('ride_id', rideId).eq('passenger_id', (next as any).passenger_id);
+  const bookCb = kind === 'tent' ? `tbook_${rideId}` : `ridebook_${rideId}`;
+  const where = kind === 'tent' ? 'в палатке' : 'в машине';
+  try {
+    await tg('sendMessage', {
+      chat_id: (next as any).passenger_id, parse_mode: 'HTML',
+      text: `🔔 <b>Освободилось место ${where}!</b>\nТы первый в очереди — успей занять. Кто первый нажал, того и бронь.`,
+      reply_markup: kb([[{ text: '✅ Занять место', callback_data: bookCb }]]),
+    });
+  } catch { /* no-op */ }
+}
+
 /** Реф-система: выдать участнику личный ref_code (если ещё нет). */
 async function ensureRefCode(tgId: number): Promise<string | null> {
   const { data } = await supabase.from('members').select('ref_code').eq('telegram_id', tgId).maybeSingle();
@@ -1204,6 +1224,7 @@ export default async function handler(req: any, res: any) {
           if (mine) rows.push([{ text: '❌ Отменить мою поездку', callback_data: `ridecancel_${(r as any).id}` }]);
           else if (booked.has((r as any).id)) rows.push([{ text: '❌ Освободить моё место', callback_data: `rideunbook_${(r as any).id}` }]);
           else if (free > 0) rows.push([{ text: `✅ Занять место (${free} своб.)`, callback_data: `ridebook_${(r as any).id}` }]);
+          else rows.push([{ text: '🕐 Встать в очередь (мест нет)', callback_data: `rwait_${(r as any).id}` }]);
           // Маршрут до точки выезда водителя, а не до самого события.
           const route = pointRouteUrl((r as any).from_point);
           if (route) rows.push([{ text: '🧭 Маршрут до точки выезда', url: route }]);
@@ -1277,6 +1298,7 @@ export default async function handler(req: any, res: any) {
         if (ride) {
           try { await tg('sendMessage', { chat_id: (ride as any).driver_id, parse_mode: 'HTML', text: `🚗 ${esc(cq.from.first_name || 'Пассажир')} освободил место в твоей машине.` }); } catch { /* no-op */ }
         }
+        await notifyWaitlist(rideId, 'car');
         return res.status(200).json({ ok: true });
       }
 
@@ -1309,6 +1331,19 @@ export default async function handler(req: any, res: any) {
         for (const did of uniq) {
           try { await tg('sendMessage', { chat_id: did, parse_mode: 'HTML', text: `🚶 ${esc(cq.from.first_name || 'Участник')} ищет попутку на событие. Если есть место — напиши ему или добавь мест.` }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Встать в очередь на конкретную машину/палатку, когда мест нет.
+      if (data.startsWith('rwait_')) {
+        const rideId = Number(data.slice('rwait_'.length));
+        const { data: ride } = await supabase.from('rides').select('event_id,active').eq('id', rideId).maybeSingle();
+        if (!ride || !(ride as any).active) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Недоступно' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('ride_requests').upsert(
+          { event_id: (ride as any).event_id, ride_id: rideId, passenger_id: tgId, passenger_name: cq.from.first_name || cq.from.username || 'Участник', active: true },
+          { onConflict: 'event_id,passenger_id' }
+        );
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ты в очереди — позову, как освободится место' });
         return res.status(200).json({ ok: true });
       }
 
@@ -1389,6 +1424,7 @@ export default async function handler(req: any, res: any) {
           if (mine) rows.push([{ text: '❌ Убрать мою палатку', callback_data: `tentcancel_${(t as any).id}` }]);
           else if (booked.has((t as any).id)) rows.push([{ text: '❌ Освободить моё место', callback_data: `tunbook_${(t as any).id}` }]);
           else if (free > 0) rows.push([{ text: `✅ Занять место (${free} своб.)`, callback_data: `tbook_${(t as any).id}` }]);
+          else rows.push([{ text: '🕐 Встать в очередь (мест нет)', callback_data: `rwait_${(t as any).id}` }]);
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
             text: `⛺ <b>Палатка ${esc((t as any).driver_name || '')}</b>\n💺 Свободно ${free} из ${(t as any).seats_total || 0} · подселение ${gr}`,
@@ -1442,6 +1478,7 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место освобождено' });
         await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Ты освободил место в палатке. Оно снова доступно.' });
         if (tent) { try { await tg('sendMessage', { chat_id: (tent as any).driver_id, parse_mode: 'HTML', text: `⛺ ${esc(cq.from.first_name || 'Участник')} освободил место в твоей палатке.` }); } catch { /* no-op */ } }
+        await notifyWaitlist(rideId, 'tent');
         return res.status(200).json({ ok: true });
       }
       // Убрать свою палатку — уведомить заселившихся.
