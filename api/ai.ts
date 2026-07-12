@@ -247,8 +247,13 @@ export default async function handler(req: any, res: any) {
         `- type: один из male|mixed|intellectual|active (male=мужское, mixed=смешанное/семейное, intellectual=интеллект, active=активный выезд);\n` +
         `- description: 2–4 живых предложения о сути и атмосфере;\n` +
         `- painPoint: одна фраза — какую боль/запрос закрывает событие;\n` +
+        `- date: дата начала в формате YYYY-MM-DD (извлеки из промпта, если не указана — поставь ближайшую субботу);\n` +
+        `- dateEnd: дата окончания в формате YYYY-MM-DD (для многодневных, иначе пустая строка);\n` +
         `- time: время начала в формате ЧЧ:ММ (напр. 12:00);\n` +
         `- timeEnd: время окончания в формате ЧЧ:ММ (напр. 20:00);\n` +
+        `- location: конкретное место/локация (извлеки из промпта, если не указана — поставь «Уточняется»);\n` +
+        `- priceType: 'free' если бесплатно, 'paid' если платно (аренда делится);\n` +
+        `- priceAmount: число — сумма аренды в BYN (если priceType='paid', иначе 0);\n` +
         `- program: 5–9 пунктов программы (короткие строки, можно со временем);\n` +
         `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
         `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
@@ -261,8 +266,13 @@ export default async function handler(req: any, res: any) {
           type: { type: Type.STRING, enum: ['male', 'mixed', 'intellectual', 'active'] },
           description: { type: Type.STRING },
           painPoint: { type: Type.STRING },
+          date: { type: Type.STRING },
+          dateEnd: { type: Type.STRING },
           time: { type: Type.STRING },
           timeEnd: { type: Type.STRING },
+          location: { type: Type.STRING },
+          priceType: { type: Type.STRING, enum: ['free', 'paid'] },
+          priceAmount: { type: Type.NUMBER },
           program: { type: Type.ARRAY, items: { type: Type.STRING } },
           entryThreshold: { type: Type.STRING },
           houseQualities: {
@@ -280,8 +290,13 @@ export default async function handler(req: any, res: any) {
         type: allowedTypes.includes(p.type) ? p.type : 'mixed',
         description: p.description || '',
         painPoint: p.painPoint || '',
+        date: p.date || '',
+        dateEnd: p.dateEnd || '',
         time: p.time || '',
         timeEnd: p.timeEnd || '',
+        location: p.location || '',
+        priceType: p.priceType === 'paid' ? 'paid' : 'free',
+        priceAmount: p.priceType === 'paid' ? (Number(p.priceAmount) || 0) : 0,
         program: Array.isArray(p.program) ? p.program : [],
         entryThreshold: p.entryThreshold || '',
         houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],

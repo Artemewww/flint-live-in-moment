@@ -51,6 +51,8 @@ export interface CommunityEvent {
   };
   /** Удаленность от Минска по прямой/дороге, км (для логистики). */
   distanceFromMinsk?: number;
+  /** Примерное время в пути в минутах (рассчитывается по distance). */
+  travelTime?: number;
   painPoint: string; // "Главная боль, которую закрывает"
   houseQualities: HouseQuality[];
   image: string;

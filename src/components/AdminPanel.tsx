@@ -2780,7 +2780,9 @@ function AddEventModal({ onClose, onAdd }: {
   const [autoFilling, setAutoFilling] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const [aiStage, setAiStage] = useState<'initial' | 'generated' | 'analyzed'>('initial');
   const [questions, setQuestions] = useState<string[]>([]);
+  const [geoLoading, setGeoLoading] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -2789,6 +2791,8 @@ function AddEventModal({ onClose, onAdd }: {
     time: '',
     timeEnd: '',
     location: '',
+    locationDetails: '',
+    coordinates: { lat: 0, lng: 0 } as { lat: number; lng: number },
     image: '',
     painPoint: '',
     type: 'mixed' as CommunityEvent['type'],
@@ -2804,7 +2808,32 @@ function AddEventModal({ onClose, onAdd }: {
     paymentDetails: {} as Record<string, any>,
     houseQualities: [] as HouseQuality[],
     distanceFromMinsk: 0 as number | undefined,
+    travelTime: 0 as number | undefined,
   });
+
+  /** Геокодирование локации + расчёт расстояния и времени в пути. */
+  const geocodeLocation = async (location: string) => {
+    if (!location || location.trim().length < 3) return;
+    setGeoLoading(true);
+    try {
+      const { geocode, calcDistance, calcTravelTime } = await import('../geo');
+      const coords = await geocode(location);
+      if (coords) {
+        const dist = calcDistance(coords.lat, coords.lng);
+        const travel = calcTravelTime(dist);
+        setFormData((f) => ({
+          ...f,
+          coordinates: coords,
+          distanceFromMinsk: dist,
+          travelTime: dist,
+        }));
+      }
+    } catch (e) {
+      console.warn('Геокодирование не удалось:', e);
+    } finally {
+      setGeoLoading(false);
+    }
+  };
 
   const handleAdd = () => {
     if (!formData.title || !formData.date) return;
@@ -2820,6 +2849,8 @@ function AddEventModal({ onClose, onAdd }: {
       time: formData.time,
       timeEnd: formData.timeEnd,
       location: formData.location,
+      locationDetails: formData.locationDetails,
+      coordinates: formData.coordinates.lat ? formData.coordinates : undefined,
       painPoint: formData.painPoint,
       houseQualities: formData.houseQualities,
       image: formData.image || '',
@@ -2838,6 +2869,7 @@ function AddEventModal({ onClose, onAdd }: {
       logistics: formData.logistics,
       paymentDetails: formData.paymentDetails,
       distanceFromMinsk: formData.distanceFromMinsk,
+      travelTime: formData.travelTime,
       notifications: {
         reminder7d: true,
         reminder3d: true,
