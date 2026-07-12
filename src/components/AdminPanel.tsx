@@ -50,6 +50,32 @@ async function aiGenerateImage(title: string, description: string): Promise<stri
   } catch { return null; }
 }
 
+/** ИИ-генерация полного события по промпту. Сначала контент, потом обложка. */
+async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) => void): Promise<{ draft?: any; error?: string }> {
+  onProgress('🤖 ИИ анализирует идею…');
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: 'generate_event', prompt }),
+    });
+    const j = await res.json();
+    if (j.draft) {
+      onProgress('✍️ Формирование описания и тегов…');
+      await new Promise(r => setTimeout(r, 300));
+      if (j.draft.title) {
+        onProgress('🎨 Создание кинематографичной обложки…');
+        const imgUrl = await aiGenerateImage(j.draft.title, j.draft.description || '');
+        if (imgUrl) j.draft.image = imgUrl;
+      }
+      return { draft: j.draft };
+    }
+    return { error: j.error || `HTTP ${res.status}` };
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+}
+
 /** ИИ-автозаполнение всего события по названию (Gemini). Возвращает {draft?, error?}. */
 async function aiAutofill(ev: any): Promise<{ draft?: any; error?: string }> {
   try {
@@ -2730,6 +2756,8 @@ function AddEventModal({ onClose, onAdd }: {
   onAdd: (event: CommunityEvent) => void;
 }) {
   const [autoFilling, setAutoFilling] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiProgress, setAiProgress] = useState<string | null>(null);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -2816,6 +2844,54 @@ function AddEventModal({ onClose, onAdd }: {
             onChange={(e) => setFormData({...formData, title: e.target.value})}
             className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
           />
+
+          {/* ИИ-Ассистент: промпт + прогресс-бар */}
+          <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+            <label className="text-[10px] text-white/40 uppercase font-mono block">🧠 ИИ-Ассистент</label>
+            <textarea
+              placeholder="Опиши идею события одной фразой…&#10;Например: Кайтсерфинг на Минском море на выходных, старт в 12:00, ограничение 15 человек"
+              value={aiPrompt}
+              onChange={(e) => setAiPrompt(e.target.value)}
+              rows={2}
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30"
+            />
+            {aiProgress && (
+              <div className="bg-black/30 rounded-lg p-2 flex items-center gap-2 text-[11px] text-white/80">
+                <span className="w-3 h-3 border-2 border-brand/30 border-t-brand rounded-full animate-spin shrink-0" />
+                <span>{aiProgress}</span>
+              </div>
+            )}
+            <button
+              type="button"
+              disabled={!aiPrompt.trim() || !!aiProgress}
+              onClick={async () => {
+                setAiProgress('🤖 ИИ анализирует идею…');
+                const { draft: d, error } = await aiGenerateFullEvent(aiPrompt.trim(), setAiProgress);
+                if (d) {
+                  setFormData((f) => ({
+                    ...f,
+                    title: d.title || f.title,
+                    description: d.description || f.description,
+                    type: d.type || f.type,
+                    painPoint: d.painPoint || f.painPoint,
+                    program: (d.program && d.program.length) ? d.program : f.program,
+                    entryThreshold: d.entryThreshold || f.entryThreshold,
+                    time: d.time ? normalizeTime(d.time) : f.time,
+                    timeEnd: d.timeEnd ? normalizeTime(d.timeEnd) : f.timeEnd,
+                    image: d.image || f.image,
+                    houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
+                  }));
+                  setAiProgress('');
+                } else {
+                  alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
+                  setAiProgress('');
+                }
+              }}
+              className="w-full bg-brand/15 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/25 transition-colors disabled:opacity-50"
+            >
+              {aiProgress ? 'Генерация…' : '🚀 Сгенерировать событие'}
+            </button>
+          </div>
 
           <button
             type="button"

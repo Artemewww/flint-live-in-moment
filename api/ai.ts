@@ -236,6 +236,60 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    if (task === 'generate_event') {
+      const prompt = body.prompt || '';
+      const sys =
+        `Ты — опытный организатор трезвого сообщества «Живи в моменте» (Минск). ` +
+        `По одной короткой фразе сгенерируй ПОЛНОЕ готовое событие — живо, вдохновляюще, по-русски, без алкоголя.\n` +
+        `Идея: «${prompt}».\n` +
+        `Верни JSON с полями:\n` +
+        `- title: короткое яркое название (до 60 символов);\n` +
+        `- type: один из male|mixed|intellectual|active (male=мужское, mixed=смешанное/семейное, intellectual=интеллект, active=активный выезд);\n` +
+        `- description: 2–4 живых предложения о сути и атмосфере;\n` +
+        `- painPoint: одна фраза — какую боль/запрос закрывает событие;\n` +
+        `- time: время начала в формате ЧЧ:ММ (напр. 12:00);\n` +
+        `- timeEnd: время окончания в формате ЧЧ:ММ (напр. 20:00);\n` +
+        `- program: 5–9 пунктов программы (короткие строки, можно со временем);\n` +
+        `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
+        `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
+        `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье);\n` +
+        `- maxParticipants: реалистичное число участников (5–30).`;
+      const p = await genJSON(ai, sys, {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING },
+          type: { type: Type.STRING, enum: ['male', 'mixed', 'intellectual', 'active'] },
+          description: { type: Type.STRING },
+          painPoint: { type: Type.STRING },
+          time: { type: Type.STRING },
+          timeEnd: { type: Type.STRING },
+          program: { type: Type.ARRAY, items: { type: Type.STRING } },
+          entryThreshold: { type: Type.STRING },
+          houseQualities: {
+            type: Type.ARRAY,
+            items: { type: Type.STRING, enum: ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] },
+          },
+          maxParticipants: { type: Type.NUMBER },
+        },
+        required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants'],
+      });
+      const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
+      const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
+      const draft: any = {
+        title: p.title || '',
+        type: allowedTypes.includes(p.type) ? p.type : 'mixed',
+        description: p.description || '',
+        painPoint: p.painPoint || '',
+        time: p.time || '',
+        timeEnd: p.timeEnd || '',
+        program: Array.isArray(p.program) ? p.program : [],
+        entryThreshold: p.entryThreshold || '',
+        houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],
+        maxParticipants: Number(p.maxParticipants) || 15,
+      };
+      return res.status(200).json({ draft, model: usedModel });
+    }
+
     if (task === 'shopping') {
       const prompt =
         `Ты — помощник организатора трезвого сообщества «Живи в моменте» (Минск, Беларусь). ` +

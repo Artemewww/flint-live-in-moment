@@ -23,22 +23,17 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const [showYearModal, setShowYearModal] = useState(false);
   const [modalActiveMonth, setModalActiveMonth] = useState<number>(0);
   const [selectedDayEvents, setSelectedDayEvents] = useState<CommunityEvent[] | null>(null);
-  /** Выбранный день внутри годового модала — храним номер дня и его события. */
   const [yearModalSelectedDay, setYearModalSelectedDay] = useState<{ dayNum: number; events: CommunityEvent[] } | null>(null);
   const [monthInfoOpen, setMonthInfoOpen] = useState<boolean>(false);
-  /** Позиция стрелки-указателя (px от левого края контейнера). */
   const [arrowLeft, setArrowLeft] = useState<number | null>(null);
-  /** Ref на контейнер скролла для вычисления позиции ячеек. */
   const scrollRef = useRef<HTMLDivElement>(null);
-  /** Ref на плашку для автоскролла. */
   const popupRef = useRef<HTMLDivElement>(null);
 
   const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
-  // Динамическая дата «сегодня»
   const now = new Date();
   const currentYear = now.getFullYear();
-  const currentMonth = now.getMonth(); // 0-based
+  const currentMonth = now.getMonth();
   const todayDayNum = now.getDate();
   const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
   const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
@@ -47,7 +42,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
   const pad2 = (n: number) => String(n).padStart(2, '0');
 
-  // События, попадающие на конкретную дату: честный диапазон date..dateEnd (§12.4)
   const eventsOnDate = (dateStr: string): CommunityEvent[] =>
     events.filter(evt => evt.date <= dateStr && dateStr <= (evt.dateEnd || evt.date));
 
@@ -59,7 +53,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     return weekdays[date.getDay() === 0 ? 6 : date.getDay() - 1];
   };
 
-  // Находим ближайшее событие для сжатия пустых дней
   let nextEventDay: number | null = null;
   for (let d = todayDayNum; d <= daysInMonth; d++) {
     if (getEventsForDay(d).length > 0) {
@@ -70,14 +63,12 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const daysToNextEvent = nextEventDay ? nextEventDay - todayDayNum : 0;
   const useCompactMode = daysToNextEvent > 6;
 
-  /** Любой клик по дате раскрывает нижний блок с событиями. */
   const handleDayClick = (dayNum: number) => {
     const dayEvents = getEventsForDay(dayNum);
     if (dayEvents.length === 0) return;
     setSelectedDayEvents(dayEvents);
   };
 
-  // Автоскролл к плашке при её появлении
   useEffect(() => {
     if (selectedDayEvents && selectedDayEvents.length > 0 && popupRef.current) {
       setTimeout(() => {
@@ -86,7 +77,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     }
   }, [selectedDayEvents]);
 
-  // Вычисление позиции стрелки при клике
   const updateArrowPosition = useCallback((dayNum: number) => {
     if (!scrollRef.current) return;
     const container = scrollRef.current;
@@ -108,7 +98,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     onOpenDetail(evt);
   };
 
-  // Годовой календарь
   const yearMonthKeys = new Set<string>();
   for (let m = currentMonth; m < 12; m++) yearMonthKeys.add(`${currentYear}-${pad2(m + 1)}`);
   events.forEach(evt => {
@@ -152,7 +141,24 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     return 'Микс';
   };
 
-  /** Карточка события с обложкой. */
+  /** Короткое название события для тултипа. */
+  const getShortEventLabel = (evt: CommunityEvent): string => {
+    const id = evt.id;
+    if (id === 'banya-flint-weekly') return 'Баня';
+    if (id === 'kettlebell-walk-weekly') return 'Гири';
+    if (id === 'existential-cinema') return 'Кино';
+    if (id === 'reading-smysly') return 'Книга';
+    if (id === 'forest-hiking-isloch') return 'Поход';
+    if (id === 'orator-art-practice') return 'Спич';
+    if (id === 'poker-no-smoke') return 'Покер';
+    if (id === 'isloch-challenges-male') return 'Лагерь';
+    if (id === 'braslav-family-zen') return 'Слет';
+    if (id === 'conscious-fasting' || id.startsWith('conscious-fasting')) return 'Голод';
+    const short = evt.title || '';
+    if (short.length <= 18) return short;
+    return short.slice(0, 16) + '…';
+  };
+
   const EventCard = ({ evt, onClick }: { evt: CommunityEvent; onClick: () => void }) => (
     <button
       onClick={onClick}
@@ -320,7 +326,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
           })}
         </div>
 
-        {/* Стрелка-указатель */}
         {selectedDayEvents && selectedDayEvents.length > 0 && arrowLeft !== null && (
           <div className="relative h-0" style={{ left: 0 }}>
             <div
@@ -331,7 +336,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
         )}
       </div>
 
-      {/* Popup с событиями дня */}
       {selectedDayEvents && selectedDayEvents.length > 0 && (
         <div ref={popupRef} className="bg-[#161616] border border-brand/20 rounded-2xl p-4 relative">
           <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
@@ -369,11 +373,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
             className="bg-[#0b0b0b] w-full max-w-[95vw] sm:max-w-7xl h-[95vh] sm:h-[90vh] shadow-2xl relative z-10 border border-white/10 rounded-3xl flex flex-col overflow-hidden text-white font-sans"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header — минималистичный */}
             <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-[#121212] shrink-0">
-              <h3 className="font-display font-black text-lg uppercase tracking-tight">
-                План мероприятий
-              </h3>
+              <h3 className="font-display font-black text-lg uppercase tracking-tight">План мероприятий</h3>
               <button 
                 onClick={() => { setShowYearModal(false); setYearModalSelectedDay(null); }}
                 className="p-2 rounded-full text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer bg-transparent border-none"
@@ -382,7 +383,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
               </button>
             </div>
 
-            {/* MONTH SELECTOR */}
             <div className="bg-[#121212] border-b border-white/5 p-3 flex flex-wrap gap-2 justify-center shrink-0">
               {yearMonths.map((mObj, idx) => {
                 const [y, mon] = mObj.key.split('-').map(Number);
@@ -404,12 +404,10 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
               })}
             </div>
 
-            {/* MODAL CONTENT */}
             <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6">
               
               {activeYearMonth && (
               <div className="w-full">
-                {/* Шапка с днями недели */}
                 <div className="grid grid-cols-7 w-full mb-1">
                   {weekdays.map((wd) => (
                     <div key={wd} className="text-center text-[9px] font-mono uppercase tracking-wider text-white/30 py-1.5">
@@ -418,7 +416,6 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                   ))}
                 </div>
 
-                {/* Разбиваем дни на недели */}
                 {(() => {
                   const totalCells = activeYearMonth.startOffset + activeYearMonth.days;
                   const numWeeks = Math.ceil(totalCells / 7);
@@ -444,13 +441,11 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                   }
                   return weeks;
                 })().map((week) => {
-                  // Находим, есть ли в этой неделе выбранный день
                   const selectedDayInWeek = yearModalSelectedDay && week.days.find(d => d.dayNum === yearModalSelectedDay.dayNum);
                   const hasSelectedDay = !!selectedDayInWeek;
 
                   return (
                     <div key={week.weekIdx} className="w-full">
-                      {/* Строка дней недели */}
                       <div className="grid grid-cols-7 w-full">
                         {week.days.map((day, di) => {
                           if (day.dayNum === 0) {
@@ -469,58 +464,75 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                           }
                           if (isActive) cellBorderColor = 'border-brand bg-brand/10';
 
-                          // Сегодня — яркая обводка и свечение
                           const isToday = day.isToday;
 
                           return (
-                            <button
-                              key={`day-${day.dayNum}`}
-                              type="button"
-                              onClick={() => {
-                                if (!hasEvt) return;
-                                // Toggle: если кликнули на тот же день — закрываем, иначе открываем
-                                if (yearModalSelectedDay?.dayNum === day.dayNum) {
-                                  setYearModalSelectedDay(null);
-                                } else {
-                                  setYearModalSelectedDay({ dayNum: day.dayNum, events: day.events });
-                                }
-                              }}
-                              className={`
-                                h-[80px] sm:h-[100px] rounded-xl border p-1.5 flex flex-col justify-between text-left transition-all outline-none cursor-pointer relative
-                                ${isToday
-                                  ? 'border-2 border-brand shadow-[0_0_12px_rgba(230,253,58,0.25)] bg-brand/5'
-                                  : cellBorderColor
-                                }
-                                hover:bg-white/5
-                              `}
-                            >
-                              {isToday && (
-                                <div className="absolute -top-1 -right-1 flex items-center justify-center" title="Сегодня">
-                                  <span className="relative flex h-2.5 w-2.5">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
-                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
-                                  </span>
-                                </div>
-                              )}
-                              <span className={`text-[9px] sm:text-[10px] font-mono font-bold ${isToday ? 'text-brand' : 'text-white/50'}`}>
-                                {day.dayNum}
-                              </span>
+                            <div className="relative group">
+                              <button
+                                key={`day-${day.dayNum}`}
+                                type="button"
+                                onClick={() => {
+                                  if (!hasEvt) return;
+                                  if (yearModalSelectedDay?.dayNum === day.dayNum) {
+                                    setYearModalSelectedDay(null);
+                                  } else {
+                                    setYearModalSelectedDay({ dayNum: day.dayNum, events: day.events });
+                                  }
+                                }}
+                                className={`
+                                  h-[80px] sm:h-[100px] rounded-xl border p-1.5 flex flex-col justify-between text-left transition-all outline-none cursor-pointer relative w-full
+                                  ${isToday
+                                    ? 'border-2 border-brand shadow-[0_0_12px_rgba(230,253,58,0.25)] bg-brand/5'
+                                    : cellBorderColor
+                                  }
+                                  hover:bg-white/5
+                                `}
+                              >
+                                {isToday && (
+                                  <div className="absolute -top-1 -right-1 flex items-center justify-center" title="Сегодня">
+                                    <span className="relative flex h-2.5 w-2.5">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
+                                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                                    </span>
+                                  </div>
+                                )}
+                                <span className={`text-[9px] sm:text-[10px] font-mono font-bold ${isToday ? 'text-brand' : 'text-white/50'}`}>
+                                  {day.dayNum}
+                                </span>
+                                {hasEvt && (
+                                  <div className="flex flex-wrap gap-0.5 mt-auto pt-0.5">
+                                    {day.events.slice(0, 3).map((e, eIdx) => (
+                                      <span key={e.id + eIdx} className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${getTypeColor(e.type)}`} />
+                                    ))}
+                                    {day.events.length > 3 && (
+                                      <span className="text-[5px] text-white/40 font-mono">+{day.events.length - 3}</span>
+                                    )}
+                                  </div>
+                                )}
+                              </button>
+
+                              {/* Тултип при ховере — для десктопа */}
                               {hasEvt && (
-                                <div className="flex flex-wrap gap-0.5 mt-auto pt-0.5">
-                                  {day.events.slice(0, 3).map((e, eIdx) => (
-                                    <span key={e.id + eIdx} className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${getTypeColor(e.type)}`} />
-                                  ))}
-                                  {day.events.length > 3 && (
-                                    <span className="text-[5px] text-white/40 font-mono">+{day.events.length - 3}</span>
-                                  )}
+                                <div className="absolute z-20 bottom-full left-1/2 -translate-x-1/2 mb-2 hidden sm:group-hover:block pointer-events-none">
+                                  <div className="bg-[#1a1a1a] border border-white/10 rounded-xl px-3 py-2 shadow-xl whitespace-nowrap">
+                                    <div className="text-[10px] font-mono text-white/40 mb-1">{day.dayNum} {activeYearMonth.name}</div>
+                                    {day.events.slice(0, 5).map((e) => (
+                                      <div key={e.id} className="flex items-center gap-1.5 text-[11px] text-white/90 py-0.5">
+                                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getTypeColor(e.type)}`} />
+                                        <span className="truncate max-w-[180px]">{getShortEventLabel(e)}</span>
+                                      </div>
+                                    ))}
+                                    {day.events.length > 5 && (
+                                      <div className="text-[9px] text-white/40 mt-1">+ ещё {day.events.length - 5}</div>
+                                    )}
+                                  </div>
                                 </div>
                               )}
-                            </button>
+                            </div>
                           );
                         })}
                       </div>
 
-                      {/* Блок событий под неделей — ТОЛЬКО для выбранного дня в этой неделе */}
                       {hasSelectedDay && selectedDayInWeek && (
                         <div className="mt-2 mb-3 bg-black/30 border border-white/10 rounded-2xl p-4">
                           <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
