@@ -23,8 +23,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   const [showYearModal, setShowYearModal] = useState(false);
   const [modalActiveMonth, setModalActiveMonth] = useState<number>(0);
   const [selectedDayEvents, setSelectedDayEvents] = useState<CommunityEvent[] | null>(null);
-  /** Выбранный день внутри годового модала — раскрывает список событий под сеткой. */
-  const [yearModalDayEvents, setYearModalDayEvents] = useState<CommunityEvent[] | null>(null);
+  /** Выбранный день внутри годового модала — храним номер дня и его события. */
+  const [yearModalSelectedDay, setYearModalSelectedDay] = useState<{ dayNum: number; events: CommunityEvent[] } | null>(null);
   const [monthInfoOpen, setMonthInfoOpen] = useState<boolean>(false);
   /** Позиция стрелки-указателя (px от левого края контейнера). */
   const [arrowLeft, setArrowLeft] = useState<number | null>(null);
@@ -363,27 +363,27 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
       {/* FULL-SCREEN YEAR MODAL */}
       {showYearModal && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/95 backdrop-blur-md" id="all-year-plan-modal">
-          <div className="absolute inset-0" onClick={() => { setShowYearModal(false); setYearModalDayEvents(null); }} />
+          <div className="absolute inset-0" onClick={() => { setShowYearModal(false); setYearModalSelectedDay(null); }} />
           
           <div 
-            className="bg-[#0b0b0b] w-screen h-screen shadow-2xl relative z-10 border-0 flex flex-col overflow-hidden text-white font-sans"
+            className="bg-[#0b0b0b] w-full max-w-[95vw] sm:max-w-7xl h-[95vh] sm:h-[90vh] shadow-2xl relative z-10 border border-white/10 rounded-3xl flex flex-col overflow-hidden text-white font-sans"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Modal Header — минималистичный, без отступов */}
-            <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-[#121212] shrink-0">
-              <h3 className="font-display font-black text-base uppercase tracking-tight">
+            {/* Modal Header — минималистичный */}
+            <div className="flex items-center justify-between px-5 py-3 border-b border-white/10 bg-[#121212] shrink-0">
+              <h3 className="font-display font-black text-lg uppercase tracking-tight">
                 План мероприятий
               </h3>
               <button 
-                onClick={() => { setShowYearModal(false); setYearModalDayEvents(null); }}
-                className="p-1.5 rounded-full text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer bg-transparent border-none"
+                onClick={() => { setShowYearModal(false); setYearModalSelectedDay(null); }}
+                className="p-2 rounded-full text-white/40 hover:text-white hover:bg-white/5 transition-colors cursor-pointer bg-transparent border-none"
               >
-                <X className="w-4 h-4" />
+                <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* MONTH SELECTOR */}
-            <div className="bg-[#121212] border-b border-white/5 p-2 flex flex-wrap gap-1.5 justify-center shrink-0">
+            <div className="bg-[#121212] border-b border-white/5 p-3 flex flex-wrap gap-2 justify-center shrink-0">
               {yearMonths.map((mObj, idx) => {
                 const [y, mon] = mObj.key.split('-').map(Number);
                 const isPast = y < currentYear || (y === currentYear && mon - 1 < currentMonth);
@@ -391,8 +391,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                 <button
                   key={idx}
                   type="button"
-                  onClick={() => { setModalActiveMonth(idx); setYearModalDayEvents(null); }}
-                  className={`px-3 py-1.5 rounded-full text-[10px] font-mono uppercase tracking-wider font-bold transition-all cursor-pointer ${
+                  onClick={() => { setModalActiveMonth(idx); setYearModalSelectedDay(null); }}
+                  className={`px-4 py-2 rounded-full text-xs font-mono uppercase tracking-wider font-bold transition-all cursor-pointer ${
                     modalActiveMonth === idx
                       ? 'bg-brand text-black font-black'
                       : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
@@ -404,138 +404,150 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
               })}
             </div>
 
-            {/* MODAL CONTENT — без боковых отступов */}
-            <div className="flex-1 overflow-y-auto">
+            {/* MODAL CONTENT */}
+            <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-6">
               
               {activeYearMonth && (
               <div className="w-full">
-                {/* Month grid — разбивка на недели (строки по 7 дней) */}
-                <div className="w-full">
-                  {/* Шапка с днями недели */}
-                  <div className="grid grid-cols-7 w-full">
-                    {weekdays.map((wd, wdi) => (
-                      <div key={wd} className="text-center text-[9px] font-mono uppercase tracking-wider text-white/30 py-1.5 border-b border-white/5">
-                        {wd}
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Разбиваем дни на недели */}
-                  {(() => {
-                    const totalCells = activeYearMonth.startOffset + activeYearMonth.days;
-                    const numWeeks = Math.ceil(totalCells / 7);
-                    const weeks: { weekIdx: number; days: { dayNum: number; events: CommunityEvent[]; isToday: boolean }[] }[] = [];
-
-                    let dayCounter = 1;
-                    for (let w = 0; w < numWeeks; w++) {
-                      const days: { dayNum: number; events: CommunityEvent[]; isToday: boolean }[] = [];
-                      for (let d = 0; d < 7; d++) {
-                        const cellIdx = w * 7 + d;
-                        if (cellIdx < activeYearMonth.startOffset || dayCounter > activeYearMonth.days) {
-                          days.push({ dayNum: 0, events: [], isToday: false });
-                        } else {
-                          const dayNum = dayCounter;
-                          const dayStr = `${activeYearMonth.key}-${pad2(dayNum)}`;
-                          const dayEvents = events.filter(evt => evt.date <= dayStr && dayStr <= (evt.dateEnd || evt.date));
-                          const isToday = activeYearMonth.key === `${currentYear}-${currentMonthStr}` && dayNum === todayDayNum;
-                          days.push({ dayNum, events: dayEvents, isToday });
-                          dayCounter++;
-                        }
-                      }
-                      weeks.push({ weekIdx: w, days });
-                    }
-                    return weeks;
-                  })().map((week) => {
-                    // События этой недели, на которые кликнули
-                    const weekDayEvents = week.days.flatMap(d => d.events);
-                    const hasActive = yearModalDayEvents && yearModalDayEvents.some(ye => weekDayEvents.some(de => de.id === ye.id));
-
-                    return (
-                      <div key={week.weekIdx} className="w-full">
-                        {/* Строка дней недели */}
-                        <div className="grid grid-cols-7 w-full">
-                          {week.days.map((day, di) => {
-                            if (day.dayNum === 0) {
-                              return <div key={`empty-${di}`} className="h-[80px] sm:h-[100px]" />;
-                            }
-                            const hasEvt = day.events.length > 0;
-                            const isActive = yearModalDayEvents && yearModalDayEvents.some(e => day.events.some(de => de.id === e.id));
-                            
-                            let cellBorderColor = 'border-white/5 bg-black/20';
-                            if (hasEvt) {
-                              const type = day.events[0].type;
-                              if (type === 'male') cellBorderColor = 'border-indigo-500/20 bg-indigo-500/5 hover:border-indigo-400';
-                              else if (type === 'intellectual') cellBorderColor = 'border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-400';
-                              else if (type === 'active') cellBorderColor = 'border-rose-500/20 bg-rose-500/5 hover:border-rose-400';
-                              else cellBorderColor = 'border-brand/20 bg-brand/5 hover:border-brand';
-                            }
-                            if (isActive) cellBorderColor = 'border-brand bg-brand/10';
-
-                            return (
-                              <button
-                                key={`day-${day.dayNum}`}
-                                type="button"
-                                onClick={() => {
-                                  if (!hasEvt) return;
-                                  setYearModalDayEvents(yearModalDayEvents?.length === day.events.length && yearModalDayEvents[0]?.id === day.events[0]?.id ? null : day.events);
-                                }}
-                                className={`h-[80px] sm:h-[100px] border border-l-0 border-t-0 p-1.5 flex flex-col justify-between text-left transition-all outline-none cursor-pointer relative ${cellBorderColor} hover:bg-white/5`}
-                              >
-                                {day.isToday && (
-                                  <div className="absolute -top-0.5 -right-0.5 flex items-center justify-center" title="Сегодня">
-                                    <span className="relative flex h-2 w-2">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
-                                      <span className="relative inline-flex rounded-full h-2 w-2 bg-brand"></span>
-                                    </span>
-                                  </div>
-                                )}
-                                <span className={`text-[9px] sm:text-[10px] font-mono font-bold ${day.isToday ? 'text-brand' : 'text-white/50'}`}>
-                                  {day.dayNum}
-                                </span>
-                                {hasEvt && (
-                                  <div className="flex flex-wrap gap-0.5 mt-auto pt-0.5">
-                                    {day.events.slice(0, 3).map((e, eIdx) => (
-                                      <span key={e.id + eIdx} className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${getTypeColor(e.type)}`} />
-                                    ))}
-                                    {day.events.length > 3 && (
-                                      <span className="text-[5px] text-white/40 font-mono">+{day.events.length - 3}</span>
-                                    )}
-                                  </div>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-
-                        {/* Блок событий под неделей — раздвигающийся аккордеон */}
-                        {hasActive && yearModalDayEvents && yearModalDayEvents.length > 0 && (
-                          <div className="border-b border-white/5 bg-black/30">
-                            <div className="px-3 py-3 space-y-2">
-                              <div className="flex items-center justify-between">
-                                <h4 className="text-[9px] uppercase font-mono tracking-widest text-brand font-black">
-                                  {yearModalDayEvents[0].dateLabel || yearModalDayEvents[0].date} · {yearModalDayEvents.length} {pluralEvents(yearModalDayEvents.length)}
-                                </h4>
-                                <button
-                                  onClick={() => setYearModalDayEvents(null)}
-                                  className="text-[8px] text-white/40 hover:text-white font-mono uppercase bg-transparent border-none cursor-pointer"
-                                >
-                                  Скрыть
-                                </button>
-                              </div>
-                              {yearModalDayEvents.map((evt) => (
-                                <EventCard key={evt.id} evt={evt} onClick={() => {
-                                  onOpenDetail(evt);
-                                  setShowYearModal(false);
-                                  setYearModalDayEvents(null);
-                                }} />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                {/* Шапка с днями недели */}
+                <div className="grid grid-cols-7 w-full mb-1">
+                  {weekdays.map((wd) => (
+                    <div key={wd} className="text-center text-[9px] font-mono uppercase tracking-wider text-white/30 py-1.5">
+                      {wd}
+                    </div>
+                  ))}
                 </div>
+
+                {/* Разбиваем дни на недели */}
+                {(() => {
+                  const totalCells = activeYearMonth.startOffset + activeYearMonth.days;
+                  const numWeeks = Math.ceil(totalCells / 7);
+                  const weeks: { weekIdx: number; days: { dayNum: number; events: CommunityEvent[]; isToday: boolean }[] }[] = [];
+
+                  let dayCounter = 1;
+                  for (let w = 0; w < numWeeks; w++) {
+                    const days: { dayNum: number; events: CommunityEvent[]; isToday: boolean }[] = [];
+                    for (let d = 0; d < 7; d++) {
+                      const cellIdx = w * 7 + d;
+                      if (cellIdx < activeYearMonth.startOffset || dayCounter > activeYearMonth.days) {
+                        days.push({ dayNum: 0, events: [], isToday: false });
+                      } else {
+                        const dayNum = dayCounter;
+                        const dayStr = `${activeYearMonth.key}-${pad2(dayNum)}`;
+                        const dayEvents = events.filter(evt => evt.date <= dayStr && dayStr <= (evt.dateEnd || evt.date));
+                        const isToday = activeYearMonth.key === `${currentYear}-${currentMonthStr}` && dayNum === todayDayNum;
+                        days.push({ dayNum, events: dayEvents, isToday });
+                        dayCounter++;
+                      }
+                    }
+                    weeks.push({ weekIdx: w, days });
+                  }
+                  return weeks;
+                })().map((week) => {
+                  // Находим, есть ли в этой неделе выбранный день
+                  const selectedDayInWeek = yearModalSelectedDay && week.days.find(d => d.dayNum === yearModalSelectedDay.dayNum);
+                  const hasSelectedDay = !!selectedDayInWeek;
+
+                  return (
+                    <div key={week.weekIdx} className="w-full">
+                      {/* Строка дней недели */}
+                      <div className="grid grid-cols-7 w-full">
+                        {week.days.map((day, di) => {
+                          if (day.dayNum === 0) {
+                            return <div key={`empty-${di}`} className="h-[80px] sm:h-[100px]" />;
+                          }
+                          const hasEvt = day.events.length > 0;
+                          const isActive = yearModalSelectedDay?.dayNum === day.dayNum;
+                          
+                          let cellBorderColor = 'border-white/5 bg-black/20';
+                          if (hasEvt) {
+                            const type = day.events[0].type;
+                            if (type === 'male') cellBorderColor = 'border-indigo-500/20 bg-indigo-500/5 hover:border-indigo-400';
+                            else if (type === 'intellectual') cellBorderColor = 'border-emerald-500/20 bg-emerald-500/5 hover:border-emerald-400';
+                            else if (type === 'active') cellBorderColor = 'border-rose-500/20 bg-rose-500/5 hover:border-rose-400';
+                            else cellBorderColor = 'border-brand/20 bg-brand/5 hover:border-brand';
+                          }
+                          if (isActive) cellBorderColor = 'border-brand bg-brand/10';
+
+                          // Сегодня — яркая обводка и свечение
+                          const isToday = day.isToday;
+
+                          return (
+                            <button
+                              key={`day-${day.dayNum}`}
+                              type="button"
+                              onClick={() => {
+                                if (!hasEvt) return;
+                                // Toggle: если кликнули на тот же день — закрываем, иначе открываем
+                                if (yearModalSelectedDay?.dayNum === day.dayNum) {
+                                  setYearModalSelectedDay(null);
+                                } else {
+                                  setYearModalSelectedDay({ dayNum: day.dayNum, events: day.events });
+                                }
+                              }}
+                              className={`
+                                h-[80px] sm:h-[100px] rounded-xl border p-1.5 flex flex-col justify-between text-left transition-all outline-none cursor-pointer relative
+                                ${isToday
+                                  ? 'border-2 border-brand shadow-[0_0_12px_rgba(230,253,58,0.25)] bg-brand/5'
+                                  : cellBorderColor
+                                }
+                                hover:bg-white/5
+                              `}
+                            >
+                              {isToday && (
+                                <div className="absolute -top-1 -right-1 flex items-center justify-center" title="Сегодня">
+                                  <span className="relative flex h-2.5 w-2.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                                  </span>
+                                </div>
+                              )}
+                              <span className={`text-[9px] sm:text-[10px] font-mono font-bold ${isToday ? 'text-brand' : 'text-white/50'}`}>
+                                {day.dayNum}
+                              </span>
+                              {hasEvt && (
+                                <div className="flex flex-wrap gap-0.5 mt-auto pt-0.5">
+                                  {day.events.slice(0, 3).map((e, eIdx) => (
+                                    <span key={e.id + eIdx} className={`w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full ${getTypeColor(e.type)}`} />
+                                  ))}
+                                  {day.events.length > 3 && (
+                                    <span className="text-[5px] text-white/40 font-mono">+{day.events.length - 3}</span>
+                                  )}
+                                </div>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      {/* Блок событий под неделей — ТОЛЬКО для выбранного дня в этой неделе */}
+                      {hasSelectedDay && selectedDayInWeek && (
+                        <div className="mt-2 mb-3 bg-black/30 border border-white/10 rounded-2xl p-4">
+                          <div className="flex items-center justify-between mb-3 pb-2 border-b border-white/5">
+                            <h4 className="text-[10px] uppercase font-mono tracking-widest text-brand font-black">
+                              {selectedDayInWeek.events[0]?.dateLabel || `${activeYearMonth.key}-${pad2(selectedDayInWeek.dayNum)}`} · {selectedDayInWeek.events.length} {pluralEvents(selectedDayInWeek.events.length)}
+                            </h4>
+                            <button
+                              onClick={() => setYearModalSelectedDay(null)}
+                              className="text-[9px] text-white/40 hover:text-white font-mono uppercase bg-transparent border-none cursor-pointer"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                          <div className="space-y-2">
+                            {selectedDayInWeek.events.map((evt) => (
+                              <EventCard key={evt.id} evt={evt} onClick={() => {
+                                onOpenDetail(evt);
+                                setShowYearModal(false);
+                                setYearModalSelectedDay(null);
+                              }} />
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
               )}
             </div>
