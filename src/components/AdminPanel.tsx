@@ -2348,6 +2348,7 @@ function EditEventModal({ event, onClose, onSave }: {
   onClose: () => void;
   onSave: (event: CommunityEvent) => void;
 }) {
+  const [generatingCover, setGeneratingCover] = useState(false);
   const [formData, setFormData] = useState({
     title: event.title,
     description: event.description,
@@ -2545,18 +2546,33 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
 
-          {/* AI-генерация обложки */}
+          {/* AI-генерация обложки с лоадером */}
           <button
             type="button"
+            disabled={!formData.title.trim() || generatingCover}
             onClick={async () => {
-              const url = await aiGenerateImage(formData.title, formData.description);
-              if (url) setFormData({...formData, image: url});
-              else alert('ИИ не смог сгенерировать обложку. Попробуй позже или загрузи свою.');
+              setGeneratingCover(true);
+              try {
+                const url = await aiGenerateImage(formData.title, formData.description);
+                if (url) setFormData({...formData, image: url});
+                else alert('ИИ не смог сгенерировать обложку. Попробуй позже или загрузи свою.');
+              } catch (e) {
+                console.error('AI generate_image error:', e);
+                alert('Ошибка генерации: ' + (e as Error).message);
+              } finally {
+                setGeneratingCover(false);
+              }
             }}
-            disabled={!formData.title.trim()}
-            className="w-full bg-brand/10 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-50"
+            className="w-full bg-brand/10 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            🎨 Сгенерировать обложку
+            {generatingCover ? (
+              <>
+                <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
+                Генерация…
+              </>
+            ) : (
+              '🎨 Сгенерировать обложку'
+            )}
           </button>
 
           <div>
