@@ -382,16 +382,18 @@ export default function EventDetailModal({
                   // Группируем программу по дню: «День N» или дата в начале строки
                   // становится заголовком-разделителем, а под ним идут только время и
                   // активность — без повтора даты в каждой строке (дерево по часам).
-                  const dayRe = /^\s*(День\s*\d+|Day\s*\d+|\d{1,2}\s*день\w*|\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?)\s*[)\].,:–—-]*\s*/i;
+                  // Заголовок дня в начале строки: «День N», «Day N», «N день»,
+                  // дата «12.07», дата с месяцем «17 июля», день недели «Суббота».
+                  const dayRe = /^\s*(День\s*\d+|Day\s*\d+|\d{1,2}\s*день\w*|\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?|\d{1,2}\s+(?:янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек)[а-я]*|понедельник|вторник|сред[аы]|четверг|пятниц[аы]|суббот[аы]|воскресень[ея])(?=[\s)\].,:–—-]|$)\s*[)\].,:–—-]*\s*/i;
                   const groups: { day: string | null; items: string[] }[] = [];
                   for (const raw of guide.program) {
                     const m = raw.match(dayRe);
                     const day = m ? m[1].trim() : null;
                     const rest = (m ? raw.slice(m[0].length) : raw).trim();
                     const last = groups[groups.length - 1];
-                    if (day && (!last || last.day !== day)) groups.push({ day, items: [rest] });
-                    else if (last) last.items.push(rest);
-                    else groups.push({ day, items: [rest] });
+                    if (day && (!last || last.day !== day)) groups.push({ day, items: rest ? [rest] : [] });
+                    else if (last) { if (rest) last.items.push(rest); }
+                    else groups.push({ day, items: rest ? [rest] : [] });
                   }
                   const hasDays = groups.some((g) => g.day);
                   if (!hasDays) {
