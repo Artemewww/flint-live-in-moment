@@ -290,6 +290,27 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ draft, model: usedModel });
     }
 
+    if (task === 'clarifying_questions') {
+      const event = body.event || {};
+      const sys =
+        `Ты — организатор трезвого сообщества «Живи в моменте» (Минск). ` +
+        `Событие сгенерировано. Сформулируй 3–5 КОРОТКИХ уточняющих вопросов организатору, ` +
+        `чтобы не забыть важные детали. Вопросы должны быть конкретными, с вариантами на выбор.\n` +
+        `Тип: ${event.type || 'mixed'}. Название: «${event.title || 'Событие'}».\n` +
+        `Примеры: «Нужна ли колонка/звук?», «Кто ведёт машину?», «Нужен ли стол/стулья?», ` +
+        `«Будет ли ночёвка?», «Нужен ли инструктор?».\n` +
+        `Верни JSON: { questions: string[] } — массив из 3–5 вопросов.`;
+      const p = await genJSON(ai, sys, {
+        type: Type.OBJECT,
+        properties: {
+          questions: { type: Type.ARRAY, items: { type: Type.STRING } },
+        },
+        required: ['questions'],
+      });
+      const questions = Array.isArray(p.questions) ? p.questions.slice(0, 5) : [];
+      return res.status(200).json({ questions, model: usedModel });
+    }
+
     if (task === 'shopping') {
       const prompt =
         `Ты — помощник организатора трезвого сообщества «Живи в моменте» (Минск, Беларусь). ` +

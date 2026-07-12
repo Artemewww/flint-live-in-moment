@@ -50,8 +50,8 @@ async function aiGenerateImage(title: string, description: string): Promise<stri
   } catch { return null; }
 }
 
-/** ИИ-генерация полного события по промпту. Сначала контент, потом обложка. */
-async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) => void): Promise<{ draft?: any; error?: string }> {
+/** ИИ-генерация полного события по промпту. Сначала контент, потом обложка, потом уточняющие вопросы. */
+async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) => void): Promise<{ draft?: any; questions?: string[]; error?: string }> {
   onProgress('🤖 ИИ анализирует идею…');
   try {
     const res = await fetch('/api/ai', {
@@ -67,6 +67,18 @@ async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) =>
         onProgress('🎨 Создание кинематографичной обложки…');
         const imgUrl = await aiGenerateImage(j.draft.title, j.draft.description || '');
         if (imgUrl) j.draft.image = imgUrl;
+      }
+      // После генерации события запрашиваем уточняющие вопросы
+      onProgress('💬 Формирование рекомендаций…');
+      await new Promise(r => setTimeout(r, 200));
+      const qRes = await fetch('/api/ai', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'clarifying_questions', event: j.draft }),
+      });
+      const qJ = await qRes.json();
+      if (qJ.questions && Array.isArray(qJ.questions)) {
+        j.draft._questions = qJ.questions;
       }
       return { draft: j.draft };
     }
@@ -2768,6 +2780,7 @@ function AddEventModal({ onClose, onAdd }: {
   const [autoFilling, setAutoFilling] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const [questions, setQuestions] = useState<string[]>([]);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
