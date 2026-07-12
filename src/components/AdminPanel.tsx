@@ -2772,17 +2772,17 @@ function EditEventModal({ event, onClose, onSave }: {
   );
 }
 
-// Add Event Modal
+// Add Event Modal — бесшовный ИИ-флоу
 function AddEventModal({ onClose, onAdd }: {
   onClose: () => void;
   onAdd: (event: CommunityEvent) => void;
 }) {
-  const [autoFilling, setAutoFilling] = useState(false);
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProgress, setAiProgress] = useState<string | null>(null);
-  const [aiStage, setAiStage] = useState<'initial' | 'generated' | 'analyzed'>('initial');
+  const [aiStage, setAiStage] = useState<'prompt' | 'filled' | 'preview'>('prompt');
   const [questions, setQuestions] = useState<string[]>([]);
   const [geoLoading, setGeoLoading] = useState(false);
+  const [editing, setEditing] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -2811,16 +2811,17 @@ function AddEventModal({ onClose, onAdd }: {
     travelTime: 0 as number | undefined,
   });
 
+  const isMinsk = formData.location && /^минск|мнск/i.test(formData.location.replace(/[^а-яА-Яa-zA-Z]/g, ''));
+
   /** Геокодирование локации + расчёт расстояния и времени в пути. */
   const geocodeLocation = async (location: string) => {
     if (!location || location.trim().length < 3) return;
     setGeoLoading(true);
     try {
-      const { geocode, calcDistance, calcTravelTime } = await import('../geo');
+      const { geocode, calcDistance } = await import('../geo');
       const coords = await geocode(location);
       if (coords) {
         const dist = calcDistance(coords.lat, coords.lng);
-        const travel = calcTravelTime(dist);
         setFormData((f) => ({
           ...f,
           coordinates: coords,
@@ -2832,6 +2833,54 @@ function AddEventModal({ onClose, onAdd }: {
       console.warn('Геокодирование не удалось:', e);
     } finally {
       setGeoLoading(false);
+    }
+  };
+
+  /** Авто-маппинг полей из черновика ИИ + геокодирование */
+  const autoFillFromDraft = async (d: any) => {
+    const updates: any = {
+      title: d.title || formData.title,
+      description: d.description || formData.description,
+      type: d.type || formData.type,
+      date: d.date || formData.date,
+      dateEnd: d.dateEnd || formData.dateEnd,
+      painPoint: d.painPoint || formData.painPoint,
+      time: d.time ? normalizeTime(d.time) : formData.time,
+      timeEnd: d.timeEnd ? normalizeTime(d.timeEnd) : formData.timeEnd,
+      location: d.location || formData.location,
+      priceType: d.priceType === 'paid' ? 'paid' : 'free',
+      priceAmount: d.priceType === 'paid' ? (Number(d.priceAmount) || 0) : 0,
+      maxParticipants: d.maxParticipants || formData.maxParticipants,
+      program: (d.program && d.program.length) ? d.program : formData.program,
+      entryThreshold: d.entryThreshold || formData.entryThreshold,
+      houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : formData.houseQualities,
+      image: d.image || formData.image,
+    };
+    setFormData((f) => ({ ...f, ...updates }));
+
+    if (d.location && d.location !== formData.location) {
+      await geocodeLocation(d.location);
+    }
+  };
+
+  const handleGenerate = async () => {
+    if (!aiPrompt.trim()) return;
+    setAiProgress('🤖 ИИ анализирует идею…');
+    setAiStage('prompt');
+    try {
+      const { draft: d, error } = await aiGenerateFullEvent(aiPrompt.trim(), setAiProgress);
+      if (d) {
+        await autoFillFromDraft(d);
+        setQuestions(d._questions || []);
+        setAiProgress('');
+        setAiStage('filled');
+      } else {
+        alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
+        setAiProgress('');
+      }
+    } catch (e) {
+      alert(`Ошибка: ${(e as Error).message}`);
+      setAiProgress('');
     }
   };
 
@@ -2870,17 +2919,12 @@ function AddEventModal({ onClose, onAdd }: {
       paymentDetails: formData.paymentDetails,
       distanceFromMinsk: formData.distanceFromMinsk,
       travelTime: formData.travelTime,
-      notifications: {
-        reminder7d: true,
-        reminder3d: true,
-        reminder1d: true,
-        reminder3h: true,
-        reminder1h: true
-      }
+      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true }
     };
-
     onAdd(newEvent);
   };
+
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30';
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="add-event-modal">
@@ -2893,68 +2937,79 @@ function AddEventModal({ onClose, onAdd }: {
       >
         <h3 className="font-bold text-lg uppercase">Новое мероприятие</h3>
 
-        <div className="space-y-3">
-          <input
-            type="text"
-            placeholder="Название *"
-            value={formData.title}
-            onChange={(e) => setFormData({...formData, title: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
+        {/* ШАГ 1: Промпт ИИ (всегда виден) */}
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+          <label className="text-[10px] text-white/40 uppercase font-mono block">🧠 ИИ-Ассистент</label>
+          <textarea
+            placeholder="Опиши идею одной фразой…&#10;Пример: Кайтсерфинг на Минском море, 16-17 июля, старт 12:00, 15 чел, платно 500 BYN"
+            value={aiPrompt}
+            onChange={(e) => setAiPrompt(e.target.value)}
+            rows={3}
+            disabled={!!aiProgress}
+            className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30 disabled:opacity-50"
           />
+          {aiProgress && (
+            <div className="bg-black/30 rounded-lg p-2 flex items-center gap-2 text-[11px] text-white/80">
+              <span className="w-3 h-3 border-2 border-brand/30 border-t-brand rounded-full animate-spin shrink-0" />
+              <span>{aiProgress}</span>
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!aiPrompt.trim() || !!aiProgress}
+            onClick={handleGenerate}
+            className="w-full bg-brand hover:bg-brand-hover text-black font-bold text-sm py-3 rounded-xl cursor-pointer transition-colors disabled:opacity-50 border-none"
+          >
+            {aiProgress ? 'Генерация…' : '🚀 Сгенерировать и заполнить'}
+          </button>
+        </div>
 
-          {/* ИИ-Ассистент: промпт + прогресс-бар */}
-          <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
-            <label className="text-[10px] text-white/40 uppercase font-mono block">🧠 ИИ-Ассистент</label>
-            <textarea
-              placeholder="Опиши идею события одной фразой…&#10;Например: Кайтсерфинг на Минском море на выходных, старт в 12:00, ограничение 15 человек"
-              value={aiPrompt}
-              onChange={(e) => setAiPrompt(e.target.value)}
-              rows={2}
-              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30"
-            />
-            {aiProgress && (
-              <div className="bg-black/30 rounded-lg p-2 flex items-center gap-2 text-[11px] text-white/80">
-                <span className="w-3 h-3 border-2 border-brand/30 border-t-brand rounded-full animate-spin shrink-0" />
-                <span>{aiProgress}</span>
-              </div>
-            )}
-            <button
-              type="button"
-              disabled={!aiPrompt.trim() || !!aiProgress}
-              onClick={async () => {
-                setAiProgress('🤖 ИИ анализирует идею…');
-                const { draft: d, error } = await aiGenerateFullEvent(aiPrompt.trim(), setAiProgress);
-                if (d) {
-                  setFormData((f) => ({
-                    ...f,
-                    title: d.title || f.title,
-                    description: d.description || f.description,
-                    type: d.type || f.type,
-                    painPoint: d.painPoint || f.painPoint,
-                    program: (d.program && d.program.length) ? d.program : f.program,
-                    entryThreshold: d.entryThreshold || f.entryThreshold,
-                    time: d.time ? normalizeTime(d.time) : f.time,
-                    timeEnd: d.timeEnd ? normalizeTime(d.timeEnd) : f.timeEnd,
-                    image: d.image || f.image,
-                    houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
-                  }));
-                  setQuestions(d._questions || []);
-                  setAiProgress('');
-                } else {
-                  alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
-                  setAiProgress('');
-                }
-              }}
-              className="w-full bg-brand/15 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/25 transition-colors disabled:opacity-50"
+        {/* ШАГ 2: Превью + редактор */}
+        {aiStage !== 'prompt' && (
+          <div className="space-y-3">
+            {/* Превью мини-карточки */}
+            <div
+              className="bg-white/5 border border-white/10 rounded-xl p-4 cursor-pointer hover:border-brand/30 transition-all"
+              onClick={() => setEditing(!editing)}
             >
-              {aiProgress ? 'Генерация…' : '🚀 Сгенерировать событие'}
-            </button>
-            
-            {/* Уточняющие вопросы от ИИ — отображаются после генерации */}
+              <div className="flex items-center gap-3 mb-3">
+                {formData.image ? (
+                  <img src={formData.image} alt="" className="w-16 h-16 rounded-xl object-cover border border-white/10" />
+                ) : (
+                  <div className="w-16 h-16 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-2xl">📅</div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <h4 className="font-bold text-sm uppercase">{formData.title || 'Без названия'}</h4>
+                  <p className="text-[10px] text-white/50 font-mono">
+                    {formData.date ? buildDateLabel(formData.date, formData.dateEnd, formData.time) : 'Дата не указана'}
+                  </p>
+                  {formData.location && (
+                    <p className="text-[10px] text-white/50 font-mono flex items-center gap-1">
+                      📍 {formData.location}
+                      {formData.distanceFromMinsk && !isMinsk && formData.distanceFromMinsk > 5 && (
+                        <span className="text-brand"> · {formData.distanceFromMinsk} км</span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1 mb-2">
+                <span className={`text-[9px] px-2 py-0.5 rounded font-mono ${formData.priceType === 'paid' ? 'bg-brand/15 text-brand' : 'bg-white/10 text-white/50'}`}>
+                  {formData.priceType === 'paid' ? `💰 ${formData.priceAmount} ₽` : '🆓 Бесплатно'}
+                </span>
+                <span className="text-[9px] bg-white/10 text-white/50 px-2 py-0.5 rounded font-mono">
+                  {formData.type === 'male' ? '♂ Мужское' : formData.type === 'mixed' ? '👥 Смешанное' : formData.type === 'intellectual' ? '🧠 Интеллект' : '🏕 Активный'}
+                </span>
+                <span className="text-[9px] bg-white/10 text-white/50 px-2 py-0.5 rounded font-mono">👥 до {formData.maxParticipants}</span>
+              </div>
+              <p className="text-[10px] text-white/60 leading-relaxed line-clamp-2">{formData.description}</p>
+              {!editing && <p className="text-[9px] text-white/40 mt-1">👆 Нажми, чтобы отредактировать</p>}
+            </div>
+
+            {/* Уточняющие вопросы */}
             {questions.length > 0 && (
               <div className="bg-brand/5 border border-brand/20 rounded-xl p-3 space-y-2">
-                <label className="text-[10px] text-brand uppercase font-mono block">💡 Рекомендации по организации</label>
-                <p className="text-[9px] text-white/40">Не забудьте учесть эти детали при подготовке:</p>
+                <label className="text-[10px] text-brand uppercase font-mono block">💡 Рекомендации</label>
                 <div className="space-y-1.5">
                   {questions.map((q, i) => (
                     <label key={i} className="flex items-start gap-2 text-[11px] text-white/80 cursor-pointer hover:text-white/90 transition-colors">
@@ -2965,215 +3020,74 @@ function AddEventModal({ onClose, onAdd }: {
                 </div>
               </div>
             )}
-          </div>
 
-          <button
-            type="button"
-            disabled={autoFilling || !formData.title.trim()}
-            onClick={async () => {
-              setAutoFilling(true);
-              const { draft: d, error } = await aiAutofill({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd });
-              if (d) {
-                setFormData((f) => ({
-                  ...f,
-                  type: d.type || f.type,
-                  description: d.description || f.description,
-                  painPoint: d.painPoint || f.painPoint,
-                  program: (d.program && d.program.length) ? d.program : f.program,
-                  entryThreshold: d.entryThreshold || f.entryThreshold,
-                  houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : f.houseQualities,
-                }));
-              } else {
-                alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
-              }
-              setAutoFilling(false);
-            }}
-            className="w-full bg-brand/15 border border-brand/40 text-brand font-bold text-sm py-3 rounded-xl cursor-pointer hover:bg-brand/25 transition-colors disabled:opacity-50"
-          >
-            {autoFilling ? '⏳ ИИ придумывает событие…' : '🤖 Заполнить всё за меня'}
-          </button>
-          <p className="text-[9px] text-white/35 font-mono -mt-1">Введи название — ИИ придумает тип, описание, смысл, программу, порог и качества. Останется проверить.</p>
+            {/* Расширенный редактор (режим "Редактирование") */}
+            {editing && (
+              <div className="space-y-3 border-t border-white/10 pt-3">
+                <input type="text" placeholder="Название *" value={formData.title} onChange={(e) => setFormData({...formData, title: e.target.value})} className={inp} />
+                <div className="grid grid-cols-2 gap-2">
+                  <div><label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата начала *</label><input type="date" value={formData.date} onChange={(e) => setFormData({...formData, date: e.target.value})} className={inp} /></div>
+                  <div><label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата окончания</label><input type="date" value={formData.dateEnd} min={formData.date} onChange={(e) => setFormData({...formData, dateEnd: e.target.value})} className={inp} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="text" placeholder="Время начала (19:00)" value={formData.time} onChange={(e) => setFormData({...formData, time: e.target.value})} className={inp} />
+                  <input type="text" placeholder="Время окончания (23:00)" value={formData.timeEnd} onChange={(e) => setFormData({...formData, timeEnd: e.target.value})} className={inp} />
+                </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата начала *</label>
-              <input
-                type="date"
-                value={formData.date}
-                onChange={(e) => setFormData({...formData, date: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              />
-            </div>
-            <div>
-              <label className="text-[9px] text-white/40 uppercase font-mono block mb-1">Дата окончания</label>
-              <input
-                type="date"
-                value={formData.dateEnd}
-                min={formData.date}
-                onChange={(e) => setFormData({...formData, dateEnd: e.target.value})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              />
-            </div>
-          </div>
-          <p className="text-[9px] text-white/40">Для многодневных укажи дату окончания — подпись станет диапазоном.</p>
+                {/* Цена: conditional — если free, поле скрыто */}
+                <div className="grid grid-cols-2 gap-2">
+                  <select value={formData.priceType} onChange={(e) => setFormData({...formData, priceType: e.target.value as 'free' | 'paid'})} className={inp}>
+                    <option value="free">🆓 Бесплатно</option>
+                    <option value="paid">💰 Платно</option>
+                  </select>
+                  {formData.priceType === 'paid' && (
+                    <input type="number" placeholder="Сумма аренды (₽)" value={formData.priceAmount || ''} onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})} className={inp} />
+                  )}
+                </div>
+                {formData.priceType === 'free' && <p className="text-[9px] text-white/40 font-mono -mt-1">Событие бесплатное для участников.</p>}
 
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="text"
-              placeholder="Время начала (19:00)"
-              value={formData.time}
-              onChange={(e) => setFormData({...formData, time: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-            />
-            <input
-              type="text"
-              placeholder="Время окончания (23:00)"
-              value={formData.timeEnd}
-              onChange={(e) => setFormData({...formData, timeEnd: e.target.value})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-            />
-          </div>
+                <input type="text" placeholder="Локация" value={formData.location} onChange={(e) => setFormData({...formData, location: e.target.value})} className={inp} />
 
-          <div className="grid grid-cols-2 gap-2">
-            <select
-              value={formData.priceType}
-              onChange={(e) => setFormData({...formData, priceType: e.target.value as 'free' | 'paid'})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            >
-              <option value="free">Бесплатно</option>
-              <option value="paid">Платно (аренда делится)</option>
-            </select>
-            {formData.priceType === 'paid' ? (
-              <input
-                type="number"
-                placeholder="Сумма аренды (₽)"
-                value={formData.priceAmount || ''}
-                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-              />
-            ) : (
-              <div className="flex items-center px-3 text-[11px] text-white/40 font-mono">Свободное участие</div>
+                {/* Удаленность — только если НЕ Минск */}
+                {!isMinsk && formData.distanceFromMinsk !== undefined && formData.distanceFromMinsk > 5 && (
+                  <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+                    <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">🚗 Логистика</label>
+                    <div className="flex gap-2 items-center">
+                      <input type="number" placeholder="км от Минска" value={formData.distanceFromMinsk || ''} onChange={(e) => setFormData({...formData, distanceFromMinsk: parseInt(e.target.value) || 0})} className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30" />
+                      <span className="text-[10px] text-white/40 shrink-0">{formData.travelTime ? `~${formData.travelTime} мин` : ''}</span>
+                      <button type="button" onClick={() => window.open(`https://yandex.ru/maps/?text=${encodeURIComponent(formData.location || 'Минск')}`, '_blank')} className="text-[10px] text-brand border border-brand/20 rounded-lg px-2 py-1.5 cursor-pointer bg-transparent hover:border-brand/40 shrink-0">🗺</button>
+                    </div>
+                  </div>
+                )}
+
+                {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
+                <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
+                <textarea placeholder="Описание" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className={inp} rows={3} />
+
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="number" placeholder="Макс. участников" value={formData.maxParticipants} onChange={(e) => setFormData({...formData, maxParticipants: parseInt(e.target.value)})} className={inp} />
+                  <select value={formData.type} onChange={(e) => setFormData({...formData, type: e.target.value as any})} className={inp}>
+                    <option value="male">♂ Мужское</option>
+                    <option value="mixed">👥 Смешанное</option>
+                    <option value="intellectual">🧠 Интеллект</option>
+                    <option value="active">🏕 Активный</option>
+                  </select>
+                </div>
+
+                <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
+                <ListEditor label="Программа" placeholder="Шаг" items={formData.program} aiHint onChange={(v) => setFormData({...formData, program: v})} onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }} />
+                <ListEditor label="Порог входа" placeholder="Условие" items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []} onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})} onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})} />
+              </div>
             )}
           </div>
-          {formData.priceType === 'paid' && formData.priceAmount > 0 && (
-            <p className="text-[10px] text-brand font-mono">
-              Аренда {formData.priceAmount} ₽ делится поровну — при {formData.maxParticipants} ≈ {Math.round(formData.priceAmount / (formData.maxParticipants || 1))} ₽/чел
-            </p>
-          )}
+        )}
 
-          <input
-            type="text"
-            placeholder="Локация"
-            value={formData.location}
-            onChange={(e) => setFormData({...formData, location: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-          />
-
-          {/* Логистика: удаленность + Яндекс.Карты */}
-          <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
-            <label className="text-[10px] text-white/40 uppercase font-mono block">🚗 Логистика</label>
-            <div className="grid grid-cols-2 gap-2">
-              <input
-                type="number"
-                placeholder="Удаленность от Минска (км)"
-                value={formData.distanceFromMinsk || ''}
-                onChange={(e) => setFormData({...formData, distanceFromMinsk: parseInt(e.target.value) || 0})}
-                className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30"
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const url = `https://yandex.ru/maps/?text=${encodeURIComponent(formData.location || 'Минск')}`;
-                  window.open(url, '_blank');
-                }}
-                className="text-[11px] text-brand hover:text-brand-hover border border-brand/20 hover:border-brand/40 rounded-lg px-2 py-1.5 cursor-pointer bg-transparent transition-colors"
-              >
-                🗺 Открыть Яндекс.Карты
-              </button>
-            </div>
-            <p className="text-[9px] text-white/35">Укажи км для оценки времени в пути. Кнопка откроет карты для выбора точки.</p>
-          </div>
-
-          {formData.priceType === 'paid' && (
-            <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
-          )}
-
-          <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
-
-          <textarea
-            placeholder="Описание мероприятия"
-            value={formData.description}
-            onChange={(e) => setFormData({...formData, description: e.target.value})}
-            className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30"
-            rows={3}
-          />
-
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              type="number"
-              placeholder="Макс. участников"
-              value={formData.maxParticipants}
-              onChange={(e) => setFormData({...formData, maxParticipants: parseInt(e.target.value)})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            />
-
-            <select
-              value={formData.type}
-              onChange={(e) => setFormData({...formData, type: e.target.value as any})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            >
-              <option value="male">Мужское Братство</option>
-              <option value="mixed">Смешанный Круг</option>
-              <option value="intellectual">Интеллектуальный Клуб</option>
-              <option value="active">Активный Выезд</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Кто может участвовать</label>
-            <select
-              value={formData.entryType}
-              onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}
-              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-            >
-              <option value="all">Все</option>
-              <option value="male">Только мужчины</option>
-              <option value="female">Только женщины</option>
-            </select>
-          </div>
-
-          <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
-
-          <ListEditor
-            label="Программа события (🤖 ИИ)"
-            placeholder="Шаг программы"
-            items={formData.program}
-            aiHint
-            onChange={(v) => setFormData({...formData, program: v})}
-            onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }}
-          />
-
-          <ListEditor
-            label="Порог входа (условия прохода)"
-            placeholder="Условие"
-            items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []}
-            onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})}
-            onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})}
-          />
-        </div>
-
+        {/* КНОПКИ */}
         <div className="flex gap-2 pt-2">
-          <button
-            onClick={handleAdd}
-            disabled={!formData.title || !formData.date}
-            className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50"
-          >
-            Создать
+          <button onClick={handleAdd} disabled={!formData.title || !formData.date} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
+            ✅ Создать
           </button>
-          <button
-            onClick={onClose}
-            className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60"
-          >
+          <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">
             Отмена
           </button>
         </div>
