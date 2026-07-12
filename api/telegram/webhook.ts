@@ -521,6 +521,7 @@ export default async function handler(req: any, res: any) {
           rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
           rows.push([{ text: '📋 Организация (снаряжение, роли)', callback_data: `org_${ev.id}` }]);
         }
+        if (ev) rows.push([{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]);
         rows.push([openBtn]);
         return kb(rows);
       };
@@ -1314,6 +1315,24 @@ export default async function handler(req: any, res: any) {
         for (const p of (pax || [])) {
           try { await tg('sendMessage', { chat_id: (p as any).passenger_id, text: '⚠️ Водитель отменил поездку, на которую ты записался. Поищи другую машину в «Кто едет».' }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Отмена своего участия в событии — снять заявку и освободить место.
+      if (data.startsWith('regcancel_')) {
+        const evId = data.slice('regcancel_'.length);
+        const { data: reg } = await supabase
+          .from('registrations').select('id')
+          .eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        if (!reg) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Активной записи нет' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
+        try {
+          const { data: ev } = await supabase.from('events').select('participants_count').eq('id', evId).maybeSingle();
+          const next = Math.max(0, (Number((ev as any)?.participants_count) || 0) - 1);
+          await supabase.from('events').update({ participants_count: next }).eq('id', evId);
+        } catch { /* счётчик не критичен */ }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Участие отменено' });
+        await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Ты отменил(а) участие. Место освободилось для других. Захочешь вернуться — открой событие заново.' });
         return res.status(200).json({ ok: true });
       }
 
