@@ -376,14 +376,61 @@ export default function EventDetailModal({
                 <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
                   <Clock className="w-3.5 h-3.5" /> Программа
                 </span>
-                <ol className="space-y-2">
-                  {guide.program.map((step, i) => (
-                    <li key={i} className="flex gap-3 text-xs text-white/80">
-                      <span className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand font-bold flex items-center justify-center text-[10px]">{i + 1}</span>
-                      <span className="leading-relaxed pt-0.5">{step}</span>
-                    </li>
-                  ))}
-                </ol>
+                {(() => {
+                  // Группируем программу по дню: «День N» или дата в начале строки
+                  // становится заголовком-разделителем, а под ним идут только время и
+                  // активность — без повтора даты в каждой строке (дерево по часам).
+                  const dayRe = /^\s*(День\s*\d+|Day\s*\d+|\d{1,2}\s*день\w*|\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?)\s*[)\].,:–—-]*\s*/i;
+                  const groups: { day: string | null; items: string[] }[] = [];
+                  for (const raw of guide.program) {
+                    const m = raw.match(dayRe);
+                    const day = m ? m[1].trim() : null;
+                    const rest = (m ? raw.slice(m[0].length) : raw).trim();
+                    const last = groups[groups.length - 1];
+                    if (day && (!last || last.day !== day)) groups.push({ day, items: [rest] });
+                    else if (last) last.items.push(rest);
+                    else groups.push({ day, items: [rest] });
+                  }
+                  const hasDays = groups.some((g) => g.day);
+                  if (!hasDays) {
+                    return (
+                      <ol className="space-y-2">
+                        {guide.program.map((step, i) => (
+                          <li key={i} className="flex gap-3 text-xs text-white/80">
+                            <span className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand font-bold flex items-center justify-center text-[10px]">{i + 1}</span>
+                            <span className="leading-relaxed pt-0.5">{step}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    );
+                  }
+                  return (
+                    <div className="space-y-3">
+                      {groups.map((g, gi) => (
+                        <div key={gi} className="space-y-1.5">
+                          {g.day && (
+                            <div className="text-brand text-[11px] font-bold uppercase tracking-wide flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-brand" />{g.day}
+                            </div>
+                          )}
+                          <ul className="space-y-1.5 border-l border-white/10 ml-[3px] pl-3">
+                            {g.items.map((it, ii) => {
+                              const tm = it.match(/^(\d{1,2}[:.]\d{2})\s*[–—-]?\s*/);
+                              const time = tm ? tm[1] : '';
+                              const text = tm ? it.slice(tm[0].length) : it;
+                              return (
+                                <li key={ii} className="flex gap-2 text-xs text-white/80">
+                                  {time && <span className="shrink-0 font-mono text-brand/90 text-[11px] pt-0.5 w-11">{time}</span>}
+                                  <span className="leading-relaxed pt-0.5">{text}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
