@@ -11,7 +11,7 @@ interface CalendarGridProps {
 
 export default function CalendarGrid({ events, selectedEventId, onSelectEvent, onOpenDetail }: CalendarGridProps) {
   const [showYearModal, setShowYearModal] = useState(false);
-  const [modalActiveMonth, setModalActiveMonth] = useState<number>(new Date().getMonth());
+  const [modalActiveMonth, setModalActiveMonth] = useState<number>(0);
   const [selectedDayEvents, setSelectedDayEvents] = useState<CommunityEvent[] | null>(null);
 
   const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
@@ -196,7 +196,10 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
         <button
           type="button"
           onClick={() => {
-            setModalActiveMonth(currentMonth);
+            // monthsData начинается с июня: индекс ≠ номеру календарного месяца.
+            // Ищем текущий месяц по имени, иначе открываем первый (без краша).
+            const curIdx = monthsData.findIndex(m => m.name.startsWith(currentMonthName));
+            setModalActiveMonth(curIdx >= 0 ? curIdx : 0);
             setShowYearModal(true);
           }}
           className="bg-brand/10 border border-brand/35 hover:bg-brand hover:text-black hover:border-transparent text-brand transition-all text-[10px] font-mono uppercase tracking-wider py-2 px-4 rounded-full flex items-center gap-1.5 cursor-pointer"
