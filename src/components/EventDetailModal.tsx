@@ -260,7 +260,9 @@ export default function EventDetailModal({
                 <div className="space-y-1">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">ДАТА И ВРЕМЯ проведения</span>
                   <div className="text-white font-bold">{event.dateLabel}</div>
-                  <div className="text-white/60 text-[10px]">{event.time}</div>
+                  {event.time && !event.dateLabel.includes(event.time) && (
+                    <div className="text-white/60 text-[10px]">{event.time}</div>
+                  )}
                   {phase !== 'past' && (
                     <a
                       href={buildIcsDataUri(event, isRegistered)}
