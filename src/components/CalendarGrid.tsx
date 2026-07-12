@@ -29,6 +29,17 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
   // Форматируем сегодняшнюю дату для сравнения
   const todayFormatted = `${currentYear}-${currentMonthStr}-${String(todayDayNum).padStart(2, '0')}`;
 
+  // Месяц из monthsData (напр. «Июль 2026») уже прошёл? Прошедшие в годовом
+  // календаре не показываем — только текущий и будущие.
+  const RU_MONTHS = ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'];
+  const isMonthPast = (monthName: string): boolean => {
+    const parts = monthName.trim().split(/\s+/);
+    const mi = RU_MONTHS.indexOf((parts[0] || '').toLowerCase());
+    const yr = parseInt(parts[1] || '', 10) || currentYear;
+    if (mi < 0) return false; // не распарсили — на всякий случай показываем
+    return yr < currentYear || (yr === currentYear && mi < currentMonth);
+  };
+
   // Helper to map current month day to event(s)
   const getEventsForDay = (dayNum: number): CommunityEvent[] => {
     const formattedDate = `${currentYear}-${currentMonthStr}-${dayNum.toString().padStart(2, '0')}`;
@@ -196,10 +207,9 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
         <button
           type="button"
           onClick={() => {
-            // monthsData начинается с июня: индекс ≠ номеру календарного месяца.
-            // Ищем текущий месяц по имени, иначе открываем первый (без краша).
-            const curIdx = monthsData.findIndex(m => m.name.startsWith(currentMonthName));
-            setModalActiveMonth(curIdx >= 0 ? curIdx : 0);
+            // Открываем на первом НЕ прошедшем месяце (текущий или ближайший будущий).
+            const firstIdx = monthsData.findIndex(m => !isMonthPast(m.name));
+            setModalActiveMonth(firstIdx >= 0 ? firstIdx : 0);
             setShowYearModal(true);
           }}
           className="bg-brand/10 border border-brand/35 hover:bg-brand hover:text-black hover:border-transparent text-brand transition-all text-[10px] font-mono uppercase tracking-wider py-2 px-4 rounded-full flex items-center gap-1.5 cursor-pointer"
@@ -415,18 +425,20 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
             {/* MONTH SELECTOR */}
             <div className="bg-[#121212] border-b border-white/5 p-3 flex flex-wrap gap-2 justify-center">
               {monthsData.map((mObj, idx) => (
+                isMonthPast(mObj.name) ? null : (
                 <button
                   key={idx}
                   type="button"
                   onClick={() => setModalActiveMonth(idx)}
                   className={`px-4 py-2 rounded-full text-xs font-mono uppercase tracking-wider font-bold transition-all cursor-pointer ${
                     modalActiveMonth === idx
-                      ? 'bg-brand text-black font-black' 
+                      ? 'bg-brand text-black font-black'
                       : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
                   }`}
                 >
                   {mObj.name}
                 </button>
+                )
               ))}
             </div>
 
