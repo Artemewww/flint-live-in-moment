@@ -1166,7 +1166,7 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           text: '⛽ Взнос на бензин с человека?',
           reply_markup: kb([[
-            { text: 'Бесплатно', callback_data: 'rfuel_0' },
+            { text: 'Без взноса', callback_data: 'rfuel_0' },
             { text: '5 ₽', callback_data: 'rfuel_5' },
             { text: '10 ₽', callback_data: 'rfuel_10' },
           ]]),

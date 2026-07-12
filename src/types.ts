@@ -215,7 +215,7 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   // Бесплатно — либо явно free, либо платно без суммы (или легаси-значения).
   const total = Number((event as any).priceAmount) || 0;
   if (event.priceType !== 'paid' || total <= 0) {
-    return { price: 0, label: 'Бесплатно', factors: [] };
+    return { price: 0, label: 'Взнос отсутствует', factors: [] };
   }
 
   // Платно: аренда делится ПОРОВНУ на текущее число участников + прогноз к порогу.

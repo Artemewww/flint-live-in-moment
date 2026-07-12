@@ -2435,7 +2435,7 @@ function EditEventModal({ event, onClose, onSave }: {
     participantsCount: event.participantsCount,
     status: event.status || 'open',
     priceType: (event.priceType === 'paid' ? 'paid' : 'free') as 'free' | 'paid',
-    priceLabel: event.priceLabel || 'Бесплатно',
+    priceLabel: event.priceLabel || 'Взнос отсутствует',
     priceAmount: event.priceAmount || 0,
     entryThreshold: event.entryThreshold || '',
     entryType: event.entryType || 'all',
@@ -2447,14 +2447,14 @@ function EditEventModal({ event, onClose, onSave }: {
 
   // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
   const computedPriceLabel = () => {
-    if (formData.priceType === 'free') return 'Бесплатно';
+    if (formData.priceType === 'free') return 'Взнос отсутствует';
     if (formData.priceType === 'paid' && formData.priceAmount > 0) {
       const per = formData.maxParticipants
         ? ` • при ${formData.maxParticipants} ≈ ${Math.round(formData.priceAmount / formData.maxParticipants)} ₽/чел`
         : '';
       return `Аренда ${formData.priceAmount} ₽ — делится поровну на всех${per}`;
     }
-    return 'Бесплатно';
+    return 'Взнос отсутствует';
   };
 
   const handleSave = () => {
@@ -2666,7 +2666,7 @@ function EditEventModal({ event, onClose, onSave }: {
                 onChange={(e) => setFormData({...formData, priceType: e.target.value as any})}
                 className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
               >
-                <option value="free">Бесплатно</option>
+                <option value="free">Взнос отсутствует</option>
                 <option value="paid">Платно (аренда делится)</option>
               </select>
             </div>
@@ -2817,7 +2817,7 @@ function AddEventModal({ onClose, onAdd }: {
       priceType: formData.priceType,
       priceLabel: formData.priceType === 'paid' && formData.priceAmount > 0
         ? `Аренда ${formData.priceAmount} ₽ — делится поровну на всех`
-        : 'Бесплатно',
+        : 'Взнос отсутствует',
       priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
       entryType: formData.entryType,
