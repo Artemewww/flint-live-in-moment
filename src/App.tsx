@@ -96,6 +96,8 @@ export default function App() {
   // Уже принятый в клуб участник не должен проходить «верификацию» заново
   // при каждой записи. null = ещё не знаем, true/false = ответ сервера.
   const [clubApproved, setClubApproved] = useState<boolean | null>(null);
+  /** Участник заблокирован (members.status === 'blocked') — афиша ему недоступна. */
+  const [banned, setBanned] = useState(false);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -152,6 +154,8 @@ export default function App() {
       .then((d) => {
         const p = d?.profile;
         setClubApproved(!!p && (p.status === 'approved' || p.isCore));
+        // Костяк не блокируется; для остальных статус 'blocked' закрывает афишу.
+        setBanned(!!p && p.status === 'blocked' && !p.isCore);
       })
       .catch(() => setClubApproved(false));
   }, []);
@@ -344,6 +348,27 @@ export default function App() {
 
   if (gateEnabled && !gatePassed) {
     return <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />;
+  }
+
+  // Бан: заблокированному участнику афиша полностью недоступна (независимо от шлюза).
+  // Админ-панель (под своим паролем) не перекрывается, чтобы не заблокировать оргов.
+  if (banned && !showAdminPanel) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center px-6 text-center">
+        <div className="text-5xl mb-6">🔒</div>
+        <h1 className="font-display font-black text-3xl uppercase tracking-tight mb-3">Доступ ограничен</h1>
+        <p className="text-sm text-white/60 max-w-sm leading-relaxed font-sans">
+          Ваш доступ к афише сообщества сейчас закрыт. Если это недоразумение — напишите
+          организатору в Telegram, и мы разберёмся.
+        </p>
+        <a
+          href="https://t.me/campsflint_bot"
+          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide"
+        >
+          Написать организатору
+        </a>
+      </div>
+    );
   }
 
   return (
