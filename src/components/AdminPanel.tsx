@@ -27,6 +27,29 @@ async function aiProgram(ev: any): Promise<string[] | null> {
   } catch { return null; }
 }
 
+/** Нормализация времени: "1800" → "18:00", пусто → "". */
+function normalizeTime(t: string): string {
+  if (!t) return '';
+  const cleaned = t.replace(/[^0-9]/g, '');
+  if (cleaned.length === 4) return `${cleaned.slice(0, 2)}:${cleaned.slice(2)}`;
+  if (cleaned.length === 3) return `0${cleaned.slice(0, 1)}:${cleaned.slice(1)}`;
+  return t;
+}
+
+/** ИИ-генерация обложки события (Gemini/Imagen). Возвращает data-URL или null. */
+async function aiGenerateImage(title: string, description: string): Promise<string | null> {
+  try {
+    const prompt = `${title}: ${description}. Highly commercial, cinematic lighting, hyper-realistic photography, cinematic style, 8k, professional color grading, editorial look, clean composition, NO visual noise, premium quality`;
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: 'generate_image', prompt }),
+    });
+    const j = await res.json();
+    return j.imageUrl || j.dataUrl || null;
+  } catch { return null; }
+}
+
 /** ИИ-автозаполнение всего события по названию (Gemini). Возвращает {draft?, error?}. */
 async function aiAutofill(ev: any): Promise<{ draft?: any; error?: string }> {
   try {
@@ -2521,6 +2544,20 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
+
+          {/* AI-генерация обложки */}
+          <button
+            type="button"
+            onClick={async () => {
+              const url = await aiGenerateImage(formData.title, formData.description);
+              if (url) setFormData({...formData, image: url});
+              else alert('ИИ не смог сгенерировать обложку. Попробуй позже или загрузи свою.');
+            }}
+            disabled={!formData.title.trim()}
+            className="w-full bg-brand/10 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-50"
+          >
+            🎨 Сгенерировать обложку
+          </button>
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
