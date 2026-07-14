@@ -685,6 +685,44 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // === DEPLOY BOT (перезапуск бота на VPS после деплоя) ===
+    if (action === 'deploy_bot') {
+      const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+      const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+      const safeEq = (a: string, b: string) => {
+        const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+        return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
+      };
+      if (!ADMIN_SECRET || !bearer || !safeEq(bearer, ADMIN_SECRET)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const VPS_DEPLOY_URL = process.env.VPS_DEPLOY_URL || '';
+      if (!VPS_DEPLOY_URL) {
+        return res.status(200).json({ ok: false, error: 'VPS_DEPLOY_URL не настроен' });
+      }
+
+      try {
+        const deployRes = await fetch(VPS_DEPLOY_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            secret: process.env.VPS_DEPLOY_SECRET || '',
+            repo: 'flint-live-in-moment',
+            branch: 'main',
+          }),
+        });
+
+        if (deployRes.ok) {
+          return res.status(200).json({ ok: true, message: 'Бот перезапущен' });
+        } else {
+          return res.status(200).json({ ok: false, error: `VPS ответил: ${deployRes.status}` });
+        }
+      } catch (e) {
+        return res.status(200).json({ ok: false, error: (e as Error).message });
+      }
+    }
+
     // === INTEGRATIONS (внешние сервисы) ===
     if (action === 'integrations') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
