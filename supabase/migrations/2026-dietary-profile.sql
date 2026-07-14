@@ -145,3 +145,22 @@ EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;
 
 COMMENT ON TABLE role_templates IS 'Шаблоны ролей для мероприятий';
+
+-- 9. Групповые чаты мероприятий
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS event_chats (
+    id              bigserial PRIMARY KEY,
+    event_id        text NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    chat_id         bigint NOT NULL,
+    chat_type       text DEFAULT 'group', -- 'group' | 'supergroup'
+    invite_link     text DEFAULT '',
+    is_active       boolean DEFAULT true,
+    created_at      timestamptz DEFAULT now(),
+    UNIQUE (event_id, chat_id)
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE event_chats IS 'Групповые чаты Telegram для мероприятий';
+COMMENT ON COLUMN event_chats.chat_id IS 'ID чата в Telegram';
+COMMENT ON COLUMN event_chats.invite_link IS 'Ссылка для приглашения в чат';

@@ -8,6 +8,7 @@ const { handleAdmin } = require('./handlers/admin');
 const { handleDietStart, handleDietaryChoice, handleFoodToggle, handleFoodCategory, handleFoodDone, handleAllergyToggle, handleAllergyDone, handleGuestsCount, handleGuestName, handleGuestDiet, handleGuestAge, handleDietCancel, getSession, STEPS } = require('./handlers/diet');
 const { handlePreferencesStart, handleActivityToggle, handleActivitiesDone, handleFitnessChoice, handleMedicalNotes, handleSleepChoice, handlePreferencesCancel, getSession: getPrefSession, STEPS: PREF_STEPS } = require('./handlers/preferences');
 const { handleRolesStart, handleRoleToggle, handleRoleSave, handleRoleCancel, getSession: getRoleSession } = require('./handlers/roles');
+const { handleCreateChat } = require('./handlers/chats');
 const { setupNotifications } = require('./notifications');
 
 // Инициализация бота
@@ -106,10 +107,15 @@ bot.callbackQuery(/^menu_(\d+)$/, async (ctx) => {
 });
 
 // Роли участников
-bot.callbackQuery('roles_start', async (ctx) => {
-  // TODO: получить eventId из сессии или запросить у пользователя
-  // Пока используем заглушку
-  await ctx.editMessageText('🎭 Выбор ролей\n\nВыбери мероприятие, для которого хочешь выбрать роли.');
+bot.callbackQuery(/^roles_start_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^roles_start_(.+)$/);
+  if (match) await handleRolesStart(ctx, match[1]);
+});
+
+// Групповые чаты
+bot.callbackQuery(/^create_chat_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^create_chat_(.+)$/);
+  if (match) await handleCreateChat(ctx, match[1]);
 });
 bot.callbackQuery(/^role_toggle_(.+)$/, async (ctx) => {
   const match = ctx.callbackQuery.data.match(/^role_toggle_(.+)$/);
