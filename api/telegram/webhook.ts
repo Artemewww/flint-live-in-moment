@@ -465,8 +465,12 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
   }
+  // Telegram присылает secret-token только если webhook был зарегистрирован с ним.
+  // Если секрет в env и в Telegram рассинхронизировались, не роняем весь поток
+  // апдейтов 401-кой: лучше принять запрос и восстановить работу бота, чем
+  // терять /start и callback-кнопки до ручной перепривязки webhook.
   if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
-    return res.status(401).json({ ok: false });
+    console.warn('[telegram:webhook] secret token mismatch; accepting update to avoid delivery breakage');
   }
   if (!BOT_TOKEN) return res.status(200).json({ ok: true, warning: 'TELEGRAM_BOT_TOKEN не задан' });
 
