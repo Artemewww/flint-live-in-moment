@@ -60,6 +60,48 @@ bot.callbackQuery('profile', handleProfile);
 bot.callbackQuery('register_', handleRegistration);
 bot.callbackQuery('admin', handleAdmin);
 
+// Показ меню события
+bot.callbackQuery(/^menu_(\d+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^menu_(\d+)$/);
+  if (!match) return;
+  const eventId = match[1];
+  await ctx.editMessageText('📋 Загружаю меню...');
+  
+  try {
+    const res = await fetch(`${API_BASE}/api/profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'menu', eventId }),
+    });
+    const data = await res.json();
+    const menu = data.menu || [];
+    
+    if (menu.length === 0) {
+      await ctx.editMessageText('Меню ещё не составлено. Организатор должен сгенерировать его в админке.');
+      return;
+    }
+    
+    const days = [...new Set(menu.map(m => m.day))].sort();
+    let msg = '🍽 <b>Меню мероприятия</b>\n\n';
+    
+    for (const day of days) {
+      msg += `<b>День ${day}</b>\n`;
+      const dayItems = menu.filter(m => m.day === day);
+      for (const item of dayItems) {
+        const mealLabels = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
+        msg += `${mealLabels[item.meal_type] || item.meal_type}: ${item.dish}\n`;
+        if (item.cooking_notes) msg += `   ${item.cooking_notes}\n`;
+      }
+      msg += '\n';
+    }
+    
+    await ctx.editMessageText(msg, { parse_mode: 'HTML' });
+  } catch (e) {
+    console.error('Menu error:', e);
+    await ctx.editMessageText('❌ Ошибка загрузки меню');
+  }
+});
+
 // Анкета питания
 bot.callbackQuery('diet_start', handleDietStart);
 bot.callbackQuery('diet_omnivore', (ctx) => handleDietaryChoice(ctx, 'omnivore'));
