@@ -28,11 +28,28 @@ export interface RegisterResult {
 }
 
 /**
- * Отправляет заявку на сервер. Если бэкенд/токен ещё не настроен,
- * возвращает ok:true, delivered:false — форма на сайте всё равно
- * покажет успех (данные сохранятся локально), а организатор увидит
- * заявку в Telegram, как только будут заданы переменные окружения.
+ * Отправляет заявку на вступление в закрытый клуб с сайта (без Telegram).
+ * Создаёт запись в members со статусом pending_review.
  */
+export async function submitClubApplication(payload: {
+  firstName: string;
+  lastName?: string;
+  phone: string;
+  sourceHint?: string;
+}): Promise<RegisterResult & { code?: string }> {
+  try {
+    const res = await fetch('/api/club', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'apply', ...payload, initData: getInitData() }),
+    });
+    if (!res.ok) return { ok: false, delivered: false, message: `HTTP ${res.status}` };
+    return (await res.json()) as RegisterResult & { code?: string };
+  } catch (err) {
+    return { ok: false, delivered: false, message: (err as Error).message };
+  }
+}
+
 /**
  * Сигнал спроса «Мне интересно» — уходит организаторам в группу заявок.
  * Так видно, какие мероприятия хотят и что пора запускать.

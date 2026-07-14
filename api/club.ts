@@ -44,15 +44,117 @@ async function handleGate(body: any, res: any) {
   const user = verifyInitData(body.initData);
   if (user) {
     const { data: me } = await supabase.from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
-    if (me && (me.status === 'approved' || me.is_core)) return res.status(200).json({ valid: true, reason: 'member' });
+    if (me) {
+      if (me.status === 'approved' || me.is_core) return res.status(200).json({ valid: true, reason: 'member' });
+      if (me.status === 'blocked') return res.status(200).json({ valid: false, blocked: true, reason: 'blocked' });
+      if (me.status === 'pending_review') return res.status(200).json({ valid: false, pending: true, reason: 'pending_review' });
+    }
   }
   // 2) Валидный реферальный код.
   const ref = String(body.ref || '').trim();
   if (ref) {
-    const { data: inviter } = await supabase.from('members').select('first_name,username').eq('ref_code', ref).maybeSingle();
-    if (inviter) return res.status(200).json({ valid: true, reason: 'ref', inviterName: inviter.first_name || inviter.username || 'участник клуба' });
+    const { data: inviter } = await supabase.from('members').select('telegram_id,first_name,username').eq('ref_code', ref).maybeSingle();
+    if (inviter) {
+      // Привязываем реферера, если пользователь авторизован через Telegram и ещё не привязан
+      if (user && user.id !== inviter.telegram_id) {
+        const { data: existing } = await supabase
+          .from('members')
+          .select('referred_by')
+          .eq('telegram_id', user.id)
+          .maybeSingle();
+        if (existing && !existing.referred_by) {
+          await supabase.from('members').update({ referred_by: inviter.telegram_id }).eq('telegram_id', user.id);
+          try {
+            await supabase.from('referrals').insert({
+              ref_code: ref,
+              inviter_id: inviter.telegram_id,
+              invited_id: user.id,
+              event_id: null,
+            });
+          } catch {}
+        }
+      }
+      return res.status(200).json({ valid: true, reason: 'ref', inviterName: inviter.first_name || inviter.username || 'участник клуба' });
+    }
   }
   return res.status(200).json({ valid: false });
+}
+
+async function handleApply(body: any, res: any) {
+  const { firstName, lastName, phone, sourceHint } = body;
+  if (!firstName || !phone) {
+    return res.status(200).json({ ok: false, error: 'Имя и телефон обязательны' });
+  }
+
+  // Проверяем, есть ли уже в БД с таким телефоном
+  const { data: existing } = await supabase
+    .from('members')
+    .select('telegram_id, status')
+    .eq('phone', phone)
+    .maybeSingle();
+
+  if (existing) {
+    if (existing.status === 'approved') {
+      return res.status(200).json({ ok: false, code: 'already_member', message: 'Вы уже участник клуба' });
+    }
+    if (existing.status === 'pending_review') {
+      return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении' });
+    }
+    if (existing.status === 'blocked') {
+      return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
+    }
+  }
+
+  // Попытка привязать к Telegram, если пользователь в Mini App
+  let telegramId: number | null = null;
+  const user = verifyInitData(body.initData);
+  if (user) telegramId = user.id;
+
+  // Генерируем реф-код для нового участника
+  const refCode = Math.random().toString(36).slice(2, 9);
+
+  const memberData: any = {
+    first_name: firstName,
+    last_name: lastName || null,
+    phone,
+    status: 'pending_review',
+    ref_code: refCode,
+    source_hint: sourceHint || 'website',
+    agreed_pd: true,
+  };
+  if (telegramId) {
+    memberData.telegram_id = telegramId;
+    memberData.username = user?.username || null;
+  }
+
+  const { error } = await supabase.from('members').upsert(
+    memberData,
+    { onConflict: telegramId ? 'telegram_id' : undefined }
+  );
+
+  if (error) {
+    return res.status(200).json({ ok: false, error: 'Ошибка при создании заявки' });
+  }
+
+  // Уведомление администратору
+  const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (adminChatId && botToken) {
+    const msg = `📋 <b>Новая заявка на вступление</b>\n\nИмя: ${esc(firstName)} ${esc(lastName || '')}\nТелефон: ${esc(phone)}\nИсточник: ${esc(sourceHint || 'сайт')}${telegramId ? `\nTelegram ID: ${telegramId}` : ''}\n\n/approve_${refCode} — одобрить`;
+    try {
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: adminChatId, text: msg, parse_mode: 'HTML' }),
+      });
+    } catch {}
+  }
+
+  return res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.' });
+}
+
+function esc(s: string): string {
+  return String(s).replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
 }
 
 async function handleProfile(body: any, res: any) {
@@ -104,6 +206,7 @@ export default async function handler(req: any, res: any) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     if (body.action === 'profile') return await handleProfile(body, res);
+    if (body.action === 'apply') return await handleApply(body, res);
     return await handleGate(body, res);
   } catch (err) {
     return res.status(200).json({ valid: false, ok: false, error: (err as Error).message });
