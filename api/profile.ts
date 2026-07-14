@@ -598,6 +598,93 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // === METRICS (метрики и аналитика) ===
+    if (action === 'metrics') {
+      const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+      const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+      const safeEq = (a: string, b: string) => {
+        const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+        return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
+      };
+      if (!ADMIN_SECRET || !bearer || !safeEq(bearer, ADMIN_SECRET)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const { eventId, period } = body;
+      
+      // Получаем базовую статистику по событию
+      const { data: event } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', eventId)
+        .maybeSingle();
+
+      if (!event) return res.status(404).json({ error: 'Event not found' });
+
+      // Регистрации
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('status, payment_status, payment_amount, attended, registered_at')
+        .eq('event_id', eventId);
+
+      const totalRegs = (regs || []).length;
+      const confirmed = (regs || []).filter((r: any) => r.status === 'confirmed').length;
+      const paid = (regs || []).filter((r: any) => r.payment_status === 'paid').length;
+      const attended = (regs || []).filter((r: any) => r.attended).length;
+      const totalRevenue = (regs || []).reduce((s: number, r: any) => s + (r.payment_amount || 0), 0);
+
+      // Конверсия
+      const conversionRate = totalRegs > 0 ? Math.round((confirmed / totalRegs) * 100) : 0;
+      const attendanceRate = confirmed > 0 ? Math.round((attended / confirmed) * 100) : 0;
+      const paymentRate = confirmed > 0 ? Math.round((paid / confirmed) * 100) : 0;
+
+      // Средний чек
+      const avgPayment = paid > 0 ? Math.round(totalRevenue / paid) : 0;
+
+      // Баллы и достижения
+      const { data: membersData } = await supabase
+        .from('members')
+        .select('points, level, achievements')
+        .eq('status', 'approved');
+
+      const totalMembers = (membersData || []).length;
+      const avgPoints = totalMembers > 0 ? Math.round((membersData || []).reduce((s: number, m: any) => s + (m.points || 0), 0) / totalMembers) : 0;
+      const legends = (membersData || []).filter((m: any) => m.level === 'legend').length;
+      const core = (membersData || []).filter((m: any) => m.level === 'core').length;
+
+      return res.status(200).json({
+        ok: true,
+        event: {
+          id: eventId,
+          title: event.title,
+          date: event.date,
+          status: event.status,
+        },
+        registrations: {
+          total: totalRegs,
+          confirmed,
+          paid,
+          attended,
+          pending: totalRegs - confirmed,
+          conversionRate,
+          attendanceRate,
+          paymentRate,
+        },
+        revenue: {
+          total: totalRevenue,
+          avgPayment,
+          currency: 'BYN',
+        },
+        community: {
+          totalMembers,
+          avgPoints,
+          legends,
+          core,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
     // === INTEGRATIONS (внешние сервисы) ===
     if (action === 'integrations') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
