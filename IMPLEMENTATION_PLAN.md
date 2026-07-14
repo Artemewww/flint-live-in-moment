@@ -300,11 +300,3 @@
 ## 📞 Контакты
 
 - **GitHub**: https://github.com/Artemewww/flint-live-in-moment
-- **Веб**: https://flint-live-in-moment.vercel.app
-- **Бот**: @campsflint_bot
-
----
-
-**Последнее обновление**: 14.07.2026, 20:35  
-**Версия**: 1.0  
-**Статус**: Активная разработка
