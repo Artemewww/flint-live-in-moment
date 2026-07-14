@@ -385,6 +385,42 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, message: 'Оценка сохранена' });
     }
 
+    // === SAVE ACTIVITY PREFERENCES ===
+    if (action === 'save_activity_preferences') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { preferences, fitnessLevel, medicalNotes } = body;
+      const { error } = await supabase
+        .from('members')
+        .update({
+          activity_preferences: preferences || {},
+          fitness_level: fitnessLevel || '',
+          medical_notes: medicalNotes || '',
+        })
+        .eq('telegram_id', user.id);
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true });
+    }
+
+    // === SAVE SLEEP SCHEDULE ===
+    if (action === 'save_sleep_schedule') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { bedtime, wakeTime, napNeeded } = body;
+      const { error } = await supabase
+        .from('members')
+        .update({
+          sleep_schedule: { bedtime, wakeTime, napNeeded },
+        })
+        .eq('telegram_id', user.id);
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true });
+    }
+
     return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
     return res.status(200).json({ ok: false, error: (err as Error).message });
