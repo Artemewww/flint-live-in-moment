@@ -81,43 +81,25 @@ cd bot && npm start
 
 ## ⚠️ КРИТИЧЕСКИ ВАЖНО: Что нужно сделать СРОЧНО
 
-### 1. Перезапустить бота на VPS (ОБЯЗАТЕЛЬНО)
+### 1. Бот работает через webhook на Vercel — перезапуск VPS НЕ нужен
 
-Бот работает на VPS, код обновился, но бот не перезапущен. Без этого изменения не вступят в силу.
+**Проверено 14.07.2026**: `getWebhookInfo` показывает, что у бота установлен webhook
+`https://flint-live-in-moment.vercel.app/api/telegram/webhook` (код: `api/telegram/webhook.ts`),
+очередь апдейтов пустая — бот живой и работает на актуальном коде из main
+(Vercel автодеплоит каждый push).
 
-**Вариант A** (если есть доступ к VPS):
-```bash
-# Подключиться к VPS
-ssh user@your-vps-ip
+VPS с polling-ботом (папка `bot/`, `scripts/deploy.sh`) — легаси-путь: пока установлен
+webhook, polling через getUpdates заблокирован Telegram (ошибка 409). Если процесс
+на VPS ещё крутится, его можно остановить (`pm2 stop flint-bot`), чтобы не жёг ресурсы.
+Вернуться на polling: удалить webhook (`api/telegram/setup.ts` / deleteWebhook) и
+запустить бота на VPS через `scripts/deploy.sh`.
 
-# Перейти в проект
-cd /путь/до/flint-live-in-moment
+### 2. Почистить битых пользователей в БД — УЖЕ СДЕЛАНО
 
-# Обновить код
-git pull origin main
-
-# Перезапустить бота
-bash scripts/deploy.sh
-```
-
-**Вариант B** (если команда `fletport`):
-```bash
-fletport
-```
-
-**Вариант C** (если pm2):
-```bash
-pm2 restart flint-bot
-```
-
-**Вариант D** (если systemctl):
-```bash
-systemctl restart flint-bot
-```
-
-### 2. Почистить битых пользователей в БД (ОБЯЗАТЕЛЬНО)
-
-В админке появился "новичок" без имени. Нужно удалить всех пользователей с пустым `first_name` и статусом `pending_review`.
+**Проверено 14.07.2026**: в `members` (8 записей) нет пользователей с пустым именем
+или именем «Пользователь», в `registrations` нет записей-сирот. Таблиц `event_roles`
+и `points_log` в схеме БД не существует — SQL ниже оставлен на случай, если битые
+пользователи появятся снова (строки про несуществующие таблицы пропускать).
 
 **Способ A**: Через Supabase Dashboard (рекомендуется)
 1. Зайти в https://supabase.com/dashboard/project/lnaouwhywnppwnhijots
@@ -170,21 +152,26 @@ clean();
 10. `api/cron/reminders.ts` — автоматические напоминания
 
 ### База данных (Supabase)
+Фактические таблицы (сверено с живой схемой 14.07.2026):
 - `members` — участники (расширена: баллы, уровень, достижения, аллергии, предпочтения)
-- `events` — события
-- `registrations` — заявки
-- `event_menus` — меню
-- `event_schedules` — расписание
-- `event_roles` — роли участников
-- `event_chats` — групповые чаты
-- `points_log` — журнал баллов
-- `achievements` — достижения
+- `events`, `registrations` — события и заявки
+- `event_menus`, `menu_votes` — меню и голосования по меню
+- `event_changes`, `event_change_acknowledgments` — изменения событий
+- `polls`, `poll_votes`, `program_votes` — опросы и голосования
+- `payment_requests`, `payment_contributions` — оплаты
+- `rides`, `ride_requests`, `ride_bookings` — попутки
+- `gear_inventory`, `tasks`, `interests`, `referrals`, `feedback` — снаряжение, задачи, интересы, рефералы, фидбек
+- `community_guidelines`, `guideline_acceptances`, `safety_memos` — правила и безопасность
+- `bot_sessions` — сессии бота
+
+⚠️ Таблиц `event_schedules`, `event_roles`, `event_chats`, `points_log`, `achievements` НЕТ —
+баллы/уровни/достижения хранятся в колонках `members`.
 
 ### Telegram бот
 - **Фреймворк**: Grammy
 - **Хендлеры**: `bot/src/handlers/*.js`
 - **Команды**: `/start`, `/events`, `/profile`, `/diet`, `/preferences`, `/help`
-- **Polling** (не webhook) — работает на VPS
+- **Webhook на Vercel** (`api/telegram/webhook.ts`) — polling на VPS отключён самим фактом установленного webhook
 
 ---
 
@@ -208,8 +195,8 @@ clean();
 
 ## 🐛 Известные баги
 
-1. **Бот не перезапущен** — код обновился, но бот на VPS старой версии
-2. **Битые пользователи** — есть записей с пустым `first_name` в статусе `pending_review`
+1. ~~Бот не перезапущен~~ — неактуально: бот работает через webhook на Vercel, код всегда из main
+2. ~~Битые пользователи~~ — проверено 14.07.2026, БД чистая
 3. **Групповые чаты** — заглушка, не создаёт реальные чаты
 
 ---
@@ -219,8 +206,8 @@ clean();
 - [ ] Клонировать репозиторий
 - [ ] Установить зависимости (`npm install`)
 - [ ] Настроить `.env` с ключами
-- [ ] Перезапустить бота на VPS
-- [ ] Почистить битых пользователей в БД
+- [x] ~~Перезапустить бота на VPS~~ — не нужно, бот на webhook (Vercel)
+- [x] Почистить битых пользователей в БД — уже чисто (14.07.2026)
 - [ ] Протестировать `/start` в боте
 - [ ] Протестировать `/events`, `/profile`, `/diet`, `/preferences`
 - [ ] Проверить админку (логин/пароль)
