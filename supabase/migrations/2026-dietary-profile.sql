@@ -56,3 +56,57 @@ EXCEPTION WHEN duplicate_table THEN NULL;
 END $$;
 
 COMMENT ON TABLE menu_votes IS 'Голосование участников за блюда в меню';
+
+-- 4. Профиль предпочтений по активностям и режиму дня
+ALTER TABLE members ADD COLUMN IF NOT EXISTS activity_preferences jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS sleep_schedule jsonb DEFAULT '{}'::jsonb;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS fitness_level text DEFAULT '';
+ALTER TABLE members ADD COLUMN IF NOT EXISTS medical_notes text DEFAULT '';
+
+COMMENT ON COLUMN members.activity_preferences IS 'Предпочтения по активностям: {"hiking": true, "workshops": false, "games": true}';
+COMMENT ON COLUMN members.sleep_schedule IS 'Режим сна: {"bedtime": "23:00", "wake_time": "07:00", "nap_needed": false}';
+COMMENT ON COLUMN members.fitness_level IS 'Уровень подготовки: beginner/medium/advanced';
+COMMENT ON COLUMN members.medical_notes IS 'Медицинские противопоказания';
+
+-- 5. Библиотека активностей
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS activities (
+    id              bigserial PRIMARY KEY,
+    title           text NOT NULL,
+    description     text DEFAULT '',
+    category        text NOT NULL, -- 'active' | 'intellectual' | 'social' | 'rest'
+    duration_min    int DEFAULT 60,
+    intensity       text DEFAULT 'medium', -- 'low' | 'medium' | 'high'
+    weather_dependent bool DEFAULT true,
+    equipment       jsonb DEFAULT '[]'::jsonb,
+    max_participants int,
+    created_at      timestamptz DEFAULT now()
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE activities IS 'Библиотека активностей для мероприятий';
+COMMENT ON COLUMN activities.category IS 'Категория: активная, интеллектуальная, социальная, отдых';
+COMMENT ON COLUMN activities.intensity IS 'Физическая нагрузка: низкая/средняя/высокая';
+
+-- 6. Расписание мероприятия
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS event_schedules (
+    id              bigserial PRIMARY KEY,
+    event_id        text NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    day             int NOT NULL DEFAULT 1,
+    start_time      text NOT NULL, -- 'HH:MM'
+    end_time        text NOT NULL, -- 'HH:MM'
+    activity_id     bigint REFERENCES activities(id),
+    custom_title    text DEFAULT '',
+    location        text DEFAULT '',
+    notes           text DEFAULT '',
+    created_at      timestamptz DEFAULT now(),
+    UNIQUE (event_id, day, start_time)
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE event_schedules IS 'Расписание мероприятия по дням';
+COMMENT ON COLUMN event_schedules.activity_id IS 'Ссылка на активность из библиотеки';
+COMMENT ON COLUMN event_schedules.custom_title IS 'Если нет activity_id — произвольное название';
