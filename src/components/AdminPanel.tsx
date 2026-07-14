@@ -564,6 +564,123 @@ function tabId(): string {
   } catch { return 'anon'; }
 }
 
+/** Панель меню питания события */
+function MenuPanel({ eventId }: { eventId: string }) {
+  const [menu, setMenu] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [err, setErr] = useState('');
+
+  const loadMenu = async () => {
+    setLoading(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'menu', eventId }),
+      });
+      const data = await res.json();
+      setMenu(data.menu || []);
+    } catch (e) {
+      setErr('Не удалось загрузить меню');
+    }
+    setLoading(false);
+  };
+
+  const generateMenu = async () => {
+    setGenerating(true);
+    setErr('');
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generate', eventId }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setMenu(data.menu || []);
+      } else {
+        setErr(data.error || 'Ошибка генерации');
+      }
+    } catch (e) {
+      setErr('Ошибка сети');
+    }
+    setGenerating(false);
+  };
+
+  useEffect(() => { loadMenu(); }, [eventId]);
+
+  const mealLabels: Record<string, string> = {
+    breakfast: 'Завтрак',
+    lunch: 'Обед',
+    dinner: 'Ужин',
+    snack: 'Перекус',
+  };
+
+  const days = [...new Set(menu.map((m: any) => m.day))].sort();
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <h4 className="text-xs font-bold uppercase flex items-center gap-2">
+          <ChefHat className="w-4 h-4 text-brand" /> Меню питания
+        </h4>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={loadMenu}
+            disabled={loading}
+            className="text-[10px] font-bold text-white/70 bg-white/5 border border-white/10 rounded-lg px-2 py-1 cursor-pointer hover:bg-white/10 disabled:opacity-60"
+          >
+            {loading ? '⏳' : '🔄 Обновить'}
+          </button>
+          <button
+            type="button"
+            onClick={generateMenu}
+            disabled={generating}
+            className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 disabled:opacity-60"
+          >
+            {generating ? '⏳ Генерирую…' : '🤖 Сгенерировать меню'}
+          </button>
+        </div>
+      </div>
+      {err && <p className="text-[11px] text-red-400">{err}</p>}
+      {loading && <p className="text-[11px] text-white/40">Загрузка…</p>}
+      {!loading && menu.length === 0 && (
+        <p className="text-[11px] text-white/40">Меню ещё не создано. Нажми «Сгенерировать меню» — ИИ подберёт блюда под профили участников.</p>
+      )}
+      {days.map((day: number) => (
+        <div key={day}>
+          <h5 className="text-[10px] font-bold uppercase text-brand mb-2">День {day}</h5>
+          <div className="space-y-2">
+            {['breakfast', 'lunch', 'dinner', 'snack'].map((mt) => {
+              const items = menu.filter((m: any) => m.day === day && m.meal_type === mt);
+              if (items.length === 0) return null;
+              return (
+                <div key={mt} className="bg-black/20 border border-white/10 rounded-lg p-2.5">
+                  <p className="text-[9px] font-bold uppercase text-white/50 mb-1">{mealLabels[mt] || mt}</p>
+                  {items.map((item: any, i: number) => (
+                    <div key={i} className="flex items-start justify-between gap-2 text-xs">
+                      <span className="text-white/90">{item.dish}</span>
+                      {item.assigned_to && (
+                        <span className="text-[9px] text-brand shrink-0">готовит: id{item.assigned_to}</span>
+                      )}
+                    </div>
+                  ))}
+                  {items[0]?.cooking_notes && (
+                    <p className="text-[9px] text-white/40 mt-1 italic">{items[0].cooking_notes}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // Пост-сверка общих расходов события: делёж по головам + матрица «кто кому».
 function ExpenseSplitter({ registrations }: { registrations: any[] }) {
   const attended = registrations.filter((r) => r.attended);
@@ -669,7 +786,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Фильтр списка участников. Клик по карточке на «Обзоре» ставит нужный. */
   const [partFilter, setPartFilter] = useState<'all' | 'confirmed' | 'pending' | 'paid'>('all');
   /** Какая панель раскрыта во вкладке «Логистика». */
-  const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | 'split' | null>(null);
+  const [logiPanel, setLogiPanel] = useState<'shopping' | 'cooking' | 'gear' | 'split' | 'menu' | null>(null);
   /** Модалка ввода вместо системных window.prompt (даты, причины, объявления). */
   const [inputModal, setInputModal] = useState<InputModalSpec | null>(null);
   /** Аудитория клуба (все участники, не по событию). */
@@ -1751,6 +1868,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </button>
 
                       <button
+                        onClick={() => setLogiPanel(logiPanel === 'menu' ? null : 'menu')}
+                        className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'menu' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
+                      >
+                        <ChefHat className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Меню питания</p>
+                        <p className="text-[10px] text-white/40 mt-1">ИИ подберёт под профили</p>
+                      </button>
+
+                      <button
                         onClick={() => setLogiPanel(logiPanel === 'split' ? null : 'split')}
                         className={`border rounded-xl p-4 text-left transition-all cursor-pointer ${logiPanel === 'split' ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}
                       >
@@ -1841,6 +1967,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           );
                         })()}
                       </div>
+                    )}
+
+                    {logiPanel === 'menu' && selectedEvent && (
+                      <MenuPanel eventId={selectedEvent.id} />
                     )}
 
                     {logiPanel === 'split' && (
