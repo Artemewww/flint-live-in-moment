@@ -1987,6 +1987,36 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <p className="text-xs font-bold uppercase">Создать чат</p>
                         <p className="text-[10px] text-white/40 mt-1">Группа для участников</p>
                       </button>
+
+                      <button
+                        onClick={async () => {
+                          const candidates = eventStats?.registrations || [];
+                          if (!candidates.length) { setActionMsg({ ok: false, text: 'Нет участников' }); return; }
+                          setInputModal({
+                            title: 'Начислить баллы',
+                            submitLabel: 'Начислить',
+                            fields: [
+                              { key: 'telegramId', label: 'Участник', type: 'select', required: true, options: candidates.map((r: any) => ({ value: String(r.telegramId || r.telegram_id || ''), label: r.name || 'Гость' })) },
+                              { key: 'points', label: 'Баллы', type: 'text', required: true, placeholder: 'напр. 50' },
+                              { key: 'reason', label: 'Причина', type: 'text', required: true, placeholder: 'role / feedback / bonus' },
+                              { key: 'description', label: 'Описание', type: 'text', placeholder: 'за что' },
+                            ],
+                            onSubmit: async (v) => {
+                              await fetch('/api/profile', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('flint_admin_token')}` },
+                                body: JSON.stringify({ action: 'add_points', telegramId: Number(v.telegramId), eventId: selectedEvent.id, reason: v.reason, points: Number(v.points), description: v.description }),
+                              });
+                              setActionMsg({ ok: true, text: 'Баллы начислены' });
+                            },
+                          });
+                        }}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer"
+                      >
+                        <Award className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Баллы</p>
+                        <p className="text-[10px] text-white/40 mt-1">Ручное начисление</p>
+                      </button>
                     </div>
 
                     {logiPanel === 'shopping' && selectedEvent.type !== 'intellectual' && (

@@ -598,6 +598,31 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // === INTEGRATIONS (внешние сервисы) ===
+    if (action === 'integrations') {
+      const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+      const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+      const safeEq = (a: string, b: string) => {
+        const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+        return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
+      };
+      if (!ADMIN_SECRET || !bearer || !safeEq(bearer, ADMIN_SECRET)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const { eventId, service, action: intAction, payload } = body;
+      if (!eventId || !service) return res.status(400).json({ error: 'Missing fields' });
+
+      // Здесь можно добавить интеграции с внешними сервисами
+      // Пока возвращаем заглушку
+      return res.status(200).json({
+        ok: true,
+        service,
+        action: intAction,
+        message: `Интеграция с ${service} в разработке`
+      });
+    }
+
     // === CREATE EVENT CHAT ===
     if (action === 'create_event_chat') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
