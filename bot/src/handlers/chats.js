@@ -15,34 +15,53 @@ async function handleCreateChat(ctx, eventId) {
   await ctx.reply('🔄 Создаю групповой чат для мероприятия...');
 
   try {
-    // Создаём чат через Telegram API
     const botToken = process.env.BOT_TOKEN;
-    const createChatRes = await fetch(`https://api.telegram.org/bot${botToken}/createChatInviteLink`, {
+    
+    // 1. Создаём группу
+    const createGroupRes = await fetch(`https://api.telegram.org/bot${botToken}/createChat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        chat_id: telegramId, // Временно используем ID пользователя, потом заменим на реальный chat_id
-        name: `FLINT: ${eventId}`,
-        member_limit: 50,
+        title: `FLINT: ${eventId}`,
+        chat_type: 'group',
       }),
     });
 
-    const chatData = await createChatRes.json();
-
-    if (!chatData.ok) {
-      throw new Error(chatData.description || 'Failed to create chat');
+    const groupData = await createGroupRes.json();
+    if (!groupData.ok) {
+      throw new Error(groupData.description || 'Failed to create group');
     }
 
-    const inviteLink = chatData.result.invite_link;
+    const chatId = groupData.result.id;
+    const chatName = groupData.result.title;
 
-    // Сохраняем в БД
+    // 2. Создаём invite link
+    const inviteLinkRes = await fetch(`https://api.telegram.org/bot${botToken}/createChatInviteLink`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        name: `Приглашение в ${chatName}`,
+        member_limit: 50,
+        creates_join_request: false,
+      }),
+    });
+
+    const inviteData = await inviteLinkRes.json();
+    if (!inviteData.ok) {
+      throw new Error(inviteData.description || 'Failed to create invite link');
+    }
+
+    const inviteLink = inviteData.result.invite_link;
+
+    // 3. Сохраняем в БД
     const saveRes = await fetch(`${API_BASE}/api/profile`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         action: 'create_event_chat',
         eventId,
-        chatId: telegramId, // TODO: заменить на реальный chat_id
+        chatId: chatId,
         chatType: 'group',
         inviteLink,
       }),
@@ -53,8 +72,9 @@ async function handleCreateChat(ctx, eventId) {
     if (saveData.ok) {
       await ctx.reply(
         '✅ <b>Групповой чат создан!</b>\n\n' +
-        `Ссылка для приглашения: ${inviteLink}\n\n` +
-        'Отправь эту ссылку участникам, чтобы они могли присоединиться к чату.',
+        `Чат: <b>${chatName}</b>\n` +
+        `Ссылка: ${inviteLink}\n\n` +
+        'Отправь эту ссылку участникам, чтобы они могли присоединиться.',
         { parse_mode: 'HTML' }
       );
     } else {

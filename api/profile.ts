@@ -477,6 +477,98 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    // === ADD POINTS ===
+    if (action === 'add_points') {
+      const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+      const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+      const safeEq = (a: string, b: string) => {
+        const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+        return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
+      };
+      if (!ADMIN_SECRET || !bearer || !safeEq(bearer, ADMIN_SECRET)) {
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+
+      const { telegramId, eventId, reason, points, description } = body;
+      if (!telegramId || !reason || !points) {
+        return res.status(400).json({ error: 'Missing fields' });
+      }
+
+      // Начисляем баллы
+      const { data: member } = await supabase
+        .from('members')
+        .select('points, attended_count, invited_count, level, achievements')
+        .eq('telegram_id', Number(telegramId))
+        .maybeSingle();
+
+      if (!member) {
+        return res.status(404).json({ error: 'Member not found' });
+      }
+
+      const newPoints = (member.points || 0) + points;
+      const updates: any = { points: newPoints };
+
+      // Обновляем счётчики
+      if (reason === 'attendance') {
+        updates.attended_count = (member.attended_count || 0) + 1;
+      } else if (reason === 'invite') {
+        updates.invited_count = (member.invited_count || 0) + 1;
+      }
+
+      // Проверяем достижения
+      const achievements = member.achievements || [];
+      const { data: allAchievements } = await supabase
+        .from('achievements')
+        .select('*');
+
+      const newAchievements = [...achievements];
+      for (const ach of allAchievements || []) {
+        if (newAchievements.includes(ach.code)) continue; // уже есть
+
+        const condition = ach.condition || {};
+        const attendedCount = member.attended_count || 0;
+        const invitedCount = member.invited_count || 0;
+        const pointsTotal = member.points || 0;
+
+        let earned = false;
+        if (condition.attended_count && attendedCount >= condition.attended_count) earned = true;
+        if (condition.invited_count && invitedCount >= condition.invited_count) earned = true;
+        if (condition.points_required && pointsTotal >= condition.points_required) earned = true;
+
+        if (earned) {
+          newAchievements.push(ach.code);
+          // Бонус за достижение
+          updates.points = newPoints + 10; // +10 бонус
+        }
+      }
+
+      updates.achievements = JSON.stringify(newAchievements);
+
+      // Обновляем уровень
+      if (newPoints >= 500) updates.level = 'legend';
+      else if (newPoints >= 200) updates.level = 'core';
+      else if (newPoints >= 50) updates.level = 'regular';
+
+      // Сохраняем
+      await supabase.from('members').update(updates).eq('telegram_id', Number(telegramId));
+
+      // Логируем
+      await supabase.from('points_log').insert({
+        telegram_id: Number(telegramId),
+        event_id: eventId || null,
+        reason,
+        points,
+        description: description || '',
+      });
+
+      return res.status(200).json({
+        ok: true,
+        newPoints: updates.points,
+        level: updates.level,
+        newAchievements: newAchievements.filter(a => !achievements.includes(a)),
+      });
+    }
+
     // === CREATE EVENT CHAT ===
     if (action === 'create_event_chat') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';

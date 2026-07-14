@@ -164,3 +164,49 @@ END $$;
 COMMENT ON TABLE event_chats IS 'Групповые чаты Telegram для мероприятий';
 COMMENT ON COLUMN event_chats.chat_id IS 'ID чата в Telegram';
 COMMENT ON COLUMN event_chats.invite_link IS 'Ссылка для приглашения в чат';
+
+-- 10. Баллы и репутация участников
+ALTER TABLE members ADD COLUMN IF NOT EXISTS points integer DEFAULT 0;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS attended_count integer DEFAULT 0;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS invited_count integer DEFAULT 0;
+ALTER TABLE members ADD COLUMN IF NOT EXISTS level text DEFAULT 'newbie'; -- 'newbie' | 'regular' | 'core' | 'legend'
+ALTER TABLE members ADD COLUMN IF NOT EXISTS achievements jsonb DEFAULT '[]'::jsonb;
+
+COMMENT ON COLUMN members.points IS 'Баллы за посещения, помощь, рефералы';
+COMMENT ON COLUMN members.attended_count IS 'Количество посещённых мероприятий';
+COMMENT ON COLUMN members.invited_count IS 'Количество приведённых участников';
+COMMENT ON COLUMN members.level IS 'Уровень в клубе';
+COMMENT ON COLUMN members.achievements IS 'Достижения: ["first_event", "organizer", "cook", "driver", "photographer"]';
+
+-- 11. Журнал начисления баллов
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS points_log (
+    id              bigserial PRIMARY KEY,
+    telegram_id     bigint NOT NULL,
+    event_id        text REFERENCES events(id) ON DELETE SET NULL,
+    reason          text NOT NULL, -- 'attendance' | 'invite' | 'role' | 'feedback' | 'bonus'
+    points          integer NOT NULL,
+    description     text DEFAULT '',
+    created_at      timestamptz DEFAULT now()
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE points_log IS 'Журнал начисления/списания баллов';
+COMMENT ON COLUMN points_log.reason IS 'Причина: посещение, приведён, роль, отзыв, бонус';
+
+-- 12. Достижения
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS achievements (
+    id              bigserial PRIMARY KEY,
+    code            text NOT NULL UNIQUE, -- 'first_event', 'regular', 'organizer', 'cook', 'driver', 'photographer', 'legend'
+    title           text NOT NULL,
+    description     text DEFAULT '',
+    icon            text DEFAULT '🏆',
+    points_required integer DEFAULT 0,
+    condition       jsonb DEFAULT '{}'::jsonb -- { "attended_count": 5, "invited_count": 3 }
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE achievements IS 'Каталог достижений клуба';
