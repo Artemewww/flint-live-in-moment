@@ -235,6 +235,64 @@ export default async function handler(req: any, res: any) {
     }
   }
 
+  if (req.method === 'DELETE' && req.query?.action === 'member') {
+    // Полное удаление пользователя: сброс статуса, чтобы мог заново зарегистрироваться
+    try {
+      const telegramId = Number(req.query.telegramId);
+      if (!telegramId) return res.status(400).json({ error: 'Missing telegramId' });
+
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const reason = String(body.reason || '').trim();
+
+      // Если указана причина — отправляем сообщение пользователю перед удалением
+      if (reason) {
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (botToken) {
+          try {
+            const msg = `❌ <b>Вы были удалены из клуба «Живи в моменте»</b>\n\nПричина: ${reason}\n\nЕсли хотите подать заявку заново — напишите в бота.`;
+            await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: telegramId, text: msg, parse_mode: 'HTML' }),
+            });
+          } catch {}
+        }
+      }
+
+      // Сбрасываем пользователя: очищаем telegram_id, статус, реф-код, чтобы мог заново注册иться
+      const { error: updateError } = await supabase
+        .from('members')
+        .update({
+          status: 'pending',
+          referred_by: null,
+          ref_code: null,
+          bot_active: true,
+          phone: null,
+          first_name: null,
+          username: null,
+        })
+        .eq('telegram_id', telegramId);
+
+      if (updateError) {
+        return res.status(500).json({ error: updateError.message });
+      }
+
+      // Удаляем все регистрации пользователя
+      await supabase.from('registrations').delete().eq('telegram_id', telegramId);
+      // Удаляем реферальные связи
+      await supabase.from('referrals').delete().or(`inviter_id.eq.${telegramId},invited_id.eq.${telegramId}`);
+      // Удаляем голоса, отзывы, интересы
+      await supabase.from('program_votes').delete().eq('telegram_id', telegramId);
+      await supabase.from('feedback').delete().eq('telegram_id', telegramId);
+      await supabase.from('interests').delete().eq('telegram_id', telegramId);
+      await supabase.from('bot_sessions').delete().eq('telegram_id', telegramId);
+
+      return res.status(200).json({ success: true, notified: !!reason });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   if (req.method === 'DELETE') {
     // Удалить регистрацию
     try {

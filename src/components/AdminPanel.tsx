@@ -2288,6 +2288,54 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         >
                           {m.status === 'blocked' ? 'Разблокировать' : 'Заблокировать'}
                         </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const reason = window.prompt('Причина удаления (будет отправлена пользователю в Telegram):');
+                            if (reason === null) return; // отмена
+                            if (reason.trim()) {
+                              if (!window.confirm(`Удалить пользователя ${m.firstName || m.username} навсегда с отправкой причины? Он сможет заново зарегистрироваться.`)) return;
+                              try {
+                                const res = await fetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
+                                  method: 'DELETE',
+                                  headers: { 'Content-Type': 'application/json' },
+                                  body: JSON.stringify({ reason: reason.trim() }),
+                                });
+                                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                setActionMsg({ ok: true, text: `Пользователь удалён. Причина отправлена.` });
+                                await loadAudience();
+                              } catch (err) {
+                                setActionMsg({ ok: false, text: `Ошибка: ${(err as Error).message}` });
+                              }
+                            }
+                          }}
+                          className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                          title="Удалить навсегда с пояснением"
+                        >
+                          Удалить с пояснением
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (!window.confirm(`Удалить пользователя ${m.firstName || m.username} навсегда БЕЗ пояснения? Он сможет заново зарегистрироваться.`)) return;
+                            try {
+                              const res = await fetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({}),
+                              });
+                              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                              setActionMsg({ ok: true, text: `Пользователь удалён без пояснения.` });
+                              await loadAudience();
+                            } catch (err) {
+                              setActionMsg({ ok: false, text: `Ошибка: ${(err as Error).message}` });
+                            }
+                          }}
+                          className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none bg-rose-500/15 text-rose-400 hover:bg-rose-500/25"
+                          title="Удалить навсегда без пояснения"
+                        >
+                          Удалить без пояснения
+                        </button>
                       </div>
                     </div>
                   ));
