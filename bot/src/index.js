@@ -6,6 +6,7 @@ const { handleRegistration } = require('./handlers/registration');
 const { handleProfile } = require('./handlers/profile');
 const { handleAdmin } = require('./handlers/admin');
 const { handleDietStart, handleDietaryChoice, handleFoodToggle, handleFoodCategory, handleFoodDone, handleAllergyToggle, handleAllergyDone, handleGuestsCount, handleGuestName, handleGuestDiet, handleGuestAge, handleDietCancel, getSession, STEPS } = require('./handlers/diet');
+const { handlePreferencesStart, handleActivityToggle, handleActivitiesDone, handleFitnessChoice, handleMedicalNotes, handleSleepChoice, handlePreferencesCancel, getSession: getPrefSession, STEPS: PREF_STEPS } = require('./handlers/preferences');
 const { setupNotifications } = require('./notifications');
 
 // Инициализация бота
@@ -42,6 +43,7 @@ bot.command('start', handleStart);
 bot.command('events', handleEvents);
 bot.command('profile', handleProfile);
 bot.command('diet', handleDietStart);
+bot.command('preferences', handlePreferencesStart);
 bot.command('help', (ctx) => {
   ctx.reply(
     '🤖 <b>FLINT Bot - Команды:</b>\n\n' +
@@ -101,6 +103,24 @@ bot.callbackQuery(/^menu_(\d+)$/, async (ctx) => {
     await ctx.editMessageText('❌ Ошибка загрузки меню');
   }
 });
+
+// Анкета предпочтений
+bot.callbackQuery('pref_start', handlePreferencesStart);
+bot.callbackQuery(/^activity_toggle_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^activity_toggle_(.+)$/);
+  if (match) await handleActivityToggle(ctx, match[1]);
+});
+bot.callbackQuery('activity_done', handleActivitiesDone);
+bot.callbackQuery(/^fitness_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^fitness_(.+)$/);
+  if (match) await handleFitnessChoice(ctx, match[1]);
+});
+bot.callbackQuery('medical_none', (ctx) => handleMedicalNotes(ctx, 'Нет противопоказаний'));
+bot.callbackQuery(/^sleep_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^sleep_(.+)$/);
+  if (match) await handleSleepChoice(ctx, match[1]);
+});
+bot.callbackQuery('pref_cancel', handlePreferencesCancel);
 
 // Анкета питания
 bot.callbackQuery('diet_start', handleDietStart);
@@ -227,6 +247,12 @@ bot.on('message:text', async (ctx) => {
         await ctx.reply('🥜 Аллергии и непереносимости:', allergiesKeyboard([]));
       }
       return;
+    }
+    
+    // Состояния анкеты предпочтений
+    const prefSession = getPrefSession(telegramId);
+    if (prefSession.step === PREF_STEPS.MEDICAL) {
+      return handleMedicalNotes(ctx, text.trim());
     }
     
     await ctx.reply('Используйте команды или кнопки меню');
