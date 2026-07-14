@@ -225,16 +225,70 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
 
-/** Постоянное меню внизу чата — раньше у участника не было ни одной кнопки под рукой. */
+/**
+ * Постоянное меню внизу чата. 4 пункта по UX-аудиту: меньше когнитивной
+ * нагрузки, логистика переехала внутрь карточки события (кнопка там есть).
+ * Старые тексты кнопок продолжаем понимать — клавиатура у людей кешируется.
+ */
 function mainMenu() {
   return {
     keyboard: [
-      [{ text: '📅 Ближайшие события' }, { text: '👤 Мой статус' }],
-      [{ text: '🚗 Логистика и брони' }, { text: 'ℹ️ Помощь' }],
+      [{ text: '🏠 Главная' }, { text: '🗓 Мои события' }],
+      [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
     ],
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+/** Приветствие + афиша открытых событий — /start и кнопка «Главная». */
+async function sendWelcome(chatId: number, openBtn: any) {
+  const { data: evs } = await supabase
+    .from('events')
+    .select('id,title,status,date')
+    .eq('status', 'open')
+    .order('date', { ascending: true })
+    .limit(6);
+  const rows = (evs || []).map((e: any) => [
+    { text: `✅ ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` },
+  ]);
+  rows.push([openBtn as any]);
+  await tg('sendMessage', {
+    chat_id: chatId,
+    parse_mode: 'HTML',
+    text:
+      '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
+      'Живая афиша трезвого сообщества. Выбери событие — покажу детали, дату и как добраться 👇',
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+/** «Мои события» — записи участника с быстрой отменой. */
+async function sendMyEvents(chatId: number, tgId: number, openBtn: any) {
+  const { data: regs } = await supabase
+    .from('registrations').select('event_id,status')
+    .eq('telegram_id', tgId).neq('status', 'cancelled');
+  const ids = (regs || []).map((r: any) => r.event_id);
+  if (!ids.length) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: '🗓 <b>Мои события</b>\n\nПока нет активных записей. Открой афишу и выбери, куда выбраться 👇',
+      reply_markup: kb([[openBtn]]),
+    });
+    return;
+  }
+  const { data: evs } = await supabase.from('events').select('id,title,date').in('id', ids).order('date');
+  const rows: any[] = [];
+  for (const e of evs || []) {
+    rows.push([{ text: `📌 ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
+    rows.push([{ text: '❌ Отменить запись', callback_data: `regcancel_${e.id}` }]);
+  }
+  rows.push([openBtn]);
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: '🗓 <b>Мои события</b>\n\nНажми на событие — детали, логистика и вопросы там:',
+    reply_markup: kb(rows),
+  });
 }
 
 /** Экран «Ближайшие события» — кнопка меню и команда /events. */
@@ -1849,16 +1903,25 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Постоянное меню внизу чата.
+        // Постоянное меню внизу чата (новая структура по UX-аудиту).
+        // Старые тексты кнопок тоже понимаем — клавиатура у людей кешируется.
+        if (text === '🏠 Главная') {
+          await sendWelcome(chatId, openBtn);
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '🗓 Мои события') {
+          await sendMyEvents(chatId, msg.from.id, openBtn);
+          return res.status(200).json({ ok: true });
+        }
         if (text === '📅 Ближайшие события') {
           await sendEventsList(chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
-        if (text === 'ℹ️ Помощь') {
+        if (text === 'ℹ️ Помощь' || text === '❓ Помощь') {
           await sendHelp(chatId);
           return res.status(200).json({ ok: true });
         }
-        if (text === '👤 Мой статус') {
+        if (text === '👤 Мой статус' || text === '👤 Профиль') {
           await handleProfileCommand(msg, chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
@@ -1961,24 +2024,7 @@ export default async function handler(req: any, res: any) {
           }
         }
         // Приветствие + открытые события кнопками (со сроком до старта).
-        const { data: evs } = await supabase
-          .from('events')
-          .select('id,title,status,date')
-          .eq('status', 'open')
-          .order('date', { ascending: true })
-          .limit(6);
-        const rows = (evs || []).map((e: any) => [
-          { text: `✅ ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` },
-        ]);
-        rows.push([openBtn as any]);
-        await tg('sendMessage', {
-          chat_id: chatId,
-          parse_mode: 'HTML',
-          text:
-            '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
-            'Живая афиша трезвого сообщества. Выбери событие — покажу детали, дату и как добраться 👇',
-          reply_markup: { inline_keyboard: rows },
-        });
+        await sendWelcome(chatId, openBtn);
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
         return res.status(200).json({ ok: true });
       }
