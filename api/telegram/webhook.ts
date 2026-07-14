@@ -301,6 +301,8 @@ async function sendPreferencesPrompt(chatId: number) {
  */
 function eventCardButtons(ev: any, openBtn: any): any[] {
   const rows: any[] = [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
+  // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
+  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
   const route = routeUrl(ev);
   const nav: any[] = [];
@@ -579,6 +581,7 @@ export default async function handler(req: any, res: any) {
       const payRow = (ev: any) => (ev?.price_type === 'paid' ? [{ text: '💳 Оплатить участие', callback_data: `pay_${ev.id}` }] : null);
       const finalKb = (ev: any) => {
         const rows: any[] = [];
+        if (ev?.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
         const p = payRow(ev);
         if (p) rows.push(p);
         if (ev && ev.type !== 'intellectual') {
@@ -710,6 +713,45 @@ export default async function handler(req: any, res: any) {
             text: '✅ <b>Предпочтения сохранены</b>\n\nУчтём при подборе и планировании событий. Изменить — /preferences',
           });
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // /link в группе: костяк привязывает групповой чат к событию.
+      // Инвайт-ссылка сохраняется в events.telegram_bot_url и попадает в карточку.
+      if (data.startsWith('bindchat_')) {
+        if (!(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
+          return res.status(200).json({ ok: true });
+        }
+        const evId = data.slice('bindchat_'.length);
+        const ev = await getEvent(evId);
+        if (!ev) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено' });
+          return res.status(200).json({ ok: true });
+        }
+        // Ссылку может создать только бот-админ группы. Пробуем именную,
+        // затем общую; если обе не вышли — говорим, каких прав не хватает.
+        let link = '';
+        const r1 = await tg('createChatInviteLink', { chat_id: chatId, name: String(ev.title || '').slice(0, 32) });
+        link = r1?.result?.invite_link || '';
+        if (!link) {
+          const r2 = await tg('exportChatInviteLink', { chat_id: chatId });
+          link = typeof r2?.result === 'string' ? r2.result : '';
+        }
+        if (!link) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Нужны права админа' });
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: '⚠️ Не удалось создать инвайт-ссылку.\n\nСделай бота <b>администратором группы</b> (право «Пригласительные ссылки») и отправь /link ещё раз.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+        await supabase.from('events').update({ telegram_bot_url: link }).eq('id', evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Чат привязан' });
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `✅ Чат привязан к событию «<b>${esc(ev.title)}</b>».\n\nКнопка «💬 Чат события» появилась в карточке и в подтверждении записи.`,
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -1645,6 +1687,33 @@ export default async function handler(req: any, res: any) {
     if (msg && typeof msg.text === 'string') {
       const chatId = msg.chat.id;
       const text = msg.text.trim();
+
+      // Групповые чаты: бот молчит и реагирует только на /link — привязку
+      // группы к событию. Всё остальное (меню, «Не понял») — только в личке,
+      // иначе бот зафлудит группу.
+      if (msg.chat.type === 'group' || msg.chat.type === 'supergroup') {
+        const gcmd = text.split(' ')[0].split('@')[0];
+        if (gcmd === '/link') {
+          if (!(await isCore(msg.from.id))) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Привязывать чат к событию может только костяк клуба.' });
+            return res.status(200).json({ ok: true });
+          }
+          const { data: evs } = await supabase
+            .from('events').select('id,title,date')
+            .eq('status', 'open').order('date', { ascending: true }).limit(6);
+          if (!evs || !evs.length) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Нет открытых событий для привязки.' });
+            return res.status(200).json({ ok: true });
+          }
+          const rows = evs.map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `bindchat_${e.id}` }]);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '💬 <b>Привязка чата к событию</b>\n\nВыбери событие — в его карточке появится кнопка «Чат события» с инвайт-ссылкой сюда:',
+            reply_markup: kb(rows),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
 
       // Пошаговый ввод (заявка поездки) — если активна сессия и это не команда.
       if (!text.startsWith('/')) {

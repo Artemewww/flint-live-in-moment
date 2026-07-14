@@ -612,6 +612,17 @@ export default function EventDetailModal({
                 <Check className="w-4 h-4 text-brand stroke-[3px]" />
                 <span className="text-xs font-bold text-brand font-mono uppercase tracking-wider">Ваше участие подтверждено! Вы в кругу</span>
               </div>
+              {event.telegramBotUrl && (
+                <a
+                  href={event.telegramBotUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="border border-brand/30 text-brand hover:bg-brand/10 font-black font-mono text-xs py-4 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 uppercase tracking-widest text-center"
+                >
+                  Чат события
+                  <Send className="w-4 h-4 shrink-0" />
+                </a>
+              )}
               <a
                 href={`https://t.me/campsflint_bot?start=event_${event.id}`}
                 target="_blank"

@@ -944,48 +944,8 @@ export default async function handler(req: any, res: any) {
       });
     }
 
-    // === CREATE EVENT CHAT ===
-    if (action === 'create_event_chat') {
-      const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
-      const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
-      const safeEq = (a: string, b: string) => {
-        const A = Buffer.from(String(a)), B = Buffer.from(String(b));
-        return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
-      };
-      if (!ADMIN_SECRET || !bearer || !safeEq(bearer, ADMIN_SECRET)) {
-        return res.status(401).json({ error: 'Unauthorized' });
-      }
-
-      const { eventId, chatId, chatType, inviteLink } = body;
-      if (!eventId || !chatId) return res.status(400).json({ error: 'Missing fields' });
-
-      const { error } = await supabase
-        .from('event_chats')
-        .upsert({
-          event_id: eventId,
-          chat_id: chatId,
-          chat_type: chatType || 'group',
-          invite_link: inviteLink || '',
-          is_active: true,
-        }, { onConflict: 'event_id,chat_id' });
-
-      if (error) return res.status(500).json({ error: error.message });
-      return res.status(200).json({ ok: true });
-    }
-
-    // === GET EVENT CHATS ===
-    if (action === 'get_event_chats') {
-      const { eventId } = body;
-      if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
-
-      const { data: chats } = await supabase
-        .from('event_chats')
-        .select('*')
-        .eq('event_id', eventId)
-        .eq('is_active', true);
-
-      return res.status(200).json({ chats: chats || [] });
-    }
+    // Чаты событий живут в боте: /link в группе → инвайт-ссылка в
+    // events.telegram_bot_url (таблицы event_chats в БД нет и не было).
 
     // === GET WEATHER ===
     if (action === 'get_weather') {
