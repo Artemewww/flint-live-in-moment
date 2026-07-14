@@ -8,42 +8,43 @@ const userProfiles = new Map();
  */
 async function handleProfile(ctx) {
   const telegramId = ctx.from.id;
-  const username = ctx.from.username || `user_${telegramId}`;
-  const firstName = ctx.from.first_name || 'Пользователь';
   
   try {
-    // Получаем данные пользователя
-    const profile = userProfiles.get(telegramId) || {
-      username,
-      firstName,
-      totalEvents: 0,
-      totalAttended: 0,
-      points: 0,
-      level: 'Новичок',
-      achievements: []
-    };
+    // Получаем данные через API
+    const res = await fetch(`${API_BASE}/api/profile`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'get_profile',
+        initData: '',
+      }),
+    });
+
+    const data = await res.json();
     
-    // Определяем уровень
-    let level = 'Новичок';
-    if (profile.totalEvents >= 10) level = 'Мастер';
-    else if (profile.totalEvents >= 5) level = 'Ветеран';
-    else if (profile.totalEvents >= 3) level = 'Участник';
-    else if (profile.totalEvents >= 1) level = 'Новичок';
+    if (!data.ok || !data.profile) {
+      return ctx.reply('Профиль не найден. Напиши /start для регистрации.');
+    }
+
+    const profile = data.profile;
+    const username = profile.username || 'нет';
+    const firstName = profile.first_name || 'Пользователь';
     
     // Формируем текст профиля
     const profileText = 
       `👤 <b>Мой профиль</b>\n\n` +
       `Имя: ${firstName}\n` +
       `Telegram: @${username}\n` +
-      `ID: ${telegramId}\n\n` +
+      `Телефон: ${profile.phone || 'не указан'}\n` +
+      `Статус: ${getStatusLabel(profile.status)}\n\n` +
       `📊 <b>Статистика:</b>\n` +
-      `Мероприятий посещено: <b>${profile.totalAttended}</b>\n` +
-      `Баллов: <b>${profile.points}</b>\n` +
-      `Уровень: <b>${level}</b>\n\n` +
-      `� <b>Достижения:</b>\n` +
-      (profile.achievements.length > 0 
-        ? profile.achievements.map(a => `• ${a}`).join('\n')
-        : 'Пока нет достижений. Участвуйте в мероприятиях!');
+      `• Баллы: <b>${profile.points || 0}</b> 🏅\n` +
+      `• Посетил: ${profile.attended || 0} мероприятий\n` +
+      `• Пригласил: ${profile.invited_count || 0}\n\n` +
+      `🎖 <b>Уровень:</b> ${getLevelLabel(profile.level)}\n` +
+      (profile.achievements && profile.achievements.length > 0 
+        ? `\n🏆 <b>Достижения:</b>\n` + profile.achievements.map((a) => `• ${getAchievementLabel(a)}\n`).join('')
+        : '');
     
     const buttons = {
       reply_markup: {
@@ -188,6 +189,39 @@ function updateProfileAfterEvent(telegramId, eventId, eventTitle) {
     
     userProfiles.set(telegramId, profile);
   }
+}
+
+function getStatusLabel(status) {
+  const labels = {
+    'approved': '✅ Участник',
+    'pending_review': '⏳ На рассмотрении',
+    'blocked': '❌ Заблокирован',
+    'left': '🚪 Вышел'
+  };
+  return labels[status] || 'Неизвестно';
+}
+
+function getLevelLabel(level) {
+  const labels = {
+    'newbie': '🌱 Новичок',
+    'regular': '⭐ Постоянный',
+    'core': '🌟 Костяк',
+    'legend': '👑 Легенда'
+  };
+  return labels[level] || '🌱 Новичок';
+}
+
+function getAchievementLabel(code) {
+  const labels = {
+    'first_event': '🎯 Первое мероприятие',
+    'regular': '⭐ Постоянный участник (5+)',
+    'organizer': '🎬 Организатор',
+    'cook': '👨‍🍳 Повар',
+    'driver': '🚗 Водитель',
+    'photographer': '📸 Фотограф',
+    'legend': '👑 Легенда клуба (500+ баллов)'
+  };
+  return labels[code] || code;
 }
 
 module.exports = {
