@@ -1904,6 +1904,50 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <p className="text-xs font-bold uppercase">Отправить координаты</p>
                         <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
                       </button>
+
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm('Разослать меню всем участникам события в Telegram?')) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const menuRes = await fetch('/api/profile', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ action: 'menu', eventId: selectedEvent.id }),
+                            });
+                            const menuData = await menuRes.json();
+                            const menu = menuData.menu || [];
+                            if (menu.length === 0) {
+                              setActionMsg({ ok: false, text: 'Меню ещё не сгенерировано' });
+                              return;
+                            }
+                            const days = [...new Set(menu.map((m: any) => m.day))].sort();
+                            let msg = `🍽 <b>Меню: ${selectedEvent.title}</b>\n\n`;
+                            for (const day of days) {
+                              msg += `<b>День ${day}</b>\n`;
+                              const dayItems = menu.filter((m: any) => m.day === day);
+                              for (const item of dayItems) {
+                                const mealLabels: Record<string, string> = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
+                                msg += `${mealLabels[item.meal_type as keyof typeof mealLabels] || item.meal_type}: ${item.dish}\n`;
+                                if (item.cooking_notes) msg += `   ${item.cooking_notes}\n`;
+                              }
+                              msg += '\n';
+                            }
+                            await sendMessageToAll(msg);
+                            setActionMsg({ ok: true, text: 'Меню разослано участникам' });
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка рассылки меню' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <ChefHat className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Разослать меню</p>
+                        <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
+                      </button>
                     </div>
 
                     {logiPanel === 'shopping' && selectedEvent.type !== 'intellectual' && (
