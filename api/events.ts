@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
-
+import { verifyInitData, escapeHtml } from './_lib/telegram';
 
 /**
  * Публичный роутер событий. Лимит Vercel Hobby — 12 функций, поэтому мелкие
@@ -21,30 +21,6 @@ const supabase = createClient(
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
-
-
-
-/** Подпись Telegram WebApp initData → достоверный telegram_id. */
-function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
-  if (!initData || !BOT_TOKEN) return null;
-  try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return null;
-    params.delete('hash');
-    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
-    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
-    const u = JSON.parse(params.get('user') || '{}');
-    return u && u.id ? u : null;
-  } catch {
-    return null;
-  }
-}
-
-function esc(s: any): string {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 async function notifyAdmins(text: string): Promise<boolean> {
   if (!BOT_TOKEN || !ADMIN_CHAT_ID) return false;
@@ -113,7 +89,7 @@ async function handleVote(body: any, res: any) {
   const { eventId, option } = body;
   if (!eventId || !option) return res.status(400).json({ error: 'Missing eventId or option' });
 
-  const user = verifyInitData(body.initData);
+  const user = verifyInitData(body.initData, BOT_TOKEN);
   if (!user) return res.status(200).json({ ok: false, delivered: false, message: 'Голосовать можно только из Telegram' });
 
   const { error } = await supabase
@@ -129,7 +105,7 @@ async function handleInterest(body: any, res: any) {
   const { eventId, eventTitle } = body;
   if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
 
-  const user = verifyInitData(body.initData);
+  const user = verifyInitData(body.initData, BOT_TOKEN);
   const telegramId = user?.id ?? null;
 
   const { error } = await supabase.from('interests').upsert(
@@ -144,10 +120,10 @@ async function handleInterest(body: any, res: any) {
     .eq('event_id', eventId);
 
   const who = user
-    ? `${esc(user.first_name || '')} ${user.username ? '@' + esc(user.username) : ''}`
+    ? `${escapeHtml(user.first_name || '')} ${user.username ? '@' + escapeHtml(user.username) : ''}`
     : 'Гость с сайта';
   const delivered = await notifyAdmins(
-    `👀 <b>Интерес к событию</b>\n${esc(eventTitle || eventId)}\n${who}\n\nВсего заинтересованных: <b>${count ?? '?'}</b>`
+    `👀 <b>Интерес к событию</b>\n${escapeHtml(eventTitle || eventId)}\n${who}\n\nВсего заинтересованных: <b>${count ?? '?'}</b>`
   );
 
   return res.status(200).json({ ok: true, delivered, count: count ?? 0 });
@@ -158,7 +134,7 @@ async function handleFeedback(body: any, res: any) {
   const { eventId, rating, wouldReturn, feedback } = body;
   if (!eventId || !rating) return res.status(400).json({ error: 'Missing eventId or rating' });
 
-  const user = verifyInitData(body.initData);
+  const user = verifyInitData(body.initData, BOT_TOKEN);
   if (!user) return res.status(200).json({ ok: false, delivered: false, message: 'Отзыв можно оставить только из Telegram' });
 
   const { error } = await supabase.from('feedback').upsert(
@@ -174,10 +150,10 @@ async function handleFeedback(body: any, res: any) {
   if (error) return res.status(200).json({ ok: false, delivered: false, message: error.message });
 
   const delivered = await notifyAdmins(
-    `⭐ <b>Отзыв</b> ${'★'.repeat(Number(rating))}\n${esc(body.eventTitle || eventId)}\n` +
-    `${esc(user.first_name || '')} ${user.username ? '@' + esc(user.username) : ''}\n` +
+    `⭐ <b>Отзыв</b> ${'★'.repeat(Number(rating))}\n${escapeHtml(body.eventTitle || eventId)}\n` +
+    `${escapeHtml(user.first_name || '')} ${user.username ? '@' + escapeHtml(user.username) : ''}\n` +
     `Придёт снова: ${wouldReturn ? 'да' : 'нет'}\n` +
-    (feedback ? `\n<i>${esc(String(feedback).slice(0, 600))}</i>` : '')
+    (feedback ? `\n<i>${escapeHtml(String(feedback).slice(0, 600))}</i>` : '')
   );
 
   return res.status(200).json({ ok: true, delivered });
@@ -303,15 +279,15 @@ async function handleOg(req: any, res: any) {
   return res.status(200).send(`<!doctype html>
 <html lang="ru"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title>
-<meta name="description" content="${esc(desc)}">
+<title>${escapeHtml(title)}</title>
+<meta name="description" content="${escapeHtml(desc)}">
 <meta property="og:type" content="website">
-<meta property="og:title" content="${esc(title)}">
-<meta property="og:description" content="${esc(desc)}">
-<meta property="og:image" content="${esc(imageUrl)}">
+<meta property="og:title" content="${escapeHtml(title)}">
+<meta property="og:description" content="${escapeHtml(desc)}">
+<meta property="og:image" content="${escapeHtml(imageUrl)}">
 <meta property="og:image:width" content="1280">
 <meta property="og:image:height" content="720">
-<meta property="og:url" content="${esc(`${site}/e/${id}`)}">
+<meta property="og:url" content="${escapeHtml(`${site}/e/${id}`)}">
 <meta name="twitter:card" content="summary_large_image">
 <style>
  body{margin:0;background:#0b0b0b;color:#fff;font-family:system-ui,-apple-system,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
@@ -324,11 +300,11 @@ async function handleOg(req: any, res: any) {
 </style>
 </head><body>
 <div class="card">
-  ${(ev as any).image ? `<img src="${esc(imageUrl)}" alt="">` : ''}
+  ${(ev as any).image ? `<img src="${escapeHtml(imageUrl)}" alt="">` : ''}
   <div class="body">
-    <h1>${esc((ev as any).title)}</h1>
-    <p>${esc(desc)}</p>
-    <a href="${esc(botUrl)}">Открыть в Telegram</a>
+    <h1>${escapeHtml((ev as any).title)}</h1>
+    <p>${escapeHtml(desc)}</p>
+    <a href="${escapeHtml(botUrl)}">Открыть в Telegram</a>
   </div>
 </div>
 <script>setTimeout(function(){location.href=${JSON.stringify(botUrl)}},1200)</script>
@@ -395,6 +371,27 @@ export default async function handler(req: any, res: any) {
     // Публичные: превью-страница приглашения и картинка события.
     if (req.query?.action === 'og') return await handleOg(req, res);
     if (req.query?.action === 'image') return await handleImage(req, res);
+
+    // Афиша — только для своих. Раньше список отдавался публично целиком
+    // (select *): любой, знающий URL, видел закрытые события с деталями оплат
+    // и координатами. Пускаем участника клуба (подписанный initData) или
+    // человека с валидным реф-кодом приглашения.
+    if ((process.env.GATE_ENABLED ?? '1') !== '0') {
+      let allowed = false;
+      const user = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
+      if (user) {
+        const { data: m } = await supabase
+          .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        allowed = !!m && (m.status === 'approved' || m.is_core === true);
+      }
+      const ref = String(req.query?.ref || '').trim();
+      if (!allowed && ref) {
+        const { data: inviter } = await supabase
+          .from('members').select('telegram_id').eq('ref_code', ref).maybeSingle();
+        allowed = !!inviter;
+      }
+      if (!allowed) return res.status(403).json({ error: 'members_only' });
+    }
     try {
       const { data: events, error } = await supabase
         .from('events')

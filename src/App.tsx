@@ -5,6 +5,7 @@ import {
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
+import { getInitData } from './telegram';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
@@ -105,10 +106,18 @@ export default function App() {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .find(e => new Date(e.date) >= new Date(new Date().toISOString().split('T')[0]));
 
-  // Загружаем события из API (Supabase) или fallback на JSON
+  // Загружаем события из API (Supabase) или fallback на JSON.
+  // Афиша закрыта на сервере: шлём initData участника и реф-код приглашения.
+  // На 403 фолбэки НЕ используем — иначе статический JSON обходил бы гейт.
   useEffect(() => {
-    fetch('/api/events')
-      .then(res => res.ok ? res.json() : Promise.reject('API not available'))
+    const ref = (() => { try { return localStorage.getItem('flint_ref') || ''; } catch { return ''; } })();
+    fetch(`/api/events${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`, {
+      headers: { 'X-Telegram-Init-Data': getInitData() },
+    })
+      .then(res => {
+        if (res.status === 403) { setEvents([]); setEventsLoading(false); return Promise.reject('members_only'); }
+        return res.ok ? res.json() : Promise.reject('API not available');
+      })
       .then(data => {
         if (data && data.events && data.events.length > 0) {
           const mappedEvents = data.events.map(mapEventToCamelCase);
@@ -119,6 +128,7 @@ export default function App() {
         setEventsLoading(false);
       })
       .catch(err => {
+        if (err === 'members_only') return; // закрытый клуб: без фолбэков
         console.log('API not available, loading from JSON:', err);
         // Fallback на статический JSON
         fetch('/events.json')
@@ -138,7 +148,8 @@ export default function App() {
             });
           });
       });
-  }, []);
+    // Перезапрашиваем после прохождения гейта: реф-код появляется в localStorage.
+  }, [gatePassed]);
 
   // Статус в клубе: одобрен ли участник. Нужно, чтобы не показывать «верификацию»
   // тем, кто уже внутри (пришёл по реф-ссылке и принят костяком).

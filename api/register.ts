@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
-import * as crypto from 'crypto';
+import { verifyInitData, idFromHandle, escapeHtml } from './_lib/telegram';
+import { isRateLimited, getClientIp } from './_lib/ratelimit';
 
 /**
  * Регистрация на мероприятие.
@@ -18,35 +19,6 @@ const supabase = createClient(
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
-
-/** Проверка подписи Telegram WebApp initData → достоверные id и username. */
-function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
-  if (!initData || !BOT_TOKEN) return null;
-  try {
-    const params = new URLSearchParams(initData);
-    const hash = params.get('hash');
-    if (!hash) return null;
-    params.delete('hash');
-    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
-    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
-    const u = JSON.parse(params.get('user') || '{}');
-    return u && u.id ? u : null;
-  } catch {
-    return null;
-  }
-}
-
-/** Числовой telegram_id из ника (отрицательный — чтобы не пересечься с реальными). */
-function idFromHandle(handle: string): number {
-  let h = 0;
-  for (let i = 0; i < handle.length; i++) h = (h * 31 + handle.charCodeAt(i)) | 0;
-  return -Math.abs(h) - 1;
-}
-
-function esc(s: string): string {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 // Колонки registrations, которые разрешено принимать из тела запроса.
 const REG_FIELDS = [
@@ -70,6 +42,15 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Missing required fields', delivered: false });
     }
 
+    // Rate limiting: 5 заявок за 15 минут с одного IP (защита от спам-ботов).
+    const clientIp = getClientIp(req);
+    if (isRateLimited(`register:${clientIp}`, 5, 15 * 60 * 1000)) {
+      return res.status(429).json({ 
+        error: 'Слишком много заявок. Попробуйте позже.', 
+        delivered: false 
+      });
+    }
+
     // Гейт закрытого события: без верного кода доступа заявку не принимаем.
     // Проверка ТОЛЬКО серверная — сам код на публичный фронт не отдаётся.
     const { data: evGate } = await supabase
@@ -90,7 +71,7 @@ export default async function handler(req: any, res: any) {
     }
 
     // Достоверная личность из Telegram (если заявка из Mini App).
-    const verified = initData ? verifyInitData(initData) : null;
+    const verified = initData ? verifyInitData(initData, BOT_TOKEN) : null;
     const handle = String(telegram).replace(/^@/, '').trim();
     const telegramId = verified?.id
       ? verified.id
@@ -189,11 +170,11 @@ export default async function handler(req: any, res: any) {
       try {
         const text =
           `🟢 <b>Новая заявка</b> • 💾 в базе\n\n` +
-          `<b>Событие:</b> ${esc(eventTitle || eventId)}\n` +
-          `<b>Имя:</b> ${esc(name)}\n` +
-          `<b>Telegram:</b> ${esc(telegram)}\n` +
-          `<b>Телефон:</b> ${esc(phone || '—')}\n` +
-          `<b>Пригласил:</b> ${esc(inviter || '—')}\n` +
+          `<b>Событие:</b> ${escapeHtml(eventTitle || eventId)}\n` +
+          `<b>Имя:</b> ${escapeHtml(name)}\n` +
+          `<b>Telegram:</b> ${escapeHtml(telegram)}\n` +
+          `<b>Телефон:</b> ${escapeHtml(phone || '—')}\n` +
+          `<b>Пригласил:</b> ${escapeHtml(inviter || '—')}\n` +
           `<b>Верификация:</b> ${verified ? '✅ Telegram подтверждён' : 'веб-форма'}`;
         const tg = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           method: 'POST',
