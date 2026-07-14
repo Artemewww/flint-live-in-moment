@@ -157,7 +157,7 @@ export default async function handler(req: any, res: any) {
           }
         }
 
-        // За 1 день до события — дополнительно рассылаем меню, если оно есть.
+        // За 1 день до события — рассылаем меню + рецепты, если они есть.
         if (h.days === 1) {
           const { data: menu } = await supabase
             .from('event_menus')
@@ -168,21 +168,45 @@ export default async function handler(req: any, res: any) {
 
           if (menu && menu.length > 0) {
             const days = [...new Set(menu.map((m: any) => m.day))].sort();
-            let msg = `🍽 <b>Меню на завтра: ${esc((ev as any).title)}</b>\n\n`;
             const mealLabels: Record<string, string> = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
+
+            // 1) Общее меню
+            let menuMsg = `🍽 <b>Меню на завтра: ${esc((ev as any).title)}</b>\n\n`;
             for (const day of days) {
-              msg += `<b>День ${day}</b>\n`;
+              menuMsg += `<b>День ${day}</b>\n`;
               const dayItems = menu.filter((m: any) => m.day === day);
               for (const item of dayItems) {
-                msg += `${mealLabels[item.meal_type] || item.meal_type}: ${esc(item.dish)}\n`;
-                if (item.cooking_notes) msg += `   ${esc(item.cooking_notes)}\n`;
+                menuMsg += `${mealLabels[item.meal_type] || item.meal_type}: ${esc(item.dish)}\n`;
+                if (item.cooking_notes) menuMsg += `   ${esc(item.cooking_notes)}\n`;
               }
-              msg += '\n';
+              menuMsg += '\n';
             }
+
+            // 2) Рецепты для каждого блюда (ужин — самый важный)
+            const dinnerItems = menu.filter((m: any) => m.meal_type === 'dinner');
+            let recipesMsg = '';
+            if (dinnerItems.length > 0) {
+              recipesMsg = `👨‍🍳 <b>Рецепты на ужин:</b>\n\n`;
+              for (const item of dinnerItems) {
+                try {
+                  const aiRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/profile`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: 'recipe', dish: item.dish }),
+                  });
+                  const aiData = await aiRes.json();
+                  if (aiData.ok && aiData.recipe) {
+                    recipesMsg += `<b>${esc(item.dish)}</b>\n${esc(aiData.recipe)}\n\n`;
+                  }
+                } catch {}
+              }
+            }
+
+            const fullMsg = menuMsg + (recipesMsg ? `\n${recipesMsg}` : '');
 
             for (const r of realIds(regs || [])) {
               const chatId = Number(r.telegram_id);
-              const sent = await send(chatId, msg);
+              const sent = await send(chatId, fullMsg);
               if (sent) report.menuBroadcasts++;
             }
           }
