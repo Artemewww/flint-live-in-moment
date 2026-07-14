@@ -477,6 +477,35 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    // === GET PROFILE ===
+    if (action === 'get_profile') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { data: member } = await supabase
+        .from('members')
+        .select('first_name,username,phone,status,points,attended_count,invited_count,level,achievements')
+        .eq('telegram_id', user.id)
+        .maybeSingle();
+
+      if (!member) return res.status(404).json({ error: 'Profile not found' });
+
+      // Получаем регистрации
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('attended')
+        .eq('telegram_id', user.id);
+
+      const attended = (regs || []).filter(r => r.attended).length;
+
+      return res.status(200).json({
+        profile: {
+          ...member,
+          attended,
+        },
+      });
+    }
+
     // === ADD POINTS ===
     if (action === 'add_points') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
@@ -612,6 +641,96 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ chats: chats || [] });
     }
 
+    // === GET WEATHER ===
+    if (action === 'get_weather') {
+      const { lat, lng, date } = body;
+      if (!lat || !lng) return res.status(400).json({ error: 'Missing lat/lng' });
+
+      try {
+        const weatherUrl = new URL('https://api.open-meteo.com/v1/forecast');
+        weatherUrl.searchParams.set('latitude', String(lat));
+        weatherUrl.searchParams.set('longitude', String(lng));
+        weatherUrl.searchParams.set('daily', 'temperature_2m_max,temperature_2m_min,precipitation_sum,weathercode');
+        weatherUrl.searchParams.set('timezone', 'Europe/Minsk');
+        weatherUrl.searchParams.set('forecast_days', '7');
+
+        const weatherRes = await fetch(weatherUrl.toString());
+        if (weatherRes.ok) {
+          const weatherData = await weatherRes.json();
+          const daily = weatherData.daily || {};
+
+          let dateIndex = 0;
+          if (date && daily.time) {
+            const dateStr = String(date);
+            dateIndex = daily.time.findIndex((t: string) => t === dateStr);
+            if (dateIndex < 0) dateIndex = 0;
+          }
+
+          const weatherCode = daily.weathercode?.[dateIndex] || 0;
+          const tempMax = daily.temperature_2m_max?.[dateIndex];
+          const tempMin = daily.temperature_2m_min?.[dateIndex];
+          const precipitation = daily.precipitation_sum?.[dateIndex];
+
+          const weatherDescriptions: Record<number, { label: string; emoji: string; recommendation: string }> = {
+            0: { label: 'Ясно', emoji: '☀️', recommendation: 'Идеальная погода для мероприятия!' },
+            1: { label: 'Преимущественно ясно', emoji: '🌤️', recommendation: 'Хорошая погода, можно планировать outdoor.' },
+            2: { label: 'Переменная облачность', emoji: '⛅', recommendation: 'Погода переменная, иметь запасной план.' },
+            3: { label: 'Облачно', emoji: '☁️', recommendation: 'Облачно, но без осадков.' },
+            45: { label: 'Туман', emoji: '🌫️', recommendation: 'Туман, осторожно на дороге.' },
+            48: { label: 'Изморозь', emoji: '🌫️', recommendation: 'Изморозь, скользко.' },
+            51: { label: 'Лёгкая морось', emoji: '🌦️', recommendation: 'Небольшой дождь, взять зонты.' },
+            53: { label: 'Морось', emoji: '🌦️', recommendation: 'Дождь, нужны зонты/крыши.' },
+            55: { label: 'Сильная морось', emoji: '🌧️', recommendation: 'Дождь, лучше indoor.' },
+            61: { label: 'Лёгкий дождь', emoji: '🌦️', recommendation: 'Дождь, взять зонты.' },
+            63: { label: 'Дождь', emoji: '🌧️', recommendation: 'Дождь, нужны крыши/палатки.' },
+            65: { label: 'Сильный дождь', emoji: '⛈️', recommendation: 'Ливень, лучше перенести или indoor.' },
+            71: { label: 'Лёгкий снег', emoji: '🌨️', recommendation: 'Снег, тёплая одежда.' },
+            73: { label: 'Снег', emoji: '❄️', recommendation: 'Снег, подготовить зимнее снаряжение.' },
+            75: { label: 'Сильный снег', emoji: '❄️', recommendation: 'Метель, опасное путешествие.' },
+            80: { label: 'Ливень', emoji: '🌧️', recommendation: 'Кратковременный ливень.' },
+            81: { label: 'Сильный ливень', emoji: '⛈️', recommendation: 'Ливень, укрыться.' },
+            82: { label: 'Очень сильный ливень', emoji: '⛈️', recommendation: 'Шторм, опасность.' },
+            95: { label: 'Гроза', emoji: '⚡', recommendation: 'Гроза, опасность на открытом пространстве.' },
+            96: { label: 'Гроза с градом', emoji: '⛈️', recommendation: 'Опасно, искать укрытие.' },
+            99: { label: 'Сильная гроза с градом', emoji: '⛈️', recommendation: 'Крайне опасно, оставаться внутри.' },
+          };
+
+          const weather = weatherDescriptions[weatherCode] || { label: 'Неизвестно', emoji: '❓', recommendation: 'Погода неизвестна' };
+
+          return res.status(200).json({
+            ok: true,
+            weather: {
+              code: weatherCode,
+              label: weather.label,
+              emoji: weather.emoji,
+              recommendation: weather.recommendation,
+              tempMax: tempMax ? Math.round(tempMax) : null,
+              tempMin: tempMin ? Math.round(tempMin) : null,
+              precipitation: precipitation ? Math.round(precipitation * 10) / 10 : 0,
+              date: date || daily.time?.[0] || null,
+            },
+          });
+        }
+      } catch (weatherError) {
+        console.error('Weather API error:', weatherError);
+      }
+
+      return res.status(200).json({
+        ok: true,
+        weather: {
+          code: 0,
+          label: 'Данные временно недоступны',
+          emoji: '🌡️',
+          recommendation: 'Проверьте погоду самостоятельно перед выходом.',
+          tempMax: null,
+          tempMin: null,
+          precipitation: 0,
+          date: date || null,
+          fallback: true,
+        },
+      });
+    }
+
     // === GENERATE SCHEDULE ===
     if (action === 'generate_schedule') {
       const { eventId } = body;
@@ -643,13 +762,20 @@ export default async function handler(req: any, res: any) {
         participants = members || [];
       }
 
-      // Получаем погоду (если есть координаты)
+      // Получаем погоду (если есть координаты) через тот же эндпоинт
       let weatherData = null;
       if (event.coordinates?.lat && event.coordinates?.lng) {
         try {
-          const weatherRes = await fetch(
-            `/api/weather?lat=${event.coordinates.lat}&lng=${event.coordinates.lng}&date=${event.date}`
-          );
+          const weatherRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/profile`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'get_weather',
+              lat: event.coordinates.lat,
+              lng: event.coordinates.lng,
+              date: event.date,
+            }),
+          });
           if (weatherRes.ok) {
             const weatherJson = await weatherRes.json();
             if (weatherJson.ok) weatherData = weatherJson.weather;

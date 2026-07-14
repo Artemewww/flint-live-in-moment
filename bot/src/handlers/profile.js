@@ -40,7 +40,7 @@ async function handleProfile(ctx) {
       `Мероприятий посещено: <b>${profile.totalAttended}</b>\n` +
       `Баллов: <b>${profile.points}</b>\n` +
       `Уровень: <b>${level}</b>\n\n` +
-      `🏆 <b>Достижения:</b>\n` +
+      `� <b>Достижения:</b>\n` +
       (profile.achievements.length > 0 
         ? profile.achievements.map(a => `• ${a}`).join('\n')
         : 'Пока нет достижений. Участвуйте в мероприятиях!');
