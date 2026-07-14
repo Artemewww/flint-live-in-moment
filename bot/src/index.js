@@ -101,6 +101,59 @@ bot.callbackQuery(/^guests_(\d+)$/, async (ctx) => {
 bot.callbackQuery('guest_child', (ctx) => handleGuestAge(ctx, true));
 bot.callbackQuery('guest_adult', (ctx) => handleGuestAge(ctx, false));
 
+// Обработка фото (распознавание чека)
+bot.on('message:photo', async (ctx) => {
+  const telegramId = ctx.from.id;
+  const session = getSession(telegramId);
+  
+  // Если пользователь в режиме отправки чека
+  if (session.step === 'receipt_photo') {
+    const photos = ctx.message.photo;
+    const best = photos[photos.length - 1]; // самое большое фото
+    const file = await ctx.telegram.getFile(best.file_id);
+    const imageUrl = `https://api.telegram.org/file/bot${process.env.BOT_TOKEN}/${file.file_path}`;
+    
+    await ctx.reply('📸 Получил чек. Распознаю...');
+    
+    try {
+      const res = await fetch(`${API_BASE}/api/profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'receipt',
+          eventId: session.data.eventId,
+          imageUrl,
+        }),
+      });
+      const data = await res.json();
+      
+      if (data.ok) {
+        let msg = `✅ <b>Чек распознан</b>\n\n`;
+        msg += `Итого: <b>${data.total} ₽</b>\n`;
+        msg += `По ${data.perPerson} ₽ с человека (${data.peopleCount} чел)\n\n`;
+        msg += `<b>Позиции:</b>\n`;
+        data.items.forEach((item, i) => {
+          msg += `${i + 1}. ${item.name} — ${item.price} ₽\n`;
+        });
+        await ctx.reply(msg, { parse_mode: 'HTML' });
+      } else if (data.manual) {
+        await ctx.reply('❌ Не удалось распознать чек автоматически.\nНапиши позиции вручную в формате:\nПродукт — цена\nНапример:\nМясо — 500\nОвощи — 300');
+        session.step = 'receipt_manual';
+      } else {
+        await ctx.reply('❌ Ошибка: ' + (data.error || 'неизвестно'));
+      }
+    } catch (e) {
+      console.error('Receipt error:', e);
+      await ctx.reply('❌ Ошибка сети. Попробуй позже.');
+    }
+    clearSession(telegramId);
+    return;
+  }
+  
+  // Если не в режиме чека — игнорируем фото
+  await ctx.reply('📸 Если хочешь отправить чек, сначала выбери событие и нажми «Отправить чек»');
+});
+
 // Обработка текстовых сообщений
 bot.on('message:text', async (ctx) => {
   const text = ctx.message.text;
