@@ -214,7 +214,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    // ── 3. Вчерашние события: просим отзыв (один раз, по reminded_at) ─────
+    // ── 3. Вчерашние события: просим отзыв + оценки блюд (один раз, по reminded_at) ─────
     const yesterday = dayOffset(-1);
     const { data: pastEvents } = await supabase
       .from('events')
@@ -229,17 +229,45 @@ export default async function handler(req: any, res: any) {
         .neq('status', 'cancelled')
         .is('reminded_at', null);
 
+      // Получаем меню события для оценок
+      const { data: menu } = await supabase
+        .from('event_menus')
+        .select('day,meal_type,dish')
+        .eq('event_id', (ev as any).id)
+        .order('day')
+        .order('meal_type');
+
+      const uniqueDishes = menu
+        ? [...new Set(menu.map((m: any) => m.dish))]
+        : [];
+
       for (const r of realIds(regs || [])) {
+        const chatId = Number(r.telegram_id);
+
+        // 1) Общий отзыв
         const ok = await send(
-          Number(r.telegram_id),
+          chatId,
           `🙏 Спасибо, что был(а) на «<b>${esc((ev as any).title)}</b>».\n\n` +
             `Оцени событие — это помогает делать следующее лучше.`,
           { inline_keyboard: [[{ text: '⭐ Оставить отзыв', callback_data: `fb_${(ev as any).id}` }]] }
         );
         if (ok) {
           report.feedbackRequests++;
-          await supabase.from('registrations').update({ reminded_at: new Date().toISOString() }).eq('id', r.id);
         }
+
+        // 2) Оценка блюд (если есть меню)
+        if (uniqueDishes.length > 0) {
+          const dishButtons = uniqueDishes.slice(0, 5).map((dish: string) => [
+            { text: `⭐ ${dish}`, callback_data: `rate_${(ev as any).id}_${encodeURIComponent(dish)}` }
+          ]);
+          const rateMsg = `🍽 <b>Как тебе еда на «${esc((ev as any).title)}»?</b>\n\n` +
+            `Оцени блюда, чтобы мы улучшали меню:`;
+          const rateOk = await send(chatId, rateMsg, { inline_keyboard: dishButtons });
+          if (rateOk) report.feedbackRequests++;
+        }
+
+        // Помечаем, что отправили напоминание
+        await supabase.from('registrations').update({ reminded_at: new Date().toISOString() }).eq('id', r.id);
       }
     }
 
