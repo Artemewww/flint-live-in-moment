@@ -1,6 +1,62 @@
 import { createClient } from '@supabase/supabase-js';
-import { verifyInitData, idFromHandle, escapeHtml } from './_lib/telegram';
-import { isRateLimited, getClientIp } from './_lib/ratelimit';
+import * as crypto from 'crypto';
+
+// Хелперы задублированы с api/events.ts НАМЕРЕННО: общий api/_lib/ роняет
+// функции на Vercel в рантайме (FUNCTION_INVOCATION_FAILED — импорт соседнего
+// файла не резолвится в собранной функции). Не выносить обратно.
+
+/** Подпись Telegram WebApp initData → достоверный telegram_id. */
+function verifyInitData(initData: string, botToken: string): { id: number; username?: string; first_name?: string } | null {
+  if (!initData || !botToken) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
+    const u = JSON.parse(params.get('user') || '{}');
+    return u && u.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Стабильный отрицательный id из ника — для веб-заявок без Telegram. */
+function idFromHandle(handle: string): number {
+  let hash = 0;
+  for (let i = 0; i < handle.length; i++) {
+    hash = (hash * 31 + handle.charCodeAt(i)) | 0;
+  }
+  return -Math.abs(hash) - 1;
+}
+
+function escapeHtml(text: string): string {
+  return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// In-memory rate limit. Без setInterval: serverless-инстансы замораживаются,
+// таймеры бессмысленны — чистим просроченные ключи при каждом обращении.
+const rlStore = new Map<string, { count: number; resetAt: number }>();
+function isRateLimited(key: string, limit: number, windowMs: number): boolean {
+  const now = Date.now();
+  for (const [k, e] of rlStore) if (e.resetAt < now) rlStore.delete(k);
+  const e = rlStore.get(key);
+  if (!e) { rlStore.set(key, { count: 1, resetAt: now + windowMs }); return false; }
+  if (e.count >= limit) return true;
+  e.count++;
+  return false;
+}
+
+function getClientIp(req: any): string {
+  return (
+    req.headers['x-forwarded-for']?.split(',')[0].trim() ||
+    req.headers['x-real-ip'] ||
+    req.connection?.remoteAddress ||
+    'unknown'
+  );
+}
 
 /**
  * Регистрация на мероприятие.

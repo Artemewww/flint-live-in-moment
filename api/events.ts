@@ -1,6 +1,30 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
-import { verifyInitData, escapeHtml } from './_lib/telegram';
+
+// Хелперы задублированы с api/register.ts НАМЕРЕННО: общий api/_lib/ роняет
+// функции на Vercel в рантайме (FUNCTION_INVOCATION_FAILED). Не выносить.
+
+/** Подпись Telegram WebApp initData → достоверный telegram_id. */
+function verifyInitData(initData: string, botToken: string): { id: number; username?: string; first_name?: string } | null {
+  if (!initData || !botToken) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(botToken).digest();
+    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
+    const u = JSON.parse(params.get('user') || '{}');
+    return u && u.id ? u : null;
+  } catch {
+    return null;
+  }
+}
+
+function escapeHtml(text: string): string {
+  return String(text || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
 
 /**
  * Публичный роутер событий. Лимит Vercel Hobby — 12 функций, поэтому мелкие
