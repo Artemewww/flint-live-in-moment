@@ -28,7 +28,7 @@ async function handleStart(ctx) {
           { text: '👤 Мой профиль', callback_data: 'profile' }
         ],
         [
-          { text: 'ℹ️ О сообществе', callback_data: 'about' },
+          { text: '🍽 Анкета питания', callback_data: 'diet_start' },
           { text: '❓ Помощь', callback_data: 'help' }
         ]
       ]
