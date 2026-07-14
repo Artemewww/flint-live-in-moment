@@ -237,6 +237,63 @@ function mainMenu() {
   };
 }
 
+/** Экран «Ближайшие события» — кнопка меню и команда /events. */
+async function sendEventsList(chatId: number, openBtn: any) {
+  const { data: evs } = await supabase
+    .from('events').select('id,title,date,status')
+    .eq('status', 'open').order('date', { ascending: true }).limit(6);
+  if (!evs || !evs.length) {
+    await tg('sendMessage', { chat_id: chatId, text: 'Пока нет открытых событий. Загляни позже.' });
+    return;
+  }
+  const rows = evs.map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
+  rows.push([openBtn as any]);
+  await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📅 <b>Ближайшие события</b>', reply_markup: kb(rows) });
+}
+
+/** Экран «Помощь» — кнопка меню и команда /help. */
+async function sendHelp(chatId: number) {
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text:
+      'ℹ️ <b>Как это работает</b>\n\n' +
+      '1. Выбираешь событие → «Записаться».\n' +
+      '2. Отвечаешь на пару вопросов — они нужны для закупки и логистики.\n' +
+      '3. Дальше всё придёт сюда: точный адрес, программа, напоминания за 7/3/1 день.\n' +
+      '4. Нужна машина или место в ней — «🚗 Логистика и брони».\n' +
+      '5. После события бот попросит оценку — она влияет на следующие.\n\n' +
+      'Вопрос по событию — кнопка «❓ Спросить» в его карточке.\n' +
+      '/profile — баллы и твоя реф-ссылка.',
+    reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+  });
+}
+
+/** Команда /diet — тип питания (детали и аллергии уточняются при записи на событие). */
+async function sendDietPrompt(chatId: number) {
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: '🍽 <b>Твоё питание</b>\n\nУчтём в меню и списке закупки. Аллергии и детали уточняем при записи на каждое событие.',
+    reply_markup: kb([
+      [{ text: '🍗 Всеядный', callback_data: 'dietset:all' }],
+      [{ text: '🥗 Вегетарианец', callback_data: 'dietset:veg' }],
+      [{ text: '🌱 Веган', callback_data: 'dietset:vegan' }],
+    ]),
+  });
+}
+
+/** Команда /preferences — уровень активности, затем режим сна (callback prefset:). */
+async function sendPreferencesPrompt(chatId: number) {
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: '⚙️ <b>Предпочтения</b>\n\nТвой уровень активности — подберём события по силам.',
+    reply_markup: kb([
+      [{ text: '🌱 Начинающий', callback_data: 'prefset:fit:beginner' }],
+      [{ text: '💪 Средний', callback_data: 'prefset:fit:medium' }],
+      [{ text: '🏆 Продвинутый', callback_data: 'prefset:fit:advanced' }],
+    ]),
+  });
+}
+
 /**
  * Кнопки под карточкой события. Набор зависит от самого события:
  * интеллектуальному клубу не нужна логистика, бесплатному — оплата,
@@ -1723,63 +1780,17 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Постоянное меню внизу чата. Слэш-команды из подсказок бота — алиасы тех же экранов.
-        const cmd = text.split(' ')[0].split('@')[0];
-        if (text === '📅 Ближайшие события' || cmd === '/events') {
-          const { data: evs } = await supabase
-            .from('events').select('id,title,date,status')
-            .eq('status', 'open').order('date', { ascending: true }).limit(6);
-          if (!evs || !evs.length) {
-            await tg('sendMessage', { chat_id: chatId, text: 'Пока нет открытых событий. Загляни позже.' });
-            return res.status(200).json({ ok: true });
-          }
-          const rows = evs.map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
-          rows.push([openBtn as any]);
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📅 <b>Ближайшие события</b>', reply_markup: kb(rows) });
+        // Постоянное меню внизу чата.
+        if (text === '📅 Ближайшие события') {
+          await sendEventsList(chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
-        if (text === 'ℹ️ Помощь' || cmd === '/help') {
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text:
-              'ℹ️ <b>Как это работает</b>\n\n' +
-              '1. Выбираешь событие → «Записаться».\n' +
-              '2. Отвечаешь на пару вопросов — они нужны для закупки и логистики.\n' +
-              '3. Дальше всё придёт сюда: точный адрес, программа, напоминания за 7/3/1 день.\n' +
-              '4. Нужна машина или место в ней — «🚗 Логистика и брони».\n' +
-              '5. После события бот попросит оценку — она влияет на следующие.\n\n' +
-              'Вопрос по событию — кнопка «❓ Спросить» в его карточке.\n' +
-              '/profile — баллы и твоя реф-ссылка.',
-            reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
-          });
+        if (text === 'ℹ️ Помощь') {
+          await sendHelp(chatId);
           return res.status(200).json({ ok: true });
         }
         if (text === '👤 Мой статус') {
           await handleProfileCommand(msg, chatId, openBtn);
-          return res.status(200).json({ ok: true });
-        }
-        if (cmd === '/diet') {
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: '🍽 <b>Твоё питание</b>\n\nУчтём в меню и списке закупки. Аллергии и детали уточняем при записи на каждое событие.',
-            reply_markup: kb([
-              [{ text: '🍗 Всеядный', callback_data: 'dietset:all' }],
-              [{ text: '🥗 Вегетарианец', callback_data: 'dietset:veg' }],
-              [{ text: '🌱 Веган', callback_data: 'dietset:vegan' }],
-            ]),
-          });
-          return res.status(200).json({ ok: true });
-        }
-        if (cmd === '/preferences') {
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: '⚙️ <b>Предпочтения</b>\n\nТвой уровень активности — подберём события по силам.',
-            reply_markup: kb([
-              [{ text: '🌱 Начинающий', callback_data: 'prefset:fit:beginner' }],
-              [{ text: '💪 Средний', callback_data: 'prefset:fit:medium' }],
-              [{ text: '🏆 Продвинутый', callback_data: 'prefset:fit:advanced' }],
-            ]),
-          });
           return res.status(200).json({ ok: true });
         }
         if (text === '🚗 Логистика и брони') {
@@ -1903,9 +1914,29 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Слэш-команды из меню бота. Кнопочные тексты обрабатываются выше —
+      // они не начинаются с '/', поэтому сюда не доходят.
+      const cmd = text.split(' ')[0].split('@')[0];
+
       // Профиль: баллы, реф-ссылка, счётчик приглашённых.
-      if (text.startsWith('/profile')) {
+      if (cmd === '/profile') {
         await handleProfileCommand(msg, chatId, openBtn);
+        return res.status(200).json({ ok: true });
+      }
+      if (cmd === '/events') {
+        await sendEventsList(chatId, openBtn);
+        return res.status(200).json({ ok: true });
+      }
+      if (cmd === '/help') {
+        await sendHelp(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      if (cmd === '/diet') {
+        await sendDietPrompt(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      if (cmd === '/preferences') {
+        await sendPreferencesPrompt(chatId);
         return res.status(200).json({ ok: true });
       }
 
