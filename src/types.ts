@@ -126,6 +126,31 @@ export interface Registration {
   developmentGoal?: HouseQuality['key'];
 }
 
+export interface DietaryProfile {
+  dietary: 'omnivore' | 'vegetarian' | 'vegan' | '';
+  allergies: string[];              // ["молочные","орехи","глютен"]
+  likedFoods: string[];             // любимые продукты
+  dislikedFoods: string[];          // нелюбимые продукты
+  cookingSkills: 'beginner' | 'medium' | 'pro' | 'chef' | '';
+  mealPreferences: {
+    breakfast: boolean;
+    lunch: boolean;
+    dinner: boolean;
+    snacks: boolean;
+  };
+}
+
+export interface MenuItem {
+  id?: number;
+  eventId: string;
+  day: number;
+  mealType: 'breakfast' | 'lunch' | 'dinner' | 'snack';
+  dish: string;
+  ingredients: { name: string; qty: string; note?: string }[];
+  cookingNotes?: string;
+  assignedTo?: number;
+}
+
 export interface UserProfile {
   telegram: string;
   name: string;
@@ -145,6 +170,8 @@ export interface UserProfile {
   interests?: string[];
   /** Навыки, которыми готов делиться. */
   skills?: string[];
+  /** Профиль питания */
+  dietary?: DietaryProfile;
 }
 
 export interface Achievement {
