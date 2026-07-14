@@ -2,6 +2,9 @@
  * Единый эндпоинт профиля участника (экономия функций Vercel).
  * POST /api/profile
  *
+ * action='gate'      → проверка входа в клуб (участник Telegram или реф-код)
+ * action='profile'   → профиль клуба: реф-код, статус, баллы (через initData)
+ * action='apply'     → заявка на вступление с сайта
  * action='onboard'   → онбординг профиля развития (требует ADMIN_TOKEN)
  * action='diet'      → сохранить профиль питания (через initData)
  * action='save_diet' → сохранить профиль питания + гости + кастомные продукты
@@ -22,6 +25,7 @@ const supabase = createClient(
 );
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 
 function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
   if (!initData || !BOT_TOKEN) return null;
@@ -38,6 +42,21 @@ function verifyInitData(initData: string): { id: number; username?: string; firs
   } catch {
     return null;
   }
+}
+
+async function ensureRefCode(telegramId: number, force = false): Promise<string | null> {
+  const { data: m } = await supabase.from('members').select('ref_code').eq('telegram_id', telegramId).maybeSingle();
+  if (m?.ref_code && !force) return m.ref_code;
+  for (let i = 0; i < 5; i++) {
+    const code = Math.random().toString(36).slice(2, 9);
+    const { error } = await supabase.from('members').update({ ref_code: code }).eq('telegram_id', telegramId);
+    if (!error) return code;
+  }
+  return m?.ref_code || null;
+}
+
+function escHtml(s: string): string {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 // Базовый чек-лист продуктов по категориям
@@ -180,38 +199,153 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const action = body.action;
 
-    // === GATE (проверка входа в клуб через Mini App) ===
+    // === GATE (проверка входа в клуб: участник в Telegram или реф-код) ===
     if (action === 'gate') {
-      const { ref } = body;
+      // 1) Уже одобренный участник внутри Telegram — без кода.
       const user = verifyInitData(body.initData);
-      if (!user) return res.status(200).json({ valid: false, error: 'Unverified' });
+      if (user) {
+        const { data: me } = await supabase.from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        if (me) {
+          if (me.status === 'approved' || me.is_core) return res.status(200).json({ valid: true, reason: 'member' });
+          if (me.status === 'blocked') return res.status(200).json({ valid: false, blocked: true, reason: 'blocked' });
+          if (me.status === 'pending_review') return res.status(200).json({ valid: false, pending: true, reason: 'pending_review' });
+        }
+      }
+      // 2) Валидный реферальный код.
+      const ref = String(body.ref || '').trim();
+      if (ref) {
+        const { data: inviter } = await supabase.from('members').select('telegram_id,first_name,username').eq('ref_code', ref).maybeSingle();
+        if (inviter) {
+          // Привязываем реферера, если пользователь авторизован через Telegram и ещё не привязан
+          if (user && user.id !== inviter.telegram_id) {
+            const { data: existing } = await supabase
+              .from('members')
+              .select('referred_by')
+              .eq('telegram_id', user.id)
+              .maybeSingle();
+            if (existing && !existing.referred_by) {
+              await supabase.from('members').update({ referred_by: inviter.telegram_id }).eq('telegram_id', user.id);
+              try {
+                await supabase.from('referrals').insert({
+                  ref_code: ref,
+                  inviter_id: inviter.telegram_id,
+                  invited_id: user.id,
+                  event_id: null,
+                });
+              } catch {}
+            }
+          }
+          return res.status(200).json({ valid: true, reason: 'ref', inviterName: inviter.first_name || inviter.username || 'участник клуба' });
+        }
+      }
+      return res.status(200).json({ valid: false });
+    }
 
-      const { data: member } = await supabase
+    // === PROFILE (профиль клуба: реф-код, статус, баллы) ===
+    if (action === 'profile') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      await supabase.from('members').upsert(
+        { telegram_id: user.id, username: user.username || null, first_name: user.first_name || null },
+        { onConflict: 'telegram_id' }
+      );
+
+      const refCode = await ensureRefCode(user.id, body.op === 'rotate');
+
+      const { data: me } = await supabase
         .from('members')
-        .select('status, first_name, username')
+        .select('telegram_id,username,first_name,status,is_core,role,points')
         .eq('telegram_id', user.id)
         .maybeSingle();
 
-      if (!member) return res.status(200).json({ valid: false });
-
-      let inviterName: string | undefined;
-      if (ref) {
-        const { data: inv } = await supabase
-          .from('members')
-          .select('first_name')
-          .eq('ref_code', ref)
-          .maybeSingle();
-        if (inv) inviterName = inv.first_name;
-      }
+      const { count } = await supabase
+        .from('members')
+        .select('telegram_id', { count: 'exact', head: true })
+        .eq('referred_by', user.id);
 
       return res.status(200).json({
-        valid: true,
-        status: member.status,
-        firstName: member.first_name,
-        username: member.username,
-        inviterName,
-        gatePassed: member.status === 'approved',
+        ok: true,
+        profile: {
+          telegramId: user.id,
+          firstName: me?.first_name || user.first_name || '',
+          username: me?.username || user.username || '',
+          status: me?.status || 'pending',
+          isCore: !!me?.is_core,
+          role: me?.role || 'member',
+          points: me?.points || 0,
+          refCode,
+          refLink: refCode ? `https://t.me/${BOT_USERNAME}?start=ref_${refCode}` : null,
+          referralsCount: count || 0,
+        },
       });
+    }
+
+    // === APPLY (заявка на вступление с сайта) ===
+    if (action === 'apply') {
+      const { firstName, lastName, phone, sourceHint } = body;
+      if (!firstName || !phone) {
+        return res.status(200).json({ ok: false, error: 'Имя и телефон обязательны' });
+      }
+
+      const { data: existing } = await supabase
+        .from('members')
+        .select('telegram_id, status')
+        .eq('phone', phone)
+        .maybeSingle();
+
+      if (existing) {
+        if (existing.status === 'approved') {
+          return res.status(200).json({ ok: false, code: 'already_member', message: 'Вы уже участник клуба' });
+        }
+        if (existing.status === 'pending_review') {
+          return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении' });
+        }
+        if (existing.status === 'blocked') {
+          return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
+        }
+      }
+
+      const user = verifyInitData(body.initData);
+      const telegramId: number | null = user ? user.id : null;
+      const refCode = Math.random().toString(36).slice(2, 9);
+
+      const memberData: any = {
+        first_name: firstName,
+        last_name: lastName || null,
+        phone,
+        status: 'pending_review',
+        ref_code: refCode,
+        source_hint: sourceHint || 'website',
+        agreed_pd: true,
+      };
+      if (telegramId) {
+        memberData.telegram_id = telegramId;
+        memberData.username = user?.username || null;
+      }
+
+      const { error } = await supabase.from('members').upsert(
+        memberData,
+        { onConflict: telegramId ? 'telegram_id' : undefined }
+      );
+
+      if (error) {
+        return res.status(200).json({ ok: false, error: 'Ошибка при создании заявки' });
+      }
+
+      const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (adminChatId && BOT_TOKEN) {
+        const msg = `📋 <b>Новая заявка на вступление</b>\n\nИмя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId ? `\nTelegram ID: ${telegramId}` : ''}\n\n/approve_${refCode} — одобрить`;
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: adminChatId, text: msg, parse_mode: 'HTML' }),
+          });
+        } catch {}
+      }
+
+      return res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.' });
     }
 
     // === ONBOARD ===

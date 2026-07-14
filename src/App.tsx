@@ -145,7 +145,7 @@ export default function App() {
   useEffect(() => {
     const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
     if (!initData) { setClubApproved(false); return; }
-    fetch('/api/club', {
+    fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'profile', initData }),

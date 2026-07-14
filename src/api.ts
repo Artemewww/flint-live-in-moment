@@ -38,7 +38,7 @@ export async function submitClubApplication(payload: {
   sourceHint?: string;
 }): Promise<RegisterResult & { code?: string }> {
   try {
-    const res = await fetch('/api/club', {
+    const res = await fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action: 'apply', ...payload, initData: getInitData() }),

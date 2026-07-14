@@ -55,7 +55,7 @@ export default function UserStats({ registrations, events, onClose }: UserStatsP
     const initData = getInitData();
     if (!initData) return;
     try {
-      const res = await fetch('/api/club', {
+      const res = await fetch('/api/profile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'profile', op: action, initData }),
