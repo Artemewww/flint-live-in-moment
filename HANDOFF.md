@@ -6,15 +6,19 @@
 /Users/artdementiev/Desktop/00_Проекты/flint-live-in-moment
 ```
 
-## 🚀 Быстрый старт
+**GitHub**: https://github.com/Artemewww/flint-live-in-moment
 
-### 1. Клонирование
+---
+
+## 🚀 Инструкция для нового разработчика (Cloud Code)
+
+### Шаг 1: Клонирование проекта
 ```bash
 git clone https://github.com/Artemewww/flint-live-in-moment.git
 cd flint-live-in-moment
 ```
 
-### 2. Установка зависимостей
+### Шаг 2: Установка зависимостей
 ```bash
 # Бот
 cd bot && npm install && cd ..
@@ -23,26 +27,29 @@ cd bot && npm install && cd ..
 cd src && npm install && cd ..
 ```
 
-### 3. Настройка переменных окружения
+### Шаг 3: Настройка переменных окружения
 ```bash
-# Корень проекта
-cp .env.example .env  # если есть пример
-# Или создать .env вручную:
-# SUPABASE_URL=https://lnaouwhywnppwnhijots.supabase.co
-# SUPABASE_SERVICE_ROLE_KEY=<ключ из bot/.env>
-# TELEGRAM_BOT_TOKEN=<токен бота>
-# ADMIN_TOKEN=<секретный токен админки>
-# VERCEL_URL=<url на vercel>
+# Создать .env в корне проекта
+cat > .env << 'EOF'
+SUPABASE_URL=https://lnaouwhywnppwnhijots.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxuYW91d2h5d25wcHduaGlqb3RzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzUwMzY1NCwiZXhwIjoyMDk5MDc5NjU0fQ.1fxhmyQTMJ5kZEkkV8N-q-SUtHHQ0dZ3KYsnoUH0wes
+TELEGRAM_BOT_TOKEN=<получить у @BotFather>
+ADMIN_TOKEN=<придумать секретный токен>
+VERCEL_URL=https://flint-live-in-moment.vercel.app
+GEMINI_API_KEY=<ключ Google Gemini>
+EOF
 ```
 
-### 4. Локальный запуск
+### Шаг 4: Локальный запуск
 ```bash
 # Только API (Vercel)
 cd src && npm run dev
 
-# Только бот
+# Только бот (в другом терминале)
 cd bot && npm start
 ```
+
+---
 
 ## 📦 Что уже работает
 
@@ -69,6 +76,84 @@ cd bot && npm start
 - Меню 4 кнопки: 🏠 Афиша / 📅 Мои события / 👤 Профиль / ❓ Помощь
 - Middleware проверки статуса для всех команд
 - Удалены дублирующие функции `api/club.ts` и `api/my.ts` → объединены в `api/profile.ts`
+
+---
+
+## ⚠️ КРИТИЧЕСКИ ВАЖНО: Что нужно сделать СРОЧНО
+
+### 1. Перезапустить бота на VPS (ОБЯЗАТЕЛЬНО)
+
+Бот работает на VPS, код обновился, но бот не перезапущен. Без этого изменения не вступят в силу.
+
+**Вариант A** (если есть доступ к VPS):
+```bash
+# Подключиться к VPS
+ssh user@your-vps-ip
+
+# Перейти в проект
+cd /путь/до/flint-live-in-moment
+
+# Обновить код
+git pull origin main
+
+# Перезапустить бота
+bash scripts/deploy.sh
+```
+
+**Вариант B** (если команда `fletport`):
+```bash
+fletport
+```
+
+**Вариант C** (если pm2):
+```bash
+pm2 restart flint-bot
+```
+
+**Вариант D** (если systemctl):
+```bash
+systemctl restart flint-bot
+```
+
+### 2. Почистить битых пользователей в БД (ОБЯЗАТЕЛЬНО)
+
+В админке появился "новичок" без имени. Нужно удалить всех пользователей с пустым `first_name` и статусом `pending_review`.
+
+**Способ A**: Через Supabase Dashboard (рекомендуется)
+1. Зайти в https://supabase.com/dashboard/project/lnaouwhywnppwnhijots
+2. SQL Editor → выполнить:
+
+```sql
+-- Удалить битых пользователей
+DELETE FROM members WHERE first_name IS NULL OR first_name = '' OR first_name = 'Пользователь';
+
+-- Почистить связанные данные
+DELETE FROM registrations WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
+DELETE FROM event_roles WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
+DELETE FROM points_log WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
+```
+
+**Способ B**: Через Node.js скрипт
+```bash
+cd /Users/artdementiev/Desktop/00_Проекты/flint-live-in-moment
+node -e "
+require('dotenv').config({ path: require('path').join(__dirname, 'bot/.env') });
+const { createClient } = require('@supabase/supabase-js');
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+async function clean() {
+  const { data: broken } = await supabase.from('members').select('id,telegram_id').or('first_name.is.null,first_name.eq.\"\",first_name.eq.Пользователь');
+  if (broken?.length > 0) {
+    const ids = broken.map(b => b.id);
+    await supabase.from('members').delete().in('id', ids);
+    console.log('Удалено:', ids.length);
+  }
+}
+clean();
+"
+```
+
+---
 
 ## 🔧 Архитектура
 
@@ -101,53 +186,7 @@ cd bot && npm start
 - **Команды**: `/start`, `/events`, `/profile`, `/diet`, `/preferences`, `/help`
 - **Polling** (не webhook) — работает на VPS
 
-## ⚠️ Что нужно доделать
-
-### Критично (срочно)
-1. **Перезапустить бота на VPS** — код обновился, но бот не перезапущен
-   ```bash
-   cd /путь/до/flint-live-in-moment && git pull origin main && bash scripts/deploy.sh
-   ```
-   Или команда `fletport` (если это pm2/systemctl)
-
-2. **Почистить битых пользователей** — в админке появился "новичок" без имени
-   - Выполнить SQL в Supabase:
-   ```sql
-   DELETE FROM members WHERE first_name IS NULL OR first_name = '' OR first_name = 'Пользователь';
-   DELETE FROM registrations WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
-   DELETE FROM event_roles WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
-   DELETE FROM points_log WHERE telegram_id NOT IN (SELECT telegram_id FROM members);
-   ```
-
-### Важно (ближайшие релизы)
-3. **Реальные групповые чаты** — сейчас заглушка, нужно создавать через Telegram API
-4. **ИИ-планировщик** — полная автоматизация программы, меню, логистики
-5. **Продвинутая логистика** — пешие маршруты, интеграция с картами
-6. **Управление сном** — тихие/активные часы, размещение по палаткам
-
-### Желательно
-7. **Автоматическое распределение ролей** — ИИ предлагает оптимальное распределение
-8. **Геймификация 2.0** — челленджи, уровни, награды
-9. **Внешние интеграции** — бронирование, оплата, страховка
-10. **Webhook для бота** — вместо polling (снижает нагрузку)
-
-## 🛠 Технические детали
-
-### Vercel
-- **План**: Hobby (максимум 12 Serverless Functions)
-- **Использовано**: 10/12
-- **Запас**: 2 функции
-- **Автодеплой**: при пуше в `main`
-
-### VPS (бот)
-- **Деплой**: `scripts/deploy.sh`
-- **Процесс**: pm2 / systemctl / docker / node
-- **Логи**: `bot/bot.log`
-
-### Supabase
-- **URL**: https://lnaouwhywnppwnhijots.supabase.co
-- **Ключ**: в `.env` (не коммитить!)
-- **Миграции**: `supabase/migrations/`
+---
 
 ## 📝 Правила разработки
 
@@ -165,28 +204,39 @@ cd bot && npm start
 - **Коммиты** → `git push origin main`
 - **Тестирование** → перед коммитом
 
+---
+
 ## 🐛 Известные баги
 
 1. **Бот не перезапущен** — код обновился, но бот на VPS старой версии
 2. **Битые пользователи** — есть записей с пустым `first_name` в статусе `pending_review`
 3. **Групповые чаты** — заглушка, не создаёт реальные чаты
 
+---
+
+## 📋 Чек-лист приёма
+
+- [ ] Клонировать репозиторий
+- [ ] Установить зависимости (`npm install`)
+- [ ] Настроить `.env` с ключами
+- [ ] Перезапустить бота на VPS
+- [ ] Почистить битых пользователей в БД
+- [ ] Протестировать `/start` в боте
+- [ ] Протестировать `/events`, `/profile`, `/diet`, `/preferences`
+- [ ] Проверить админку (логин/пароль)
+- [ ] Проверить метрики в админке
+
+---
+
 ## 📞 Контакты
 
 - **GitHub**: https://github.com/Artemewww/flint-live-in-moment
 - **Веб**: https://flint-live-in-moment.vercel.app
 - **Бот**: @campsflint_bot
-
-## 🎯 Приоритеты
-
-1. Перезапустить бота на VPS
-2. Почистить битых пользователей
-3. Протестировать все команды бота
-4. Реализовать реальные групповые чаты
-5. ИИ-планировщик
+- **Supabase**: https://supabase.com/dashboard/project/lnaouwhywnppwnhijots
 
 ---
 
-**Последнее обновление**: 14.07.2026, 21:40  
+**Последнее обновление**: 14.07.2026, 21:41  
 **Версия**: 1.0  
-**Статус**: Передача проекта
+**Статус**: Готов к передаче
