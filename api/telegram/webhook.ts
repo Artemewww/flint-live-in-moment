@@ -4,6 +4,9 @@ import { createClient } from '@supabase/supabase-js';
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
  *  - /start                → приветствие + кнопка Mini App + список открытых событий;
  *  - /start event_<id>      → карточка события с кнопкой «✅ Записаться»;
+ *  - /events, /help          → те же экраны, что кнопки меню «События»/«Помощь»;
+ *  - /profile                → баллы, реф-ссылка, приглашённые;
+ *  - /diet, /preferences     → тип питания и предпочтения (сохраняются в members);
  *  - callback reg_<id>      → регистрация в один тап с РЕАЛЬНЫМ telegram_id
  *                            (сохраняется в ту же БД, что и заявки с сайта).
  *
@@ -610,6 +613,46 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // /diet: сохранить тип питания в профиль (детали и аллергии — при записи на событие).
+      if (data.startsWith('dietset:')) {
+        const val = data.split(':')[1];
+        const diet = val === 'veg' ? 'vegetarian' : val === 'vegan' ? 'vegan' : 'all';
+        await supabase.from('members').update({ dietary: diet }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сохранено' });
+        const label = val === 'veg' ? '🥗 Вегетарианец' : val === 'vegan' ? '🌱 Веган' : '🍗 Всеядный';
+        await tg('editMessageText', {
+          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+          text: `🍽 Питание сохранено: <b>${label}</b>\n\nАллергии и детали уточним при записи на событие. Изменить — /diet`,
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      // /preferences: уровень активности → режим сна, копим в members.prefs (jsonb).
+      if (data.startsWith('prefset:')) {
+        const [, kind, val] = data.split(':');
+        const { data: m } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+        const prefs = { ...((m?.prefs as any) || {}), [kind === 'fit' ? 'fitness' : 'sleep']: val };
+        await supabase.from('members').update({ prefs }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сохранено' });
+        if (kind === 'fit') {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: '😴 <b>Твой режим?</b>\n\nПоможет планировать подъёмы и программу.',
+            reply_markup: kb([
+              [{ text: '🌅 Жаворонок (рано встаю)', callback_data: 'prefset:sleep:morning' }],
+              [{ text: '🦉 Сова (поздно ложусь)', callback_data: 'prefset:sleep:night' }],
+              [{ text: '⚖️ Средний режим', callback_data: 'prefset:sleep:normal' }],
+            ]),
+          });
+        } else {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: '✅ <b>Предпочтения сохранены</b>\n\nУчтём при подборе и планировании событий. Изменить — /preferences',
+          });
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -1680,8 +1723,9 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Постоянное меню внизу чата.
-        if (text === '📅 Ближайшие события') {
+        // Постоянное меню внизу чата. Слэш-команды из подсказок бота — алиасы тех же экранов.
+        const cmd = text.split(' ')[0].split('@')[0];
+        if (text === '📅 Ближайшие события' || cmd === '/events') {
           const { data: evs } = await supabase
             .from('events').select('id,title,date,status')
             .eq('status', 'open').order('date', { ascending: true }).limit(6);
@@ -1694,7 +1738,7 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📅 <b>Ближайшие события</b>', reply_markup: kb(rows) });
           return res.status(200).json({ ok: true });
         }
-        if (text === 'ℹ️ Помощь') {
+        if (text === 'ℹ️ Помощь' || cmd === '/help') {
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
             text:
@@ -1712,6 +1756,30 @@ export default async function handler(req: any, res: any) {
         }
         if (text === '👤 Мой статус') {
           await handleProfileCommand(msg, chatId, openBtn);
+          return res.status(200).json({ ok: true });
+        }
+        if (cmd === '/diet') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🍽 <b>Твоё питание</b>\n\nУчтём в меню и списке закупки. Аллергии и детали уточняем при записи на каждое событие.',
+            reply_markup: kb([
+              [{ text: '🍗 Всеядный', callback_data: 'dietset:all' }],
+              [{ text: '🥗 Вегетарианец', callback_data: 'dietset:veg' }],
+              [{ text: '🌱 Веган', callback_data: 'dietset:vegan' }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (cmd === '/preferences') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '⚙️ <b>Предпочтения</b>\n\nТвой уровень активности — подберём события по силам.',
+            reply_markup: kb([
+              [{ text: '🌱 Начинающий', callback_data: 'prefset:fit:beginner' }],
+              [{ text: '💪 Средний', callback_data: 'prefset:fit:medium' }],
+              [{ text: '🏆 Продвинутый', callback_data: 'prefset:fit:advanced' }],
+            ]),
+          });
           return res.status(200).json({ ok: true });
         }
         if (text === '🚗 Логистика и брони') {
