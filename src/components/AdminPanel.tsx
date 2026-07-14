@@ -1948,6 +1948,45 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <p className="text-xs font-bold uppercase">Разослать меню</p>
                         <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
                       </button>
+
+                      <button
+                        onClick={async () => {
+                          if (!window.confirm('Создать групповой чат для этого мероприятия?')) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const res = await fetch('/api/profile', {
+                              method: 'POST',
+                              headers: {
+                                'Content-Type': 'application/json',
+                                Authorization: `Bearer ${localStorage.getItem('flint_admin_token')}`,
+                              },
+                              body: JSON.stringify({
+                                action: 'create_event_chat',
+                                eventId: selectedEvent.id,
+                                chatId: 0, // Заглушка, в реальности нужно создавать чат через Telegram API
+                                chatType: 'group',
+                                inviteLink: 'https://t.me/+placeholder',
+                              }),
+                            });
+                            const data = await res.json();
+                            if (data.ok) {
+                              setActionMsg({ ok: true, text: 'Групповой чат создан (заглушка)' });
+                            } else {
+                              setActionMsg({ ok: false, text: data.error || 'Ошибка создания чата' });
+                            }
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка создания чата' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <MessageSquare className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Создать чат</p>
+                        <p className="text-[10px] text-white/40 mt-1">Группа для участников</p>
+                      </button>
                     </div>
 
                     {logiPanel === 'shopping' && selectedEvent.type !== 'intellectual' && (
