@@ -477,6 +477,137 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    // === GENERATE SCHEDULE ===
+    if (action === 'generate_schedule') {
+      const { eventId } = body;
+      if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+      // Получаем событие
+      const { data: event } = await supabase
+        .from('events')
+        .select('*')
+        .eq('id', eventId)
+        .maybeSingle();
+
+      if (!event) return res.status(404).json({ error: 'Event not found' });
+
+      // Получаем участников с их предпочтениями
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId)
+        .in('status', ['confirmed', 'pending']);
+
+      const ids = (regs || []).map((r: any) => r.telegram_id).filter(Boolean);
+      let participants: any[] = [];
+      if (ids.length > 0) {
+        const { data: members } = await supabase
+          .from('members')
+          .select('telegram_id,first_name,activity_preferences,sleep_schedule,fitness_level,medical_notes')
+          .in('telegram_id', ids);
+        participants = members || [];
+      }
+
+      // Получаем погоду (если есть координаты)
+      let weatherData = null;
+      if (event.coordinates?.lat && event.coordinates?.lng) {
+        try {
+          const weatherRes = await fetch(
+            `/api/weather?lat=${event.coordinates.lat}&lng=${event.coordinates.lng}&date=${event.date}`
+          );
+          if (weatherRes.ok) {
+            const weatherJson = await weatherRes.json();
+            if (weatherJson.ok) weatherData = weatherJson.weather;
+          }
+        } catch {}
+      }
+
+      // Пробуем ИИ-генерацию расписания
+      try {
+        const aiRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            task: 'generate_schedule',
+            event: {
+              title: event.title,
+              type: event.type,
+              date: event.date,
+              dateEnd: event.date_end,
+              program: event.program || [],
+            },
+            participants: participants.map((p) => ({
+              name: p.first_name,
+              activities: p.activity_preferences?.activities || [],
+              sleepSchedule: p.sleep_schedule || {},
+              fitnessLevel: p.fitness_level,
+              medicalNotes: p.medical_notes,
+            })),
+            weather: weatherData,
+          }),
+        });
+        if (aiRes.ok) {
+          const aiData = await aiRes.json();
+          if (aiData.schedule && Array.isArray(aiData.schedule)) {
+            // Сохраняем расписание в БД
+            await supabase.from('event_schedules').delete().eq('event_id', eventId);
+            for (const item of aiData.schedule) {
+              await supabase.from('event_schedules').insert({
+                event_id: eventId,
+                day: item.day || 1,
+                start_time: item.start_time || '10:00',
+                end_time: item.end_time || '11:00',
+                custom_title: item.title || item.custom_title || '',
+                location: item.location || '',
+                notes: item.notes || '',
+              });
+            }
+            return res.status(200).json({ ok: true, schedule: aiData.schedule });
+          }
+        }
+      } catch {}
+
+      // Фолбэк: простое расписание на основе программы события
+      const schedule: any[] = [];
+      const program = event.program || [];
+      let time = '10:00';
+      for (let i = 0; i < program.length; i++) {
+        const [h, m] = time.split(':').map(Number);
+        const start = new Date(0, 0, 0, h, m);
+        const end = new Date(start.getTime() + 60 * 60 * 1000); // +1 час
+        const endTime = `${String(end.getHours()).padStart(2, '0')}:${String(end.getMinutes()).padStart(2, '0')}`;
+
+        schedule.push({
+          day: 1,
+          start_time: time,
+          end_time: endTime,
+          custom_title: program[i],
+          location: '',
+          notes: '',
+        });
+
+        time = endTime;
+      }
+
+      // Сохраняем фолбэк-расписание
+      if (schedule.length > 0) {
+        await supabase.from('event_schedules').delete().eq('event_id', eventId);
+        await supabase.from('event_schedules').insert(
+          schedule.map((s) => ({
+            event_id: eventId,
+            day: s.day,
+            start_time: s.start_time,
+            end_time: s.end_time,
+            custom_title: s.custom_title,
+            location: s.location,
+            notes: s.notes,
+          }))
+        );
+      }
+
+      return res.status(200).json({ ok: true, schedule, fallback: true });
+    }
+
     return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
     return res.status(200).json({ ok: false, error: (err as Error).message });
