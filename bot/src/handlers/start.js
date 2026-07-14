@@ -30,6 +30,10 @@ async function handleStart(ctx) {
         [
           { text: '🍽 Анкета питания', callback_data: 'diet_start' },
           { text: '🎯 Предпочтения', callback_data: 'pref_start' }
+        ],
+        [
+          { text: '🎭 Роли', callback_data: 'roles_start' },
+          { text: '❓ Помощь', callback_data: 'help' }
         ]
       ]
     }

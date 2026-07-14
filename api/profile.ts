@@ -421,6 +421,62 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    // === GET EVENT ROLES ===
+    if (action === 'get_event_roles') {
+      const { eventId } = body;
+      if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+      const { data: roles } = await supabase
+        .from('event_roles')
+        .select('*')
+        .eq('event_id', eventId)
+        .order('role');
+
+      return res.status(200).json({ roles: roles || [] });
+    }
+
+    // === SAVE EVENT ROLE ===
+    if (action === 'save_event_role') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { eventId, role, customName, notes } = body;
+      if (!eventId || !role) return res.status(400).json({ error: 'Missing fields' });
+
+      const { error } = await supabase
+        .from('event_roles')
+        .upsert({
+          event_id: eventId,
+          telegram_id: user.id,
+          role,
+          custom_name: customName || '',
+          notes: notes || '',
+          confirmed: true,
+        }, { onConflict: 'event_id,telegram_id,role' });
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true });
+    }
+
+    // === DELETE EVENT ROLE ===
+    if (action === 'delete_event_role') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { eventId, role } = body;
+      if (!eventId || !role) return res.status(400).json({ error: 'Missing fields' });
+
+      const { error } = await supabase
+        .from('event_roles')
+        .delete()
+        .eq('event_id', eventId)
+        .eq('telegram_id', user.id)
+        .eq('role', role);
+
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true });
+    }
+
     return res.status(400).json({ error: 'Unknown action' });
   } catch (err) {
     return res.status(200).json({ ok: false, error: (err as Error).message });

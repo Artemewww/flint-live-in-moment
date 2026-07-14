@@ -7,6 +7,7 @@ const { handleProfile } = require('./handlers/profile');
 const { handleAdmin } = require('./handlers/admin');
 const { handleDietStart, handleDietaryChoice, handleFoodToggle, handleFoodCategory, handleFoodDone, handleAllergyToggle, handleAllergyDone, handleGuestsCount, handleGuestName, handleGuestDiet, handleGuestAge, handleDietCancel, getSession, STEPS } = require('./handlers/diet');
 const { handlePreferencesStart, handleActivityToggle, handleActivitiesDone, handleFitnessChoice, handleMedicalNotes, handleSleepChoice, handlePreferencesCancel, getSession: getPrefSession, STEPS: PREF_STEPS } = require('./handlers/preferences');
+const { handleRolesStart, handleRoleToggle, handleRoleSave, handleRoleCancel, getSession: getRoleSession } = require('./handlers/roles');
 const { setupNotifications } = require('./notifications');
 
 // Инициализация бота
@@ -103,6 +104,19 @@ bot.callbackQuery(/^menu_(\d+)$/, async (ctx) => {
     await ctx.editMessageText('❌ Ошибка загрузки меню');
   }
 });
+
+// Роли участников
+bot.callbackQuery('roles_start', async (ctx) => {
+  // TODO: получить eventId из сессии или запросить у пользователя
+  // Пока используем заглушку
+  await ctx.editMessageText('🎭 Выбор ролей\n\nВыбери мероприятие, для которого хочешь выбрать роли.');
+});
+bot.callbackQuery(/^role_toggle_(.+)$/, async (ctx) => {
+  const match = ctx.callbackQuery.data.match(/^role_toggle_(.+)$/);
+  if (match) await handleRoleToggle(ctx, match[1]);
+});
+bot.callbackQuery('role_save', handleRoleSave);
+bot.callbackQuery('role_cancel', handleRoleCancel);
 
 // Анкета предпочтений
 bot.callbackQuery('pref_start', handlePreferencesStart);

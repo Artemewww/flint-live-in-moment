@@ -110,3 +110,38 @@ END $$;
 COMMENT ON TABLE event_schedules IS 'Расписание мероприятия по дням';
 COMMENT ON COLUMN event_schedules.activity_id IS 'Ссылка на активность из библиотеки';
 COMMENT ON COLUMN event_schedules.custom_title IS 'Если нет activity_id — произвольное название';
+
+-- 7. Роли участников на мероприятии
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS event_roles (
+    id              bigserial PRIMARY KEY,
+    event_id        text NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    telegram_id     bigint NOT NULL,
+    role            text NOT NULL, -- 'driver' | 'cook' | 'first_aid' | 'photographer' | 'entertainment' | 'logistics' | 'cleaner' | 'custom'
+    custom_name     text DEFAULT '',
+    confirmed       boolean DEFAULT false,
+    notes           text DEFAULT '',
+    created_at      timestamptz DEFAULT now(),
+    UNIQUE (event_id, telegram_id, role)
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE event_roles IS 'Роли участников на конкретном мероприятии';
+COMMENT ON COLUMN event_roles.role IS 'Тип роли: водитель, повар, медик, фотограф, аниматор, логист, уборщик, custom';
+COMMENT ON COLUMN event_roles.confirmed IS 'Подтвердил ли участник роль';
+
+-- 8. Библиотека стандартных ролей
+DO $$ BEGIN
+  CREATE TABLE IF NOT EXISTS role_templates (
+    id              bigserial PRIMARY KEY,
+    title           text NOT NULL,
+    description     text DEFAULT '',
+    icon            text DEFAULT '📌',
+    skills_required jsonb DEFAULT '[]'::jsonb,
+    created_at      timestamptz DEFAULT now()
+  );
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
+COMMENT ON TABLE role_templates IS 'Шаблоны ролей для мероприятий';
