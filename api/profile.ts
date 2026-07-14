@@ -180,6 +180,40 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const action = body.action;
 
+    // === GATE (проверка входа в клуб через Mini App) ===
+    if (action === 'gate') {
+      const { ref } = body;
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ valid: false, error: 'Unverified' });
+
+      const { data: member } = await supabase
+        .from('members')
+        .select('status, first_name, username')
+        .eq('telegram_id', user.id)
+        .maybeSingle();
+
+      if (!member) return res.status(200).json({ valid: false });
+
+      let inviterName: string | undefined;
+      if (ref) {
+        const { data: inv } = await supabase
+          .from('members')
+          .select('first_name')
+          .eq('ref_code', ref)
+          .maybeSingle();
+        if (inv) inviterName = inv.first_name;
+      }
+
+      return res.status(200).json({
+        valid: true,
+        status: member.status,
+        firstName: member.first_name,
+        username: member.username,
+        inviterName,
+        gatePassed: member.status === 'approved',
+      });
+    }
+
     // === ONBOARD ===
     if (action === 'onboard') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
@@ -475,6 +509,34 @@ export default async function handler(req: any, res: any) {
 
       if (error) return res.status(500).json({ error: error.message });
       return res.status(200).json({ ok: true });
+    }
+
+    // === MY REGISTRATIONS (Мои заявки из Mini App) ===
+    if (action === 'my_registrations') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select(`
+          id,
+          event_id,
+          status,
+          payment_status,
+          payment_amount,
+          attended,
+          guest_count,
+          children_count,
+          transport_details,
+          has_transport,
+          transport_seats,
+          registered_at,
+          events!inner(title, date, location, status as event_status, type)
+        `)
+        .eq('telegram_id', user.id)
+        .order('registered_at', { ascending: false });
+
+      return res.status(200).json({ registrations: regs || [] });
     }
 
     // === GET PROFILE ===
