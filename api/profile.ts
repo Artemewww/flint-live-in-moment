@@ -2,10 +2,15 @@
  * Единый эндпоинт профиля участника (экономия функций Vercel).
  * POST /api/profile
  *
- * action='onboard'  → онбординг профиля развития (требует ADMIN_TOKEN)
- * action='diet'     → сохранить профиль питания (через initData)
- * action='menu'     → получить меню события
- * action='generate' → ИИ-генерация меню для события
+ * action='onboard'   → онбординг профиля развития (требует ADMIN_TOKEN)
+ * action='diet'      → сохранить профиль питания (через initData)
+ * action='save_diet' → сохранить профиль питания + гости + кастомные продукты
+ * action='suggest'   → чек-лист продуктов на выбор
+ * action='menu'      → получить меню события
+ * action='generate'  → ИИ-генерация меню для события
+ * action='receipt'   → распознать чек и разложить расходы
+ * action='recipe'    → сгенерировать рецепт для блюда
+ * action='rate'      → оценить блюдо
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -35,6 +40,19 @@ function verifyInitData(initData: string): { id: number; username?: string; firs
   }
 }
 
+// Базовый чек-лист продуктов по категориям
+const FOOD_CATEGORIES = [
+  { name: 'Мясо и птица', items: ['Курица', 'Говядина', 'Свинина', 'Индейка', 'Фарш', 'Колбаса/сосиски', 'Бекон', 'Печень'] },
+  { name: 'Рыба и морепродукты', items: ['Лосось/семга', 'Тунец', 'Треска', 'Скумбрия', 'Креветки', 'Мидии'] },
+  { name: 'Овощи и зелень', items: ['Картофель', 'Морковь', 'Лук репчатый', 'Чеснок', 'Помидоры', 'Огурцы', 'Перец болгарский', 'Капуста', 'Кабачки', 'Баклажаны', 'Зелень', 'Салат', 'Шпинат'] },
+  { name: 'Фрукты и ягоды', items: ['Яблоки', 'Бананы', 'Апельсины/мандарины', 'Груши', 'Виноград', 'Лимоны', 'Авокадо', 'Ягоды (заморозка)', 'Сухофрукты'] },
+  { name: 'Крупы и макароны', items: ['Гречка', 'Рис', 'Макароны/паста', 'Овсянка', 'Перловка', 'Кускус/булгур', 'Чечевица'] },
+  { name: 'Молочные продукты', items: ['Молоко', 'Сметана', 'Творог', 'Сыр твердый', 'Сыр плавленый', 'Масло сливочное', 'Йогурт', 'Яйца'] },
+  { name: 'Консервы и соусы', items: ['Тушенка', 'Рыбные консервы', 'Кукуруза консерв.', 'Оливки/маслины', 'Кетчуп', 'Майонез', 'Горчица', 'Соевый соус', 'Томатная паста'] },
+  { name: 'Бакалея', items: ['Хлеб/лаваш', 'Мука', 'Сахар', 'Соль', 'Масло растительное', 'Специи', 'Мед', 'Орехи', 'Шоколад/сладости', 'Чай', 'Кофе'] },
+  { name: 'Напитки', items: ['Вода без газа', 'Компот/морс', 'Сок', 'Квас'] },
+];
+
 /** Генерация меню на основе профилей питания участников */
 async function generateMenu(eventId: string): Promise<any[]> {
   const { data: registrations } = await supabase
@@ -45,15 +63,17 @@ async function generateMenu(eventId: string): Promise<any[]> {
 
   const ids = (registrations || []).map((r: any) => r.telegram_id).filter(Boolean);
   const profiles: any[] = [];
+  let guestCount = 0;
+  let guestAllergies: string[] = [];
 
   if (ids.length > 0) {
     const { data: members } = await supabase
       .from('members')
-      .select('telegram_id,first_name,dietary,allergies,liked_foods,disliked_foods,cooking_skills,meal_preferences')
+      .select('telegram_id,first_name,dietary,allergies,liked_foods,disliked_foods,cooking_skills,meal_preferences,guests')
       .in('telegram_id', ids);
 
     for (const m of members || []) {
-      profiles.push({
+      const profile = {
         name: m.first_name || 'Участник',
         dietary: m.dietary || 'omnivore',
         allergies: m.allergies || [],
@@ -61,7 +81,26 @@ async function generateMenu(eventId: string): Promise<any[]> {
         disliked: m.disliked_foods || [],
         cookingSkills: m.cooking_skills || '',
         meals: m.meal_preferences || {},
-      });
+      };
+      profiles.push(profile);
+
+      // Учитываем гостей
+      const guests = m.guests || [];
+      if (Array.isArray(guests)) {
+        guestCount += guests.length;
+        for (const g of guests) {
+          profiles.push({
+            name: g.name || 'Гость',
+            dietary: g.dietary || profile.dietary,
+            allergies: g.allergies || [],
+            liked: g.likedFoods || profile.liked,
+            disliked: g.dislikedFoods || [],
+            cookingSkills: '',
+            meals: profile.meals,
+          });
+          if (g.allergies) guestAllergies.push(...g.allergies);
+        }
+      }
     }
   }
 
@@ -77,14 +116,39 @@ async function generateMenu(eventId: string): Promise<any[]> {
       ) + 1)
     : 1;
 
+  const peopleCount = profiles.length || 10;
+  const dietaryCount = {
+    vegan: profiles.filter((p) => p.dietary === 'vegan').length,
+    vegetarian: profiles.filter((p) => p.dietary === 'vegetarian').length,
+  };
+  const allAllergies = [...new Set(profiles.flatMap((p) => p.allergies))];
+
+  // Пробуем ИИ-генерацию
+  try {
+    const aiRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        task: 'generate_menu',
+        event: { title: event?.title, days, type: event?.type },
+        profiles,
+        mealSummary: { total: peopleCount, vegan: dietaryCount.vegan, vegetarian: dietaryCount.vegetarian, allergies: allAllergies },
+      }),
+    });
+    if (aiRes.ok) {
+      const aiData = await aiRes.json();
+      if (aiData.menu && Array.isArray(aiData.menu)) return aiData.menu;
+    }
+  } catch {}
+
   // Фолбэк-меню
   const menu: any[] = [];
   const mealTypes = ['breakfast', 'lunch', 'dinner', 'snack'];
   const fallbackDishes: Record<string, string[]> = {
-    breakfast: ['Каша овсяная', 'Бутерброды', 'Яичница', 'Сырники'],
-    lunch: ['Суп', 'Гречка с овощами', 'Паста', 'Рис с котлетой'],
-    dinner: ['Запеканка', 'Овощное рагу', 'Рыба на углях', 'Мясо гриль'],
-    snack: ['Фрукты', 'Орехи', 'Печенье', 'Чай'],
+    breakfast: ['Каша овсяная с ягодами', 'Бутерброды с авокадо', 'Яичница с овощами', 'Сырники со сметаной'],
+    lunch: ['Суп куриный с лапшой', 'Гречка с тушеными овощами', 'Паста болоньезе', 'Рис с рыбой'],
+    dinner: ['Запеканка картофельная', 'Овощное рагу с мясом', 'Рыба на углях с лимоном', 'Шашлык с лавашом'],
+    snack: ['Фруктовая нарезка', 'Ореховая смесь', 'Печенье овсяное', 'Чай с мятой'],
   };
 
   for (let d = 1; d <= days; d++) {
@@ -97,7 +161,7 @@ async function generateMenu(eventId: string): Promise<any[]> {
         mealType: mt,
         dish,
         ingredients: [],
-        cookingNotes: `Приготовить на ${profiles.length || 10} человек`,
+        cookingNotes: dietaryCount.vegan > 0 ? `Учесть веган-опцию (${dietaryCount.vegan} чел)` : `Приготовить на ${peopleCount} человек`,
       });
     }
   }
@@ -116,7 +180,7 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const action = body.action;
 
-    // === ONBOARD (профиль развития, требует ADMIN_TOKEN) ===
+    // === ONBOARD ===
     if (action === 'onboard') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
       if (!ADMIN_SECRET) return res.status(200).json({ error: 'ADMIN_TOKEN не настроен' });
@@ -147,7 +211,12 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
-    // === GET MENU ===
+    // === SUGGEST (чек-лист продуктов) ===
+    if (action === 'suggest') {
+      return res.status(200).json({ categories: FOOD_CATEGORIES });
+    }
+
+    // === MENU ===
     if (action === 'menu') {
       const { eventId } = body;
       if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
@@ -187,8 +256,8 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, menu });
     }
 
-    // === SAVE DIET ===
-    if (action === 'diet') {
+    // === DIET (старый) / SAVE_DIET (новый с гостями) ===
+    if (action === 'diet' || action === 'save_diet') {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
 
@@ -200,12 +269,120 @@ export default async function handler(req: any, res: any) {
       if (body.cookingSkills) updateData.cooking_skills = body.cookingSkills;
       if (body.mealPreferences !== undefined) updateData.meal_preferences = JSON.stringify(body.mealPreferences);
 
-      if (Object.keys(updateData).length === 0) return res.status(200).json({ ok: false, error: 'Nothing to update' });
+      // Кастомные продукты, вписанные участником — запоминаем
+      if (body.customFoods !== undefined) {
+        const existing = await supabase.from('members').select('liked_foods').eq('telegram_id', user.id).maybeSingle();
+        const current = (existing as any)?.liked_foods || [];
+        const merged = [...new Set([...current, ...body.customFoods])];
+        updateData.liked_foods = JSON.stringify(merged);
+      }
 
-      const { error } = await supabase.from('members').update(updateData).eq('telegram_id', user.id);
-      if (error) return res.status(200).json({ ok: false, error: error.message });
+      if (Object.keys(updateData).length === 0 && !body.guests) {
+        return res.status(200).json({ ok: false, error: 'Nothing to update' });
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        const { error } = await supabase.from('members').update(updateData).eq('telegram_id', user.id);
+        if (error) return res.status(200).json({ ok: false, error: error.message });
+      }
+
+      // Сохраняем гостей (дети, муж/жена без Telegram)
+      if (body.guests && Array.isArray(body.guests)) {
+        await supabase.from('members').update({
+          guests: JSON.stringify(body.guests.map((g: any) => ({
+            name: g.name,
+            dietary: g.dietary || 'omnivore',
+            allergies: g.allergies || [],
+            likedFoods: g.likedFoods || [],
+            isChild: !!g.isChild,
+          }))),
+        }).eq('telegram_id', user.id);
+      }
 
       return res.status(200).json({ ok: true, message: 'Профиль питания сохранён' });
+    }
+
+    // === RECEIPT (распознавание чека) ===
+    if (action === 'receipt') {
+      const { eventId, imageUrl } = body;
+      if (!eventId || !imageUrl) return res.status(400).json({ error: 'Missing eventId or imageUrl' });
+
+      let items: { name: string; price: number }[] = [];
+      try {
+        const aiRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task: 'parse_receipt', imageUrl }),
+        });
+        const aiData = await aiRes.json();
+        if (aiData.items && Array.isArray(aiData.items)) items = aiData.items;
+      } catch {}
+
+      if (items.length === 0) {
+        return res.status(200).json({ ok: false, manual: true, message: 'Не удалось распознать чек. Введите позиции вручную.' });
+      }
+
+      const total = items.reduce((s, i) => s + i.price, 0);
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('telegram_id')
+        .eq('event_id', eventId)
+        .in('status', ['confirmed', 'pending']);
+
+      const peopleCount = Math.max(1, (regs || []).length);
+      const perPerson = Math.ceil(total / peopleCount);
+
+      const { data: ev } = await supabase.from('events').select('logistics').eq('id', eventId).maybeSingle();
+      const logistics = (ev as any)?.logistics || {};
+      const expenses: any[] = logistics.expenses || [];
+      expenses.push({ date: new Date().toISOString(), items, total, perPerson, receiptUrl: imageUrl });
+      await supabase.from('events').update({ logistics: { ...logistics, expenses } }).eq('id', eventId);
+
+      return res.status(200).json({
+        ok: true, items, total, peopleCount, perPerson,
+        message: `Чек на ${total} ₽. По ${perPerson} ₽ с человека (${peopleCount} чел).`,
+      });
+    }
+
+    // === RECIPE (рецепт к блюду) ===
+    if (action === 'recipe') {
+      const { dish } = body;
+      if (!dish) return res.status(400).json({ error: 'Missing dish' });
+
+      let recipe = '';
+      try {
+        const aiRes = await fetch(`${process.env.VERCEL_URL || 'http://localhost:3000'}/api/ai`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ task: 'generate_recipe', dish }),
+        });
+        const aiData = await aiRes.json();
+        if (aiData.recipe) recipe = aiData.recipe;
+      } catch {}
+
+      if (!recipe) recipe = `Рецепт для "${dish}" временно недоступен. Попробуйте позже.`;
+      return res.status(200).json({ ok: true, dish, recipe });
+    }
+
+    // === RATE (оценка блюда) ===
+    if (action === 'rate') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const { eventId, dish, rating } = body;
+      if (!eventId || !dish || !rating) return res.status(400).json({ error: 'Missing fields' });
+
+      const { error } = await supabase.from('menu_votes').upsert({
+        event_id: eventId,
+        telegram_id: user.id,
+        day: body.day || 1,
+        meal_type: body.mealType || 'lunch',
+        dish,
+        vote: rating >= 4 ? 1 : rating <= 2 ? -1 : 0,
+      }, { onConflict: 'event_id,telegram_id,day,meal_type,dish' });
+
+      if (error) return res.status(200).json({ ok: false, error: error.message });
+      return res.status(200).json({ ok: true, message: 'Оценка сохранена' });
     }
 
     return res.status(400).json({ error: 'Unknown action' });
