@@ -104,7 +104,7 @@ export default async function handler(req: any, res: any) {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
-  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, errors: [] as string[] };
+  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, errors: [] as string[] };
 
   try {
     // ── 1+2. Предстоящие события: 7 / 3 / 1 день ──────────────────────────
@@ -154,6 +154,37 @@ export default async function handler(req: any, res: any) {
               { inline_keyboard: [[{ text: '💳 Оплатить участие', callback_data: `pay_${(ev as any).id}` }]] }
             );
             if (sent) report.paymentReminders++;
+          }
+        }
+
+        // За 1 день до события — дополнительно рассылаем меню, если оно есть.
+        if (h.days === 1) {
+          const { data: menu } = await supabase
+            .from('event_menus')
+            .select('day,meal_type,dish,cooking_notes')
+            .eq('event_id', (ev as any).id)
+            .order('day')
+            .order('meal_type');
+
+          if (menu && menu.length > 0) {
+            const days = [...new Set(menu.map((m: any) => m.day))].sort();
+            let msg = `🍽 <b>Меню на завтра: ${esc((ev as any).title)}</b>\n\n`;
+            const mealLabels: Record<string, string> = { breakfast: 'Завтрак', lunch: 'Обед', dinner: 'Ужин', snack: 'Перекус' };
+            for (const day of days) {
+              msg += `<b>День ${day}</b>\n`;
+              const dayItems = menu.filter((m: any) => m.day === day);
+              for (const item of dayItems) {
+                msg += `${mealLabels[item.meal_type] || item.meal_type}: ${esc(item.dish)}\n`;
+                if (item.cooking_notes) msg += `   ${esc(item.cooking_notes)}\n`;
+              }
+              msg += '\n';
+            }
+
+            for (const r of realIds(regs || [])) {
+              const chatId = Number(r.telegram_id);
+              const sent = await send(chatId, msg);
+              if (sent) report.menuBroadcasts++;
+            }
           }
         }
       }
