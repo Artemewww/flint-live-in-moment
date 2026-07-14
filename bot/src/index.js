@@ -64,6 +64,13 @@ bot.callbackQuery('profile', handleProfile);
 bot.callbackQuery('register_', handleRegistration);
 bot.callbackQuery('admin', handleAdmin);
 
+// Мои события (сброс контекста)
+bot.callbackQuery('my_events', async (ctx) => {
+  const { clearSession } = require('./handlers/diet');
+  clearSession(ctx.from.id);
+  await ctx.editMessageText('📅 <b>Мои события</b>\n\nФункция в разработке. Скоро здесь будут твои регистрации.', { parse_mode: 'HTML' });
+});
+
 // Показ меню события
 bot.callbackQuery(/^menu_(\d+)$/, async (ctx) => {
   const match = ctx.callbackQuery.data.match(/^menu_(\d+)$/);
