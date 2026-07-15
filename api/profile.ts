@@ -508,7 +508,7 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({
         ok: true, items, total, peopleCount, perPerson,
-        message: `Чек на ${total} ₽. По ${perPerson} ₽ с человека (${peopleCount} чел).`,
+        message: `Чек на ${total} Br. По ${perPerson} Br с человека (${peopleCount} чел).`,
       });
     }
 

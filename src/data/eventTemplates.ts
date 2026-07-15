@@ -29,7 +29,7 @@ export const EVENT_TEMPLATES: EventTemplate[] = [
     time: '19:00',
     timeEnd: '23:00',
     maxParticipants: 12,
-    priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 ₽/чел',
+    priceLabel: 'Аренда делится на всех • при 10+ ≈ 50 Br/чел',
     priceAmount: 500,
     entryThreshold: 'Только мужчины • 100% трезвость • личный веник',
     entryType: 'male',

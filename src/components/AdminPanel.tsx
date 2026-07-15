@@ -228,7 +228,7 @@ function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) =
       <input value={v.assemblyPoint || ''} onChange={(e) => set('assemblyPoint', e.target.value)} placeholder="Точка сбора / выезда (напр. м. Каменная Горка)" className={inp} />
       <div className="grid grid-cols-2 gap-2">
         <input value={v.departureTime || ''} onChange={(e) => set('departureTime', e.target.value)} placeholder="Время выезда (18:30)" className={inp} />
-        <input type="number" value={v.fuelCost || ''} onChange={(e) => set('fuelCost', parseInt(e.target.value) || 0)} placeholder="Бензин ₽/чел" className={inp} />
+        <input type="number" value={v.fuelCost || ''} onChange={(e) => set('fuelCost', parseInt(e.target.value) || 0)} placeholder="Бензин Br/чел" className={inp} />
       </div>
       <input value={v.returnInfo || ''} onChange={(e) => set('returnInfo', e.target.value)} placeholder="Обратная дорога (напр. ~22:00 обратно к метро)" className={inp} />
       <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
@@ -719,7 +719,7 @@ function ExpenseSplitter({ registrations }: { registrations: any[] }) {
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
       <h4 className="text-xs font-bold uppercase flex items-center gap-2">
-        <DollarSign className="w-4 h-4 text-brand" /> Делёж расходов · {people.length} чел · доля {Math.round(share)} ₽
+        <DollarSign className="w-4 h-4 text-brand" /> Делёж расходов · {people.length} чел · доля {Math.round(share)} Br
       </h4>
       {expenses.length === 0 && (
         <p className="text-[11px] text-white/40 italic">Добавь общие покупки (мясо, угли, аренда) — кто платил и сколько. Поделим поровну и покажем, кто кому переводит.</p>
@@ -734,7 +734,7 @@ function ExpenseSplitter({ registrations }: { registrations: any[] }) {
           </div>
           <div className="flex gap-2">
             <input type="text" value={e.label} onChange={(ev) => upd(i, { label: ev.target.value })} placeholder="За что (мясо, угли…)" className="flex-1 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs placeholder:text-white/30" />
-            <input type="number" value={e.amount || ''} onChange={(ev) => upd(i, { amount: parseInt(ev.target.value) || 0 })} placeholder="₽" className="w-24 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs placeholder:text-white/30" />
+            <input type="number" value={e.amount || ''} onChange={(ev) => upd(i, { amount: parseInt(ev.target.value) || 0 })} placeholder="Br" className="w-24 bg-white/5 border border-white/10 rounded-lg p-2 text-white text-xs placeholder:text-white/30" />
           </div>
         </div>
       ))}
@@ -743,11 +743,11 @@ function ExpenseSplitter({ registrations }: { registrations: any[] }) {
       </button>
       {transfers.length > 0 && (
         <div className="mt-2 pt-3 border-t border-white/10 space-y-2">
-          <p className="text-[10px] text-white/40 uppercase font-mono">Итого {total} ₽ · доля {Math.round(share)} ₽ · кто кому:</p>
+          <p className="text-[10px] text-white/40 uppercase font-mono">Итого {total} Br · доля {Math.round(share)} Br · кто кому:</p>
           {transfers.map((t, i) => (
             <div key={i} className="flex items-center justify-between bg-brand/5 border border-brand/15 rounded-lg px-3 py-2 text-xs">
               <span><b>{t.from}</b> → {t.to}</span>
-              <span className="text-brand font-black">{t.amount} ₽</span>
+              <span className="text-brand font-black">{t.amount} Br</span>
             </div>
           ))}
         </div>
@@ -1489,7 +1489,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           <span className="text-[10px] text-white/60 uppercase font-mono">Оплата</span>
                         </div>
                         <p className="text-2xl font-black">{eventStats.payments}</p>
-                        <p className="text-xs text-white/40">{eventStats.totalAmount} ₽ · показать оплативших</p>
+                        <p className="text-xs text-white/40">{eventStats.totalAmount} Br · показать оплативших</p>
                       </button>
 
                       <button
@@ -2116,7 +2116,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                       {ride.from_point || '—'} · {ride.depart_text || '—'}
                                     </p>
                                     <p className="text-[10px] text-white/40">
-                                      {ride.fuel_cost ? `⛽ ${ride.fuel_cost} ₽/чел` : '⛽ бесплатно'}
+                                      {ride.fuel_cost ? `⛽ ${ride.fuel_cost} Br/чел` : '⛽ бесплатно'}
                                     </p>
                                   </div>
                                   <div className="text-right shrink-0">
@@ -2765,9 +2765,9 @@ function EditEventModal({ event, onClose, onSave }: {
     if (formData.priceType === 'free') return 'Взнос отсутствует';
     if (formData.priceType === 'paid' && formData.priceAmount > 0) {
       const per = formData.maxParticipants
-        ? ` • при ${formData.maxParticipants} ≈ ${Math.round(formData.priceAmount / formData.maxParticipants)} ₽/чел`
+        ? ` • при ${formData.maxParticipants} ≈ ${Math.round(formData.priceAmount / formData.maxParticipants)} Br/чел`
         : '';
-      return `Аренда ${formData.priceAmount} ₽ — делится поровну на всех${per}`;
+      return `Аренда ${formData.priceAmount} Br — делится поровну на всех${per}`;
     }
     return 'Взнос отсутствует';
   };
@@ -3035,7 +3035,7 @@ function EditEventModal({ event, onClose, onSave }: {
           {formData.priceType === 'paid' && (
             <div>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Сумма аренды (₽) — делится поровну на всех
+                Сумма аренды (Br) — делится поровну на всех
               </label>
               <input
                 type="number"
@@ -3252,7 +3252,7 @@ function AddEventModal({ onClose, onAdd }: {
       telegramBotUrl: 'https://t.me/campsflint_bot',
       priceType: formData.priceType,
       priceLabel: formData.priceType === 'paid' && formData.priceAmount > 0
-        ? `Аренда ${formData.priceAmount} ₽ — делится поровну на всех`
+        ? `Аренда ${formData.priceAmount} Br — делится поровну на всех`
         : 'Взнос отсутствует',
       priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
@@ -3339,7 +3339,7 @@ function AddEventModal({ onClose, onAdd }: {
               </div>
               <div className="flex flex-wrap gap-1 mb-2">
                 <span className={`text-[9px] px-2 py-0.5 rounded font-mono ${formData.priceType === 'paid' ? 'bg-brand/15 text-brand' : 'bg-white/10 text-white/50'}`}>
-                  {formData.priceType === 'paid' ? `💰 ${formData.priceAmount} ₽` : '🆓 Бесплатно'}
+                  {formData.priceType === 'paid' ? `💰 ${formData.priceAmount} Br` : '🆓 Бесплатно'}
                 </span>
                 <span className="text-[9px] bg-white/10 text-white/50 px-2 py-0.5 rounded font-mono">
                   {formData.type === 'male' ? '♂ Мужское' : formData.type === 'mixed' ? '👥 Смешанное' : formData.type === 'intellectual' ? '🧠 Интеллект' : '🏕 Активный'}
@@ -3385,7 +3385,7 @@ function AddEventModal({ onClose, onAdd }: {
                     <option value="paid">💰 Платно</option>
                   </select>
                   {formData.priceType === 'paid' && (
-                    <input type="number" placeholder="Сумма аренды (₽)" value={formData.priceAmount || ''} onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})} className={inp} />
+                    <input type="number" placeholder="Сумма аренды (Br)" value={formData.priceAmount || ''} onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})} className={inp} />
                   )}
                 </div>
                 {formData.priceType === 'free' && <p className="text-[9px] text-white/40 font-mono -mt-1">Событие бесплатное для участников.</p>}

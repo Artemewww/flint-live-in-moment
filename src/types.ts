@@ -210,13 +210,13 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   const perNow = Math.ceil(total / Math.max(current, 1));
   const perGoal = Math.ceil(total / threshold);
   const factors: string[] = [
-    `Аренда ${total} ₽ делится поровну на всех`,
-    `Сейчас ${current} чел → ≈ ${perNow} ₽/чел`,
+    `Аренда ${total} Br делится поровну на всех`,
+    `Сейчас ${current} чел → ≈ ${perNow} Br/чел`,
   ];
   if (current < threshold) {
-    factors.push(`При ${threshold} участниках — ≈ ${perGoal} ₽/чел. Зови друзей — станет дешевле!`);
+    factors.push(`При ${threshold} участниках — ≈ ${perGoal} Br/чел. Зови друзей — станет дешевле!`);
   } else {
     factors.push(`Порог ${threshold} набран — заезд подтверждён ✅`);
   }
-  return { price: perNow, label: `≈ ${perNow} ₽/чел`, factors };
+  return { price: perNow, label: `≈ ${perNow} Br/чел`, factors };
 }

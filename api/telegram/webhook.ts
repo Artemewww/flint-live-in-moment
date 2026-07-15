@@ -658,7 +658,7 @@ async function clearSession(tgId: number) {
 function rideLine(r: any, eventTitle?: string): string {
   const taken = r.seats_taken || 0;
   const free = Math.max(0, (r.seats_total || 0) - taken);
-  const fuel = r.fuel_cost ? `⛽ ${r.fuel_cost} ₽/чел` : '⛽ бесплатно';
+  const fuel = r.fuel_cost ? `⛽ ${r.fuel_cost} Br/чел` : '⛽ бесплатно';
   return (eventTitle ? `📅 <b>${esc(eventTitle)}</b>\n\n` : '') +
     `🚗 <b>${esc(r.driver_name || 'Водитель')}</b>\n` +
     `📍 Выезд: ${esc(r.from_point || '—')}\n` +
@@ -1538,8 +1538,8 @@ export default async function handler(req: any, res: any) {
           text: '⛽ Взнос на бензин с человека?',
           reply_markup: kb([[
             { text: 'Без взноса', callback_data: 'rfuel_0' },
-            { text: '5 ₽', callback_data: 'rfuel_5' },
-            { text: '10 ₽', callback_data: 'rfuel_10' },
+            { text: '5 Br', callback_data: 'rfuel_5' },
+            { text: '10 Br', callback_data: 'rfuel_10' },
           ]]),
         });
         return res.status(200).json({ ok: true });
@@ -1568,7 +1568,7 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: existing ? 'Поездка обновлена!' : 'Поездка добавлена!' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ ${existing ? 'Твоя поездка обновлена' : 'Готово! Твоя поездка добавлена'}:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' ₽/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
+          text: `✅ ${existing ? 'Твоя поездка обновлена' : 'Готово! Твоя поездка добавлена'}:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' Br/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
           reply_markup: kb([[openBtn]]),
         });
         // Уведомить тех, кто искал попутку.

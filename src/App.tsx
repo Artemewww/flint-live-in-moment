@@ -363,14 +363,51 @@ export default function App() {
     }
   };
 
+  // Единые CRUD-обработчики событий для админки. Раньше эта ветка (вход админа
+  // через гейт) меняла ТОЛЬКО локальный стейт и не писала в БД — событие
+  // «сохранялось» на экране, но пропадало после обновления и не доходило до
+  // бота. Теперь оба места отрисовки AdminPanel пишут в API, проверяют ответ и
+  // рефетчат список с сервера.
+  const adminSaveEvent = async (ev: CommunityEvent, isNew: boolean) => {
+    try {
+      const res = await fetch('/api/admin/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(ev),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({} as any));
+        alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
+        return;
+      }
+      setEvents((prev) => (isNew ? [...prev, ev] : prev.map((x) => (x.id === ev.id ? ev : x))));
+      window.dispatchEvent(new Event('flint:events-refetch'));
+    } catch (err) {
+      alert(`Ошибка сети при сохранении события: ${(err as Error).message}`);
+    }
+  };
+  const adminDeleteEvent = async (eventId: string) => {
+    try {
+      const res = await fetch(`/api/admin/events?eventId=${eventId}`, { method: 'DELETE' });
+      if (!res.ok) {
+        alert(`Не удалось удалить событие: HTTP ${res.status}`);
+        return;
+      }
+      setEvents((prev) => prev.filter((x) => x.id !== eventId));
+      window.dispatchEvent(new Event('flint:events-refetch'));
+    } catch (err) {
+      alert(`Ошибка сети при удалении события: ${(err as Error).message}`);
+    }
+  };
+
   // Админ должен попадать в панель, не проходя шлюз для гостей.
   if (gateEnabled && !gatePassed && showAdminPanel) {
     return (
       <AdminPanel
         events={events}
-        onUpdateEvent={(e) => setEvents((prev) => prev.map((x) => (x.id === e.id ? e : x)))}
-        onAddEvent={(e) => setEvents((prev) => [...prev, e])}
-        onDeleteEvent={(id) => setEvents((prev) => prev.filter((x) => x.id !== id))}
+        onUpdateEvent={(e) => adminSaveEvent(e, false)}
+        onAddEvent={(e) => adminSaveEvent(e, true)}
+        onDeleteEvent={(id) => adminDeleteEvent(id)}
         onClose={() => setShowAdminPanel(false)}
       />
     );
@@ -917,41 +954,9 @@ export default function App() {
       {showAdminPanel && (
         <AdminPanel
           events={events}
-          onUpdateEvent={async (updated) => {
-            try {
-              await fetch('/api/admin/events', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(updated)
-              });
-            } catch (err) {
-              console.error('API error, using local update:', err);
-            }
-            setEvents(prev => prev.map(e => e.id === updated.id ? updated : e));
-          }}
-          onAddEvent={async (newEvent) => {
-            try {
-              await fetch('/api/admin/events', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(newEvent)
-              });
-            } catch (err) {
-              console.error('API error, using local update:', err);
-            }
-            setEvents(prev => [...prev, newEvent]);
-          }}
-          onDeleteEvent={async (eventId) => {
-            try {
-              await fetch(`/api/admin/events?eventId=${eventId}`, {
-                method: 'DELETE',
-                headers: {}
-              });
-            } catch (err) {
-              console.error('API error, using local update:', err);
-            }
-            setEvents(prev => prev.filter(e => e.id !== eventId));
-          }}
+          onUpdateEvent={(updated) => adminSaveEvent(updated, false)}
+          onAddEvent={(newEvent) => adminSaveEvent(newEvent, true)}
+          onDeleteEvent={(eventId) => adminDeleteEvent(eventId)}
           onClose={() => setShowAdminPanel(false)}
         />
       )}
