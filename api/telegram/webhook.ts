@@ -42,6 +42,14 @@ async function getEvent(id: string) {
   return data;
 }
 
+/** Есть ли у участника активная запись на событие. */
+async function hasActiveReg(eventId: string, tgId: number): Promise<boolean> {
+  const { data } = await supabase
+    .from('registrations').select('id')
+    .eq('event_id', eventId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+  return !!data;
+}
+
 const DOW_RU = ['воскресенье', 'понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота'];
 const MON_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
@@ -353,8 +361,11 @@ async function sendPreferencesPrompt(chatId: number) {
  * интеллектуальному клубу не нужна логистика, бесплатному — оплата,
  * событию без координат — маршрут.
  */
-function eventCardButtons(ev: any, openBtn: any): any[] {
-  const rows: any[] = [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
+function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
+  // Уже записанному не предлагаем записаться ещё раз — показываем статус и отказ.
+  const rows: any[] = registered
+    ? [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]]
+    : [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
@@ -1189,7 +1200,14 @@ export default async function handler(req: any, res: any) {
         const ev = await getEvent(data.slice(3));
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         if (!ev) return res.status(200).json({ ok: true });
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn)) });
+        const registered = await hasActiveReg(ev.id, tgId);
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
+        return res.status(200).json({ ok: true });
+      }
+
+      // «✅ Ты записан» — просто подсказка, ничего не ломаем.
+      if (data.startsWith('myreg_')) {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ты в списке! Отказаться — кнопкой ниже.' });
         return res.status(200).json({ ok: true });
       }
 
@@ -1526,11 +1544,8 @@ export default async function handler(req: any, res: any) {
           .eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
         if (!reg) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Активной записи нет' }); return res.status(200).json({ ok: true }); }
         await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
-        try {
-          const { data: ev } = await supabase.from('events').select('participants_count').eq('id', evId).maybeSingle();
-          const next = Math.max(0, (Number((ev as any)?.participants_count) || 0) - 1);
-          await supabase.from('events').update({ participants_count: next }).eq('id', evId);
-        } catch { /* счётчик не критичен */ }
+        // Счётчик мест НЕ трогаем: participantsCount теперь везде считается
+        // из registrations (единый источник правды), колонка — легаси.
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Участие отменено' });
         await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Ты отменил(а) участие. Место освободилось для других. Захочешь вернуться — открой событие заново.' });
         return res.status(200).json({ ok: true });
@@ -2013,11 +2028,12 @@ export default async function handler(req: any, res: any) {
         if (payload.startsWith('event_')) {
           const ev = await getEvent(payload.slice('event_'.length));
           if (ev) {
+            const registered = await hasActiveReg(ev.id, msg.from.id);
             await tg('sendMessage', {
               chat_id: chatId,
               parse_mode: 'HTML',
               text: eventCard(ev),
-              reply_markup: kb(eventCardButtons(ev, openBtn)),
+              reply_markup: kb(eventCardButtons(ev, openBtn, registered)),
             });
             await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
             return res.status(200).json({ ok: true });
