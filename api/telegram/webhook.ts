@@ -1494,15 +1494,25 @@ export default async function handler(req: any, res: any) {
         const s = await getSession(tgId);
         if (!s || s.state !== 'ride_fuel') { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
         const { evId, from, depart, seats } = s.context;
-        await supabase.from('rides').insert({
+        // Одна активная машина на водителя на событие: повторный заход —
+        // это корректировка (места/время/точка), а не вторая машина.
+        const { data: myRides } = await supabase
+          .from('rides').select('id,kind').eq('event_id', evId).eq('driver_id', tgId).eq('active', true);
+        const existing = (myRides || []).find((r: any) => r.kind !== 'tent');
+        const rideData = {
           event_id: evId, driver_id: tgId, driver_name: cq.from.first_name || cq.from.username || 'Водитель',
           from_point: from, depart_text: depart, seats_total: seats, fuel_cost: fuel,
-        });
+        };
+        if (existing) {
+          await supabase.from('rides').update(rideData).eq('id', (existing as any).id);
+        } else {
+          await supabase.from('rides').insert(rideData);
+        }
         await clearSession(tgId);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка добавлена!' });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: existing ? 'Поездка обновлена!' : 'Поездка добавлена!' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ Готово! Твоя поездка добавлена:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' ₽/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
+          text: `✅ ${existing ? 'Твоя поездка обновлена' : 'Готово! Твоя поездка добавлена'}:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' ₽/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
           reply_markup: kb([[openBtn]]),
         });
         // Уведомить тех, кто искал попутку.
@@ -1724,11 +1734,18 @@ export default async function handler(req: any, res: any) {
         const n = Number(p[0]) || 0;
         const gender = p[1] || 'any';
         const evId = p.slice(2).join('_');
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Палатка добавлена!' });
-        const { error } = await supabase.from('rides').insert({
+        // Одна активная палатка на хозяина на событие — повтор = корректировка.
+        const { data: myTents } = await supabase
+          .from('rides').select('id,kind').eq('event_id', evId).eq('driver_id', tgId).eq('active', true);
+        const myTent = (myTents || []).find((r: any) => r.kind === 'tent');
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: myTent ? 'Палатка обновлена!' : 'Палатка добавлена!' });
+        const tentData = {
           event_id: evId, driver_id: tgId, driver_name: cq.from.first_name || cq.from.username || 'Хозяин',
           from_point: `Палатка ${cq.from.first_name || ''}`.trim(), seats_total: n, kind: 'tent', gender_rule: gender,
-        });
+        };
+        const { error } = myTent
+          ? await supabase.from('rides').update(tentData).eq('id', (myTent as any).id)
+          : await supabase.from('rides').insert(tentData);
         if (error) {
           await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '⚠️ Не удалось добавить палатку. Возможно, ещё не применена миграция палаток (2026-tents-booking.sql).' });
           return res.status(200).json({ ok: true });

@@ -21,7 +21,8 @@ async function aiProgram(ev: any): Promise<string[] | null> {
     const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants }),
+      // count: сколько ячеек программы админ создал — столько пунктов и генерим.
+      body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants, count: Array.isArray(ev.program) ? ev.program.length : undefined }),
     });
     const j = await res.json();
     return Array.isArray(j.program) && j.program.length ? j.program : null;
