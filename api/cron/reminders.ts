@@ -161,6 +161,27 @@ export default async function handler(req: any, res: any) {
             );
             if (sent) report.paymentReminders++;
           }
+
+          // За 3 дня: проверяем логистику и напоминаем о машинах тем, у кого их нет
+          if (h.days === 3 && !r.has_transport) {
+            const { data: rides } = await supabase
+              .from('rides')
+              .select('id,driver_name,from_point,depart_text,seats_total,seats_taken')
+              .eq('event_id', (ev as any).id)
+              .eq('active', true)
+              .neq('kind', 'tent');
+            const availableRides = (rides || []).filter((ride: any) => (ride.seats_total || 0) > (ride.seats_taken || 0));
+            if (availableRides.length > 0) {
+              const ridesList = availableRides
+                .map((ride: any) => `🚗 <b>${esc(ride.driver_name || 'Водитель')}</b> из «${esc(ride.from_point || '—')}» (${esc(ride.depart_text || '—')}) — ${Math.max(0, (ride.seats_total || 0) - (ride.seats_taken || 0))} мест`)
+                .join('\n');
+              await send(
+                chatId,
+                `🚗 <b>Список машин с местами на «${esc((ev as any).title)}»:</b>\n\n${ridesList}\n\nНажми кнопку ниже — займёшь место!`,
+                { inline_keyboard: [[{ text: '👀 Занять место в машине', callback_data: `rides_${(ev as any).id}` }]] }
+              );
+            }
+          }
         }
 
         // За 1 день до события — рассылаем меню + рецепты, если они есть.

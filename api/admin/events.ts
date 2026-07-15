@@ -277,6 +277,53 @@ export default async function handler(req: any, res: any) {
     try {
       const body = req.body;
 
+      // Отправка списка машин со свободными местами тем, кто без транспорта
+      if (req.query?.action === 'rides_send') {
+        const eventId = String(body.eventId || body.id || '');
+        if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+        const { data: rides } = await supabase
+          .from('rides').select('*').eq('event_id', eventId).eq('active', true)
+          .neq('kind', 'tent');
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id,has_transport').eq('event_id', eventId).neq('status', 'cancelled');
+        const { data: ev } = await supabase
+          .from('events').select('title').eq('id', eventId).maybeSingle();
+
+        const needsRide = (regs || []).filter((r: any) => !r.has_transport).map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0);
+        if (!needsRide.length) return res.status(200).json({ ok: true, sent: 0, message: 'Все участники имеют транспорт' });
+
+        const availableRides = (rides || []).filter((r: any) => {
+          const taken = r.seats_taken || 0;
+          const total = r.seats_total || 0;
+          return total > taken;
+        });
+
+        if (!availableRides.length) {
+          return res.status(200).json({ ok: true, sent: 0, message: 'Нет машин со свободными местами' });
+        }
+
+        const ridesList = availableRides
+          .map((r: any) => `🚗 <b>${esc(r.driver_name || 'Водитель')}</b>\n   📍 ${esc(r.from_point || '—')} · 🕐 ${esc(r.depart_text || '—')}\n   Мест: ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} · ⛽ ${r.fuel_cost || 0} Br/чел`)
+          .join('\n\n');
+
+        const text = `🚗 <b>Список машин с местами на «${esc((ev as any)?.title || 'событие')}»</b>\n\n${ridesList}\n\nНажми кнопку ниже — займёшь место или встанешь в очередь.`;
+
+        let sent = 0;
+        if (BOT_TOKEN) {
+          await Promise.allSettled(needsRide.map((chatId) =>
+            fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+                reply_markup: { inline_keyboard: [[{ text: '👀 Занять место в машине', callback_data: `rides_${eventId}` }]] },
+              }),
+            }).then((r) => r.json()).then((j) => { if (j?.ok) sent++; })
+          ));
+        }
+        return res.status(200).json({ ok: true, sent, total: needsRide.length, rides: availableRides.length });
+      }
+
       // Отправка списка закупки на согласование участникам. Сохраняет список
       // (status=sent) и шлёт записанным с кнопкой «✅ Согласен» (бот: shopok_).
       if (req.query?.action === 'shopping_send') {

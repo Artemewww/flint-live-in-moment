@@ -1590,6 +1590,7 @@ export default async function handler(req: any, res: any) {
           rows.push([{ text: '🚗 Еду на машине — предложить места', callback_data: `ridenew_${evId}` }]);
           rows.push([{ text: '👀 Кто едет / занять место', callback_data: `rides_${evId}` }]);
           rows.push([{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }]);
+          rows.push([{ text: '🆘 SOS — нужна помощь', callback_data: `sos_${evId}` }]);
         }
         if (featureOn(logiEv, 'tents')) {
           rows.push([{ text: '⛺ Своя палатка — предложить места', callback_data: `tentnew_${evId}` }]);
@@ -1861,6 +1862,22 @@ export default async function handler(req: any, res: any) {
         for (const did of uniq) {
           try { await tg('sendMessage', { chat_id: did, parse_mode: 'HTML', text: `🚶 ${esc(cq.from.first_name || 'Участник')} ищет попутку на событие. Если есть место — напиши ему или добавь мест.` }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // SOS: участник нужна срочная помощь с логистикой во время события
+      if (data.startsWith('sos_')) {
+        const evId = data.slice('sos_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🆘 Сигнал отправлен организаторам' });
+        const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', evId).maybeSingle();
+        const orgId = (ev as any)?.deputy_id || 377551019;
+        try {
+          await tg('sendMessage', {
+            chat_id: orgId, parse_mode: 'HTML',
+            text: `🆘 <b>SOS от участника!</b>\n${esc(cq.from.first_name || 'Участник')} (ID: ${tgId}) нужна помощь с логистикой на событии.\n\nМожешь написать ему или показать список машин со свободными местами.`,
+          });
+        } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🆘 Организаторы уведомлены. Они свяжутся с тобой. Попробуй также «👀 Кто едет» сам.', reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]) });
         return res.status(200).json({ ok: true });
       }
 

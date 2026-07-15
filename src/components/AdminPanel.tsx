@@ -2222,6 +2222,38 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
                       <button
                         onClick={async () => {
+                          const needsRide = (eventStats.registrations || []).filter((r: any) => !r.hasTransport);
+                          if (!needsRide.length) { alert('Все участники имеют транспорт'); return; }
+                          if (!window.confirm(`Отправить список машин ${needsRide.length} участникам без транспорта?`)) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const res = await fetch(`/api/admin/events/${selectedEvent.id}?action=rides_send`, {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ eventId: selectedEvent.id }),
+                            });
+                            const j = await res.json();
+                            if (j.ok) {
+                              setActionMsg({ ok: true, text: `Отправлено ${j.sent}/${j.total} участникам (${j.rides} машин со свободными местами)` });
+                            } else {
+                              setActionMsg({ ok: false, text: j.message || 'Ошибка' });
+                            }
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка рассылки' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <Truck className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Разослать список машин</p>
+                        <p className="text-[10px] text-white/40 mt-1">Тем, кто без транспорта</p>
+                      </button>
+
+                      <button
+                        onClick={async () => {
                           if (!window.confirm('Разослать меню всем участникам события в Telegram?')) return;
                           setBroadcasting(selectedEvent.id);
                           try {
