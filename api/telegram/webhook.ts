@@ -498,17 +498,19 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
   if (nav.length) rows.push(nav);
 
-  // Живая статистика: кто едет, машины, палатки, М/Ж — видна всем.
-  rows.push([{ text: '📊 Кто едет · статистика', callback_data: `stats_${ev.id}` }]);
+  // Компактная строка: статистика + логистика + оплата
+  const logi: any[] = [];
+  logi.push({ text: '📊 Кто', callback_data: `stats_${ev.id}` });
+  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Лог', callback_data: `logi_${ev.id}` });
+  if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
+  if (logi.length) rows.push(logi);
 
-  if (ev.price_type === 'paid') rows.push([{ text: '💳 Оплата', callback_data: `pay_${ev.id}` }]);
-  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
-
+  // Нижние кнопки: спрос/предложение + позвать
   rows.push([
-    { text: '❓ Спросить', callback_data: `ask_${ev.id}` },
-    { text: '💡 Предложить', callback_data: `idea_${ev.id}` },
+    { text: '❓', callback_data: `ask_${ev.id}` },
+    { text: '💡', callback_data: `idea_${ev.id}` },
+    { text: '📤 Позвать', callback_data: `share_${ev.id}` },
   ]);
-  rows.push([{ text: '📤 Позвать друга', callback_data: `share_${ev.id}` }]);
   rows.push([openBtn]);
   return rows;
 }
