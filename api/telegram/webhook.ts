@@ -42,6 +42,76 @@ async function getEvent(id: string) {
   return data;
 }
 
+/** Прямой вызов Gemini (REST): SDK живёт в api/ai.ts, в вебхук его не тащим. */
+async function geminiText(prompt: string): Promise<string> {
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+  if (!key) return '';
+  const models = [process.env.GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-1.5-flash'].filter(Boolean) as string[];
+  for (const model of models) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+      });
+      const j: any = await r.json();
+      const out = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (out) return String(out);
+    } catch { /* пробуем следующую модель */ }
+  }
+  return '';
+}
+
+/**
+ * ИИ-планировщик «Auto-Director»: намерение организатора → черновик
+ * логистического сценария на реальных данных клуба (люди, машины, снаряжение).
+ */
+async function composePlan(intent: string): Promise<string> {
+  const [{ data: people }, { data: regs }, { data: gear }, { data: evs }] = await Promise.all([
+    supabase.from('members')
+      .select('telegram_id,first_name,username,dietary,allergies,prefs,cooking_skills,points,is_core')
+      .or('status.eq.approved,is_core.eq.true').limit(100),
+    supabase.from('registrations')
+      .select('telegram_id,event_id,has_transport,transport_seats').neq('status', 'cancelled').limit(300),
+    supabase.from('gear_inventory').select('*').limit(100),
+    supabase.from('events').select('id,title,date,type,max_participants').eq('status', 'open').limit(10),
+  ]);
+
+  // Машины: кто хоть раз отмечал транспорт при записи.
+  const cars = new Map<number, number>();
+  for (const r of regs || []) {
+    if ((r as any).has_transport) cars.set((r as any).telegram_id, Math.max(cars.get((r as any).telegram_id) || 0, Number((r as any).transport_seats) || 0));
+  }
+  const roster = (people || []).map((p: any) => {
+    const bits = [p.first_name || p.username || `id${p.telegram_id}`];
+    if (p.is_core) bits.push('костяк');
+    if (cars.has(p.telegram_id)) bits.push(`машина (${cars.get(p.telegram_id)} мест)`);
+    if (p.dietary && p.dietary !== 'all') bits.push(p.dietary);
+    if (p.allergies) bits.push(`аллергии: ${p.allergies}`);
+    if (p.cooking_skills) bits.push(`готовит: ${p.cooking_skills}`);
+    if (p.prefs?.fitness) bits.push(`уровень: ${p.prefs.fitness}`);
+    if (p.prefs?.sleep) bits.push(`режим: ${p.prefs.sleep}`);
+    if (p.points) bits.push(`${p.points} баллов`);
+    return '- ' + bits.join(', ');
+  }).join('\n');
+
+  const prompt =
+    'Ты — Auto-Director трезвого клуба «Живи в моменте» (Минск). Организатор просит спланировать событие.\n\n' +
+    `ЗАПРОС ОРГАНИЗАТОРА: ${intent}\n\n` +
+    `УЧАСТНИКИ КЛУБА:\n${roster || '- пока пусто'}\n\n` +
+    `СНАРЯЖЕНИЕ КЛУБА: ${JSON.stringify(gear || []).slice(0, 800)}\n` +
+    `ОТКРЫТЫЕ СОБЫТИЯ: ${(evs || []).map((e: any) => `${e.title} (${e.date})`).join('; ') || 'нет'}\n` +
+    `СЕГОДНЯ: ${new Date().toISOString().slice(0, 10)}\n\n` +
+    'Составь черновик сценария для организатора:\n' +
+    '1. СОСТАВ И РОЛИ — кого позвать и почему (Водитель/Шеф/Навигатор/Аптечка), по реальным данным.\n' +
+    '2. МАШИНЫ — рассадка по имеющимся машинам, кого не хватает.\n' +
+    '3. ЧЕК-ЛИСТ — снаряжение и закупка с ответственными (учти питание и аллергии).\n' +
+    '4. ТАЙМЛАЙН — сбор, дорога, активности, еда, возвращение.\n' +
+    '5. ЛИЧНЫЕ СООБЩЕНИЯ — короткие черновики приглашений с конкретной ролью.\n\n' +
+    'Пиши по-русски, тепло и конкретно. ЧИСТЫЙ ТЕКСТ без markdown и HTML. До 3500 символов.';
+
+  return await geminiText(prompt);
+}
+
 /** Есть ли у участника активная запись на событие. */
 async function hasActiveReg(eventId: string, tgId: number): Promise<boolean> {
   const { data } = await supabase
@@ -2121,6 +2191,36 @@ export default async function handler(req: any, res: any) {
       }
       if (cmd === '/preferences') {
         await sendPreferencesPrompt(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      // ИИ-планировщик: /plan <что хотим> — только костяк.
+      if (cmd === '/plan') {
+        if (!(await isCore(msg.from.id))) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Планировщик доступен только костяку клуба.' });
+          return res.status(200).json({ ok: true });
+        }
+        const intent = text.slice(cmd.length).trim();
+        if (!intent) {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🤖 <b>ИИ-планировщик</b>\n\nОпиши намерение — соберу сценарий по реальным данным клуба (люди, машины, питание, снаряжение).\n\nПример:\n<code>/plan скалы в следующие выходные, человек 10</code>',
+          });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', { chat_id: chatId, text: '🤖 Собираю данные клуба и думаю над сценарием… (~15 сек)' });
+        const plan = await composePlan(intent);
+        if (!plan) {
+          await tg('sendMessage', { chat_id: chatId, text: 'ИИ сейчас недоступен — попробуй ещё раз через минуту.' });
+          return res.status(200).json({ ok: true });
+        }
+        // Telegram-лимит 4096 на сообщение — режем по абзацам.
+        let rest = plan;
+        while (rest.length) {
+          let cut = rest.length <= 3800 ? rest.length : rest.lastIndexOf('\n', 3800);
+          if (cut <= 0) cut = 3800;
+          await tg('sendMessage', { chat_id: chatId, text: rest.slice(0, cut) });
+          rest = rest.slice(cut).trimStart();
+        }
         return res.status(200).json({ ok: true });
       }
 
