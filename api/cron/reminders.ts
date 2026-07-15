@@ -134,12 +134,18 @@ export default async function handler(req: any, res: any) {
 
         for (const r of realIds(regs || [])) {
           const chatId = Number(r.telegram_id);
+          // Кнопки RSVP: подтверждение, что человек «живой» и едет. «Не смогу»
+          // спросит причину и снимет с события (webhook: rsvpy_/rsvpn_).
           const ok = await send(
             chatId,
             `⏰ <b>${esc((ev as any).title)}</b> — ${h.label}!\n` +
               ((ev as any).date_label ? `🗓 ${esc((ev as any).date_label)}\n` : '') +
               ((ev as any).location ? `📍 ${esc((ev as any).location)}\n` : '') +
-              `\nДо встречи. Если планы поменялись — напиши сюда.`
+              `\nТы с нами? Подтверди — так мы знаем, на кого рассчитывать.`,
+            { inline_keyboard: [[
+              { text: '✅ Еду', callback_data: `rsvpy_${(ev as any).id}` },
+              { text: '❌ Не смогу', callback_data: `rsvpn_${(ev as any).id}` },
+            ]] }
           );
           if (ok) report.eventReminders++;
 

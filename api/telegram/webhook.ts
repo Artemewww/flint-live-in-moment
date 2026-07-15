@@ -1713,6 +1713,25 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // RSVP «✅ Еду» из напоминания — подтверждаем, что человек с нами.
+      if (data.startsWith('rsvpy_')) {
+        const evId = data.slice('rsvpy_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Отлично, ждём тебя!' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🔥 Супер, ты в деле! До встречи. Если что-то поменяется — открой событие и нажми «Отказаться».' });
+        return res.status(200).json({ ok: true });
+      }
+
+      // RSVP «❌ Не смогу» — спрашиваем причину, снятие с события — после ответа.
+      if (data.startsWith('rsvpn_')) {
+        const evId = data.slice('rsvpn_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await setSession(tgId, 'rsvp_reason', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '😔 Жаль! Напиши пару слов — почему не сможешь? Это поможет организаторам. После ответа сниму тебя с события и освобожу место.' });
+        return res.status(200).json({ ok: true });
+      }
+
       // «✅ Понял(а)» под рассылкой — благодарим и убираем кнопку (без спиннера).
       if (data.startsWith('ack_')) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Принято, спасибо!' });
@@ -2097,6 +2116,28 @@ export default async function handler(req: any, res: any) {
             });
           }
           await tg('sendMessage', { chat_id: chatId, text: '✅ Отправил организаторам. Ответят сюда.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Причина отказа из RSVP-напоминания: снимаем с события + пингуем оргов.
+        if (sess && sess.state === 'rsvp_reason') {
+          const evId = sess.context?.evId;
+          const ev = await getEvent(evId);
+          await clearSession(msg.from.id);
+          const { data: reg } = await supabase
+            .from('registrations').select('id')
+            .eq('event_id', evId).eq('telegram_id', msg.from.id).neq('status', 'cancelled').maybeSingle();
+          if (reg) {
+            await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
+          }
+          const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', {
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `🚫 <b>Снялся с события</b>\n${esc(ev?.title || evId)}\nКто: ${who}\n\nПричина: <i>${esc(text.slice(0, 800))}</i>`,
+            });
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Понял, снял тебя с события — место освободилось для других. Спасибо, что предупредил(а)! Захочешь вернуться — открой событие заново.' });
           return res.status(200).json({ ok: true });
         }
 
