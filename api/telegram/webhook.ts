@@ -171,6 +171,37 @@ function routeUrl(ev: any): string | null {
   return null;
 }
 
+/** Точки «маршрута дня» события (мультиточечные события — спека в HANDOFF). */
+function itineraryOf(ev: any): any[] {
+  const it = ev?.logistics?.itinerary;
+  return Array.isArray(it) ? it.filter((p: any) => p && p.title) : [];
+}
+
+/** Многоточечный маршрут в Яндекс.Картах по точкам с координатами. */
+function itineraryRouteUrl(points: any[]): string | null {
+  const coords = points
+    .filter((p: any) => Number(p.lat) && Number(p.lng))
+    .map((p: any) => `${p.lat},${p.lng}`);
+  return coords.length >= 2 ? `https://yandex.ru/maps/?rtext=${coords.join('~')}&rtt=auto` : null;
+}
+
+/** Строка оплаты точки: за что платишь, а за что — нет. */
+function payPhrase(p: any): string {
+  const price = Number(p.price) ? ` (${Number(p.price)} BYN${p.priceNote ? ', ' + p.priceNote : ''})` : '';
+  if (p.payment === 'host') return ` — за счёт организатора`;
+  if (p.payment === 'split') return ` — делим поровну${price}`;
+  if (p.payment === 'free') return ` — бесплатно`;
+  return price ? ` — платишь сам${price}` : '';
+}
+
+function itineraryBlock(ev: any): string {
+  const pts = itineraryOf(ev);
+  if (!pts.length) return '';
+  const lines = pts.map((p: any) =>
+    `${p.time ? esc(p.time) + ' ' : ''}${esc(p.title)}${esc(payPhrase(p))}`);
+  return `\n🧭 <b>Маршрут дня</b>\n${lines.join('\n')}\n`;
+}
+
 function eventCard(ev: any): string {
   const aud = ev.entry_type === 'male' ? '👨 Только мужчины'
     : ev.entry_type === 'female' ? '👩 Только женщины' : '👥 Все';
@@ -186,6 +217,7 @@ function eventCard(ev: any): string {
     (ev.price_label ? `💳 ${esc(ev.price_label)}\n` : '') +
     (ev.entry_threshold ? `🎫 ${esc(ev.entry_threshold)}\n` : '') +
     `${aud}\n` +
+    itineraryBlock(ev) +
     (ev.description ? `\n${esc(String(ev.description).slice(0, 600))}` : '')
   );
 }
@@ -459,7 +491,8 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
-  const route = routeUrl(ev);
+  // Мультиточечный маршрут дня приоритетнее одиночной точки.
+  const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
   const nav: any[] = [];
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });

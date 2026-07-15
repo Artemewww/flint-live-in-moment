@@ -214,6 +214,32 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // ── 2b. Сегодняшние события с «маршрутом дня»: утренний таймлайн ──────
+    // Одно сообщение в день события (cron дневной — второго раза не будет).
+    const todayStr = dayOffset(0);
+    const { data: todayEvents } = await supabase
+      .from('events').select('id,title,logistics,status')
+      .eq('date', todayStr).eq('status', 'open');
+    for (const ev of todayEvents || []) {
+      const pts = Array.isArray((ev as any).logistics?.itinerary)
+        ? (ev as any).logistics.itinerary.filter((p: any) => p?.title) : [];
+      if (!pts.length) continue;
+      const lines = pts.map((p: any) => `${p.time ? esc(p.time) + ' — ' : ''}${esc(p.title)}`).join('\n');
+      const coords = pts.filter((p: any) => Number(p.lat) && Number(p.lng)).map((p: any) => `${p.lat},${p.lng}`);
+      const route = coords.length >= 2 ? `https://yandex.ru/maps/?rtext=${coords.join('~')}&rtt=auto` : null;
+      const { data: dayRegs } = await supabase
+        .from('registrations').select('telegram_id')
+        .eq('event_id', (ev as any).id).neq('status', 'cancelled');
+      for (const r of realIds(dayRegs || [])) {
+        const ok = await send(
+          Number(r.telegram_id),
+          `🌅 <b>Сегодня — ${esc((ev as any).title)}!</b>\n\n🧭 <b>План дня</b>\n${lines}\n\nДо встречи!`,
+          route ? { inline_keyboard: [[{ text: '🧭 Маршрут в Яндексе', url: route }]] } : undefined
+        );
+        if (ok) report.eventReminders++;
+      }
+    }
+
     // ── 3. Вчерашние события: просим отзыв + оценки блюд (один раз, по reminded_at) ─────
     const yesterday = dayOffset(-1);
     const { data: pastEvents } = await supabase
@@ -249,7 +275,13 @@ export default async function handler(req: any, res: any) {
           chatId,
           `🙏 Спасибо, что был(а) на «<b>${esc((ev as any).title)}</b>».\n\n` +
             `Оцени событие — это помогает делать следующее лучше.`,
-          { inline_keyboard: [[{ text: '⭐ Оставить отзыв', callback_data: `fb_${(ev as any).id}` }]] }
+          {
+            inline_keyboard: [
+              [{ text: '⭐ Оставить отзыв', callback_data: `fb_${(ev as any).id}` }],
+              // Сбор медиа в галерею события — обработчик media_ живёт в вебхуке.
+              [{ text: '📸 Прислать фото/видео', callback_data: `media_${(ev as any).id}` }],
+            ],
+          }
         );
         if (ok) {
           report.feedbackRequests++;
