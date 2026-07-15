@@ -39,6 +39,11 @@ async function notifyEventChanges(eventId: string, before: any, after: any): Pro
   if (itinerarySig(before.logistics) !== itinerarySig(after.logistics)) {
     changes.push('🧭 Обновлён маршрут дня — загляни в карточку события');
   }
+  const progBefore = JSON.stringify(before.program || []);
+  const progAfter = JSON.stringify(after.program || []);
+  if (progBefore !== progAfter) {
+    changes.push('📋 Обновлена программа события — посмотри, что нового');
+  }
   if (!changes.length) return 0;
 
   const { data: regs } = await supabase
@@ -54,7 +59,10 @@ async function notifyEventChanges(eventId: string, before: any, after: any): Pro
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
-        reply_markup: { inline_keyboard: [[{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }]] },
+        reply_markup: { inline_keyboard: [
+          [{ text: '👀 Открыть событие', url: `https://t.me/campsflint_bot?start=event_${eventId}` }],
+          [{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }],
+        ] },
       }),
     }).then((r) => r.json()).then((j) => { if (j?.ok) sent++; })
   ));
@@ -308,7 +316,7 @@ export default async function handler(req: any, res: any) {
       // Старая версия — чтобы после сохранения понять, что изменилось, и
       // уведомить записанных (только при реальном отличии ключевых полей).
       const { data: before } = await supabase
-        .from('events').select('date,date_end,time,time_end,location,date_label,logistics')
+        .from('events').select('date,date_end,time,time_end,location,date_label,logistics,program')
         .eq('id', body.id).maybeSingle();
 
       const { data: event, error } = await supabase
