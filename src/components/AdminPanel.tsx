@@ -236,6 +236,71 @@ function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) =
   );
 }
 
+/**
+ * Редактор «Маршрута дня» — многоточечный план события (logistics.itinerary).
+ * Бот показывает точки в карточке (itineraryBlock), строит маршрут в
+ * Яндекс.Картах по координатам (нужно ≥2 точки с lat/lng) и шлёт таймлайн утром.
+ * Структура точки: { time, title, lat, lng, payment, price, priceNote }.
+ * payment: self (плачу сам) | host (организатор) | split (делим) | free.
+ */
+function ItineraryEditor({ value, onChange }: { value: any[]; onChange: (v: any[]) => void }) {
+  const pts: any[] = Array.isArray(value) ? value : [];
+  const inp = 'bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
+  const PAY: [string, string][] = [['self', 'Плачу сам'], ['host', 'Организатор'], ['split', 'Делим поровну'], ['free', 'Бесплатно']];
+
+  const upd = (i: number, patch: any) => onChange(pts.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
+  const add = () => onChange([...pts, { title: '', time: '', payment: 'self' }]);
+  const del = (i: number) => onChange(pts.filter((_, idx) => idx !== i));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= pts.length) return;
+    const next = [...pts];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <label className="text-[10px] text-white/40 uppercase font-mono">🧭 Маршрут дня — точки по времени</label>
+        <button type="button" onClick={add} className="text-[11px] font-bold text-brand hover:text-brand/80 cursor-pointer">+ точка</button>
+      </div>
+      {pts.length === 0 && (
+        <p className="text-white/30 text-xs">Пока нет точек. Добавь остановки — бот покажет их в карточке и построит маршрут в Яндекс.Картах (нужны координаты у 2+ точек).</p>
+      )}
+      {pts.map((p, i) => {
+        const showPrice = p.payment !== 'host' && p.payment !== 'free';
+        return (
+          <div key={i} className="bg-black/30 border border-white/10 rounded-lg p-2 space-y-2">
+            <div className="flex gap-2 items-center">
+              <input value={p.time || ''} onChange={(e) => upd(i, { time: e.target.value })} placeholder="10:00" className={`w-16 ${inp}`} />
+              <input value={p.title || ''} onChange={(e) => upd(i, { title: e.target.value })} placeholder="Название точки (напр. Баня)" className={`flex-1 ${inp}`} />
+              <button type="button" onClick={() => move(i, -1)} title="Выше" className="text-white/40 hover:text-white px-1 cursor-pointer">↑</button>
+              <button type="button" onClick={() => move(i, 1)} title="Ниже" className="text-white/40 hover:text-white px-1 cursor-pointer">↓</button>
+              <button type="button" onClick={() => del(i)} title="Удалить" className="text-red-400/70 hover:text-red-400 px-1 cursor-pointer">✕</button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <input type="number" step="any" value={p.lat ?? ''} onChange={(e) => upd(i, { lat: e.target.value === '' ? undefined : parseFloat(e.target.value) })} placeholder="Широта (lat)" className={inp} />
+              <input type="number" step="any" value={p.lng ?? ''} onChange={(e) => upd(i, { lng: e.target.value === '' ? undefined : parseFloat(e.target.value) })} placeholder="Долгота (lng)" className={inp} />
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              <select value={p.payment || 'self'} onChange={(e) => upd(i, { payment: e.target.value })} className={inp}>
+                {PAY.map(([k, l]) => <option key={k} value={k} className="bg-[#121212]">{l}</option>)}
+              </select>
+              {showPrice ? (
+                <>
+                  <input type="number" value={p.price || ''} onChange={(e) => upd(i, { price: parseInt(e.target.value) || 0 })} placeholder="BYN" className={inp} />
+                  <input value={p.priceNote || ''} onChange={(e) => upd(i, { priceNote: e.target.value })} placeholder="за что" className={inp} />
+                </>
+              ) : <div className="col-span-2 flex items-center text-white/30 text-xs">без оплаты участником</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /** Кликабельные теги 6 качеств «Дома Личности». Выбранные «горят». */
 function QualityChips({ selected, onChange }: { selected: HouseQuality[]; onChange: (q: HouseQuality[]) => void }) {
   const keys = new Set<HouseQuality['key']>((selected || []).map(q => q.key));
@@ -2915,6 +2980,12 @@ function EditEventModal({ event, onClose, onSave }: {
             <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
           )}
 
+          <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
+
+          <ItineraryEditor
+            value={formData.logistics?.itinerary || []}
+            onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+          />
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
@@ -3405,6 +3476,11 @@ function AddEventModal({ onClose, onAdd }: {
                 )}
 
                 {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
+                <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
+                <ItineraryEditor
+                  value={formData.logistics?.itinerary || []}
+                  onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+                />
                 <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
                 <textarea placeholder="Описание" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className={inp} rows={3} />
 
