@@ -317,10 +317,16 @@ async function handleGallery(req: any, res: any) {
   const title = escapeHtml(ev?.title || 'Событие');
   const cards = (media || []).map((m: any) => {
     const src = `/api/events?action=media&fid=${encodeURIComponent(m.file_id)}`;
-    const inner = m.media_type === 'video'
-      ? `<video src="${src}" controls preload="none" playsinline></video>`
+    const isVideo = m.media_type === 'video';
+    // Превью в сетке — тап открывает на весь экран (и фото, и видео).
+    const inner = isVideo
+      ? `<video src="${src}" preload="metadata" playsinline muted></video><span class="play">▶</span>`
       : `<img src="${src}" loading="lazy" alt="">`;
-    return `<figure data-id="${m.id}">${inner}<button class="vote" onclick="vote(this,'${m.id}')">❤️ <span>${m.votes}</span></button></figure>`;
+    return `<figure data-id="${m.id}">`
+      + `<div class="thumb" onclick="openLb('${src}','${isVideo ? 'video' : 'photo'}')">${inner}</div>`
+      + `<button class="vote" onclick="vote(this,'${m.id}')">❤️ <span>${m.votes}</span></button>`
+      + `<button class="del" onclick="del(this,'${m.id}')" title="Удалить">🗑</button>`
+      + `</figure>`;
   }).join('');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   return res.status(200).send(`<!doctype html><html lang="ru"><head>
@@ -329,19 +335,39 @@ async function handleGallery(req: any, res: any) {
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   body{margin:0;background:#0d0f0c;color:#e8ffe0;font:15px/1.4 -apple-system,system-ui,sans-serif}
-  header{padding:16px;position:sticky;top:0;background:#0d0f0ccc;backdrop-filter:blur(8px)}
+  header{padding:16px;position:sticky;top:0;background:#0d0f0ccc;backdrop-filter:blur(8px);z-index:2}
   h1{margin:0;font-size:17px} p{margin:4px 0 0;color:#9fb098;font-size:13px}
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;padding:6px}
   @media(min-width:640px){.grid{grid-template-columns:repeat(3,1fr)}}
   figure{margin:0;position:relative;aspect-ratio:1;overflow:hidden;border-radius:12px;background:#1a1e17}
-  figure img,figure video{width:100%;height:100%;object-fit:cover}
+  .thumb{width:100%;height:100%;cursor:zoom-in}
+  figure img,figure video{width:100%;height:100%;object-fit:cover;display:block}
+  .play{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);font-size:26px;color:#fff;text-shadow:0 2px 8px #000;pointer-events:none}
   .vote{position:absolute;right:6px;bottom:6px;border:0;border-radius:20px;padding:5px 10px;background:#000a;color:#fff;font-size:13px;cursor:pointer}
   .vote.on{background:#e6fd3a;color:#000}
+  .del{display:none;position:absolute;left:6px;top:6px;border:0;border-radius:20px;padding:5px 9px;background:#000a;color:#fff;font-size:13px;cursor:pointer}
+  body.admin .del{display:block}
   .empty{padding:48px 24px;text-align:center;color:#9fb098}
+  /* Лайтбокс на весь экран */
+  #lb{display:none;position:fixed;inset:0;z-index:10;background:#000e;align-items:center;justify-content:center}
+  #lb.on{display:flex}
+  #lb img,#lb video{max-width:100vw;max-height:100vh;object-fit:contain}
+  #lb .close{position:fixed;right:12px;top:12px;font-size:28px;color:#fff;background:#0006;border:0;border-radius:50%;width:44px;height:44px;cursor:pointer}
 </style></head><body>
-<header><h1>📸 ${title}</h1><p>Тапни ❤️ за лучшие кадры — топ-5 останется в истории события</p></header>
+<header><h1>📸 ${title}</h1><p>Тапни кадр, чтобы открыть на весь экран. ❤️ — за лучшие: топ-5 останется в истории события.</p></header>
 ${cards ? `<div class="grid">${cards}</div>` : '<div class="empty">Пока пусто. Пришли боту фото с события — они появятся здесь.</div>'}
+<div id="lb"><button class="close" onclick="closeLb()">✕</button><div id="lbc"></div></div>
 <script>
+var lb=document.getElementById('lb'), lbc=document.getElementById('lbc');
+function openLb(src,type){
+  lbc.innerHTML = type==='video'
+    ? '<video src="'+src+'" controls autoplay playsinline></video>'
+    : '<img src="'+src+'" alt="">';
+  lb.classList.add('on');
+}
+function closeLb(){ lb.classList.remove('on'); lbc.innerHTML=''; }
+lb.addEventListener('click', function(e){ if(e.target===lb) closeLb(); });
+
 async function vote(btn, id){
   const initData = window.Telegram?.WebApp?.initData || '';
   if(!initData){ btn.textContent='Голос — из Telegram'; return; }
@@ -354,6 +380,31 @@ async function vote(btn, id){
   }catch(e){}
   btn.disabled = false;
 }
+
+async function del(btn, id){
+  const initData = window.Telegram?.WebApp?.initData || '';
+  if(!initData) return;
+  if(!confirm('Удалить этот кадр из галереи? Действие необратимо.')) return;
+  btn.disabled = true;
+  try{
+    const r = await fetch('/api/events', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'media_delete', mediaId:id, initData})});
+    if(r.ok){ const fig = btn.closest('figure'); if(fig) fig.remove(); }
+    else { alert('Удалять кадры может только администратор.'); btn.disabled = false; }
+  }catch(e){ btn.disabled = false; }
+}
+
+// Кнопки удаления показываем только ядру клуба (проверка по initData).
+(async function(){
+  const initData = window.Telegram?.WebApp?.initData || '';
+  if(!initData) return;
+  try{
+    const r = await fetch('/api/events', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'media_admin_check', initData})});
+    const j = await r.json();
+    if(j.admin) document.body.classList.add('admin');
+  }catch(e){}
+})();
 window.Telegram?.WebApp?.expand?.();
 </script></body></html>`);
 }
@@ -552,6 +603,32 @@ export default async function handler(req: any, res: any) {
           .eq('media_id', mediaId);
         await supabase.from('event_media').update({ votes: count || 0 }).eq('id', mediaId);
         return res.status(200).json({ ok: true, votes: count || 0 });
+      }
+
+      // Проверка «я админ?» для галереи: показываем кнопки удаления только
+      // ядру клуба (is_core). Сам факт удаления всё равно перепроверяется на
+      // сервере — клиентский флаг лишь прячет/показывает кнопку.
+      if (action === 'media_admin_check') {
+        const user = verifyInitData(body.initData, BOT_TOKEN);
+        if (!user) return res.status(200).json({ admin: false });
+        const { data: m } = await supabase
+          .from('members').select('is_core').eq('telegram_id', user.id).maybeSingle();
+        return res.status(200).json({ admin: !!(m && m.is_core) });
+      }
+
+      // Удаление кадра из галереи — только ядро клуба (админ). Голоса
+      // удалятся каскадом (event_media_votes.media_id ON DELETE CASCADE).
+      if (action === 'media_delete') {
+        const user = verifyInitData(body.initData, BOT_TOKEN);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: m } = await supabase
+          .from('members').select('is_core').eq('telegram_id', user.id).maybeSingle();
+        if (!m || !m.is_core) return res.status(403).json({ error: 'admins_only' });
+        const mediaId = String(body.mediaId || '');
+        if (!mediaId) return res.status(400).json({ error: 'Missing mediaId' });
+        const { error } = await supabase.from('event_media').delete().eq('id', mediaId);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true });
       }
 
       if (action === 'vote') return await handleVote(body, res);
