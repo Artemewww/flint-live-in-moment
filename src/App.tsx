@@ -410,6 +410,7 @@ export default function App() {
         onAddEvent={(e) => adminSaveEvent(e, true)}
         onDeleteEvent={(id) => adminDeleteEvent(id)}
         onClose={() => setShowAdminPanel(false)}
+        onViewSite={() => { setGatePassed(true); setShowAdminPanel(false); }}
       />
     );
   }

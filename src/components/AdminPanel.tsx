@@ -711,6 +711,8 @@ interface AdminPanelProps {
   onAddEvent: (event: CommunityEvent) => void;
   onDeleteEvent: (eventId: string) => void;
   onClose: () => void;
+  /** Открыть главную афишу как админ (минуя шлюз-приглашение). */
+  onViewSite?: () => void;
 }
 
 const MONTHS_RU = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
@@ -977,7 +979,7 @@ function ExpenseSplitter({ registrations }: { registrations: any[] }) {
   );
 }
 
-export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose }: AdminPanelProps) {
+export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose, onViewSite }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(readSession);
   const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
   const [password, setPassword] = useState('');
@@ -1419,6 +1421,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 в админке: {onlineAdmins.length || 1}
               </span>
             </div>
+            {onViewSite && (
+              <button
+                onClick={onViewSite}
+                className="text-[10px] font-mono uppercase text-black bg-brand hover:bg-brand/80 border-none rounded-full px-3 py-2 cursor-pointer font-bold whitespace-nowrap"
+                title="Открыть афишу сообщества"
+              >
+                На главную →
+              </button>
+            )}
             <button
               onClick={handleLogout}
               className="text-[10px] font-mono uppercase text-white/50 hover:text-white bg-white/5 hover:bg-white/10 border-none rounded-full px-3 py-2 cursor-pointer"
