@@ -1354,6 +1354,15 @@ export default async function handler(req: any, res: any) {
         const ev = await getEvent(data.slice(3));
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         if (!ev) return res.status(200).json({ ok: true });
+        // Гейтинг: закрытое событие требует кода доступа
+        if (ev.is_public === false && ev.access_code) {
+          const registered = await hasActiveReg(ev.id, tgId);
+          if (!registered) {
+            await setSession(tgId, 'access_code_check', { eventId: ev.id });
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🔒 <b>${esc(ev.title)}</b>\n\nЭто закрытое событие. Введи код доступа (одно слово без пробелов).` });
+            return res.status(200).json({ ok: true });
+          }
+        }
         const registered = await hasActiveReg(ev.id, tgId);
         await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
         return res.status(200).json({ ok: true });
@@ -2192,6 +2201,27 @@ export default async function handler(req: any, res: any) {
               { text: '👩 Женский', callback_data: 'applyg_female' },
             ]]),
           });
+          return res.status(200).json({ ok: true });
+        }
+
+        // ── Гейтинг закрытого события: ввод кода для просмотра ───────────────
+        if (sess && sess.state === 'access_code_check') {
+          const ev = await getEvent(sess.context.eventId);
+          if (!ev) {
+            await clearSession(msg.from.id);
+            await tg('sendMessage', { chat_id: chatId, text: 'Событие не найдено.' });
+            return res.status(200).json({ ok: true });
+          }
+          const provided = text.trim().toLowerCase();
+          const expected = String(ev.access_code || '').trim().toLowerCase();
+          if (!expected || provided !== expected) {
+            await tg('sendMessage', { chat_id: chatId, text: '❌ Неверный код. Попробуй снова (одно слово без пробелов).' });
+            return res.status(200).json({ ok: true });
+          }
+          // Код верный — показываем карточку
+          await clearSession(msg.from.id);
+          const registered = await hasActiveReg(ev.id, msg.from.id);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
           return res.status(200).json({ ok: true });
         }
 
