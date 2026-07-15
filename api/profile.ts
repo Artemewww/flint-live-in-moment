@@ -281,6 +281,46 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // === MY_EVENTS (история событий участника) ===
+    if (action === 'my_events') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('id,event_id,status,payment_status,has_transport')
+        .eq('telegram_id', user.id)
+        .neq('status', 'cancelled')
+        .order('created_at', { ascending: false });
+
+      const eventIds = (regs || []).map((r: any) => r.event_id);
+      if (!eventIds.length) {
+        return res.status(200).json({ ok: true, events: [] });
+      }
+
+      const { data: events } = await supabase
+        .from('events')
+        .select('id,title,date,date_end,status')
+        .in('id', eventIds)
+        .order('date', { ascending: false });
+
+      const result = (events || []).map((ev: any) => {
+        const reg = regs?.find((r: any) => r.event_id === ev.id);
+        return {
+          id: ev.id,
+          title: ev.title,
+          date: ev.date,
+          dateEnd: ev.date_end,
+          eventStatus: ev.status,
+          regStatus: reg?.status || 'unknown',
+          paymentStatus: reg?.payment_status || 'pending',
+          hasTransport: reg?.has_transport || false,
+        };
+      });
+
+      return res.status(200).json({ ok: true, events: result });
+    }
+
     // === APPLY (заявка на вступление с сайта) ===
     if (action === 'apply') {
       const { firstName, lastName, phone, sourceHint } = body;
