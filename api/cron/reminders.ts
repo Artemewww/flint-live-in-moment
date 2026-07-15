@@ -309,6 +309,53 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // ── Подогрев: соц-доказательство при РЕАЛЬНОМ приросте участников ──────
+    // Мировая практика «social proof», но без спама: шлём максимум раз в день
+    // (крон суточный) и ТОЛЬКО когда людей реально стало больше. Базу (сколько
+    // было в прошлый раз) держим в events.notifications._heatCount — без DDL.
+    // Окно 2..30 дней: не пересекаемся с «завтра»-напоминанием и днём события,
+    // и не дёргаем по слишком далёким событиям. Первый прогон — тихая база.
+    try {
+      const { data: growEvents } = await supabase
+        .from('events')
+        .select('id,title,notifications,max_participants,status,date')
+        .eq('status', 'open')
+        .gte('date', dayOffset(2))
+        .lte('date', dayOffset(30));
+
+      for (const ev of growEvents || []) {
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id')
+          .eq('event_id', (ev as any).id).neq('status', 'cancelled');
+        const cur = (regs || []).length;
+        const notif = (ev as any).notifications || {};
+        const last = Number(notif._heatCount);
+
+        if (Number.isFinite(last)) {
+          const delta = cur - last;
+          if (delta >= 1) {
+            const cap = (ev as any).max_participants;
+            const left = cap ? Math.max(0, cap - cur) : null;
+            const capPhrase = left === null ? '' : left > 0 ? ` (осталось ${left} мест)` : ' — мест почти нет!';
+            const msg =
+              `🔥 <b>${esc((ev as any).title)}</b> набирает!\n\n` +
+              `+${delta} ${delta === 1 ? 'человек присоединился' : 'человека присоединились'} — уже <b>${cur}</b> едет${capPhrase}.\n\n` +
+              `Позови друга — с классной компанией всегда теплее. 📤`;
+            for (const r of realIds(regs || [])) {
+              const ok = await send(Number(r.telegram_id), msg, {
+                inline_keyboard: [[{ text: '📤 Позвать друга', callback_data: `share_${(ev as any).id}` }]],
+              });
+              if (ok) (report as any).heatPings = ((report as any).heatPings || 0) + 1;
+            }
+          }
+        }
+        // Обновляем базу всегда (и при оттоке — чтобы следующий прирост считался честно).
+        await supabase.from('events')
+          .update({ notifications: { ...notif, _heatCount: cur } })
+          .eq('id', (ev as any).id);
+      }
+    } catch { /* подогрев не должен ронять остальные напоминания */ }
+
     // Чистка галерей: через 7 дней после события остаётся топ-5 по голосам
     // (is_keeper), остальные строки удаляются. Сами файлы живут в Telegram
     // у отправителей — «удаление» значит только уход из галереи.
