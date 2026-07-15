@@ -48,17 +48,24 @@ async function geminiText(prompt: string): Promise<string> {
   if (!key) return '';
   // У gemini-2.0-flash free-квота нулевая (limit: 0), у -latest — есть.
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  const attempt = async (model: string, fast: boolean): Promise<string> => {
+    const body: any = { contents: [{ parts: [{ text: prompt }] }] };
+    // thinkingBudget:0 срезает «размышления» 2.5-моделей — иначе ответ идёт 30+ сек,
+    // а вебхук должен уложиться в таймаут функции.
+    if (fast) body.generationConfig = { maxOutputTokens: 1800, thinkingConfig: { thinkingBudget: 0 } };
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const j: any = await r.json();
+    const parts = j?.candidates?.[0]?.content?.parts || [];
+    return parts.map((p: any) => p?.text || '').join('').trim();
+  };
   for (const model of models) {
-    try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-      });
-      const j: any = await r.json();
-      const parts = j?.candidates?.[0]?.content?.parts || [];
-      const out = parts.map((p: any) => p?.text || '').join('').trim();
-      if (out) return out;
-    } catch { /* пробуем следующую модель */ }
+    try { const out = await attempt(model, true); if (out) return out; } catch { /* дальше */ }
+  }
+  for (const model of models.slice(0, 2)) {
+    try { const out = await attempt(model, false); if (out) return out; } catch { /* дальше */ }
   }
   return '';
 }
