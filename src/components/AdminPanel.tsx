@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote } from 'lucide-react';
+import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen } from 'lucide-react';
 import { CommunityEvent, HouseQuality, UserProfile } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
@@ -1773,6 +1773,78 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         })}
                       </div>
                     </div>
+
+                    {/* Статус участников перед событием */}
+                    {(() => {
+                      const regs = eventStats.registrations || [];
+                      const withFood = regs.filter((r: any) => r.dietary || r.food_optout).length;
+                      const withEquipment = regs.filter((r: any) => Array.isArray(r.equipment) && r.equipment.length > 0).length;
+                      const withRoles = regs.filter((r: any) => Array.isArray(r.roles) && r.roles.length > 0).length;
+                      const inRides = regs.filter((r: any) => r.has_transport || (r.registeredRides && r.registeredRides.length > 0)).length;
+                      const unconfirmed = regs.filter((r: any) => r.status !== 'confirmed').length;
+                      return (
+                        <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+                          <h4 className="text-xs font-bold uppercase mb-3 flex items-center gap-2">
+                            <Users className="w-4 h-4 text-brand" />
+                            Статус участников перед событием
+                          </h4>
+                          <div className="space-y-2 text-xs">
+                            <div className="flex justify-between items-center p-2 rounded-lg bg-white/5">
+                              <span className="text-white/70">🍽 Питание указано</span>
+                              <span className="font-mono text-brand">{withFood}/{regs.length}</span>
+                              {withFood < regs.length && <span className="text-[9px] text-red-400 ml-auto">⚠️ {regs.length - withFood} не выбрали</span>}
+                            </div>
+                            <div className="flex justify-between items-center p-2 rounded-lg bg-white/5">
+                              <span className="text-white/70">🧳 Снаряжение указано</span>
+                              <span className="font-mono text-brand">{withEquipment}/{regs.length}</span>
+                              {withEquipment < regs.length && <span className="text-[9px] text-red-400 ml-auto">⚠️ {regs.length - withEquipment} не выбрали</span>}
+                            </div>
+                            <div className="flex justify-between items-center p-2 rounded-lg bg-white/5">
+                              <span className="text-white/70">🤝 Роли указаны</span>
+                              <span className="font-mono text-brand">{withRoles}/{regs.length}</span>
+                              {withRoles < regs.length && <span className="text-[9px] text-red-400 ml-auto">⚠️ {regs.length - withRoles} не выбрали</span>}
+                            </div>
+                            <div className="flex justify-between items-center p-2 rounded-lg bg-white/5">
+                              <span className="text-white/70">🚗 В логистике</span>
+                              <span className="font-mono text-brand">{inRides}/{regs.length}</span>
+                              {inRides < regs.length && <span className="text-[9px] text-red-400 ml-auto">⚠️ {regs.length - inRides} без машины</span>}
+                            </div>
+                            {unconfirmed > 0 && (
+                              <div className="flex justify-between items-center p-2 rounded-lg bg-red-500/10 border border-red-500/30">
+                                <span className="text-red-400">⏳ Не подтверждены</span>
+                                <span className="font-mono text-red-400">{unconfirmed}</span>
+                              </div>
+                            )}
+                          </div>
+                          {(withFood < regs.length || withEquipment < regs.length || withRoles < regs.length || unconfirmed > 0) && (
+                            <button
+                              onClick={async () => {
+                                const msg = `📣 <b>Проверка перед событием «${selectedEvent.title}»</b>\n\n`;
+                                const missing = [];
+                                if (withFood < regs.length) missing.push(`🍽 Выбери питание (${regs.length - withFood} человек не выбрали)`);
+                                if (withEquipment < regs.length) missing.push(`🧳 Укажи снаряжение (${regs.length - withEquipment} не выбрали)`);
+                                if (withRoles < regs.length) missing.push(`🤝 Выбери роль (${regs.length - withRoles} не выбрали)`);
+                                if (unconfirmed > 0) missing.push(`✅ Подтверди участие (${unconfirmed} не подтвердили)`);
+                                if (missing.length === 0) { alert('Все участники готовы!'); return; }
+                                setBroadcasting(selectedEvent.id);
+                                try {
+                                  await sendMessageToAll(msg + missing.map(m => `• ${m}`).join('\n'));
+                                  setActionMsg({ ok: true, text: 'Напоминание отправлено всем' });
+                                } catch (e) {
+                                  setActionMsg({ ok: false, text: 'Ошибка рассылки' });
+                                } finally {
+                                  setBroadcasting(null);
+                                }
+                              }}
+                              disabled={broadcasting === selectedEvent.id}
+                              className="w-full mt-3 bg-brand/20 border border-brand/50 text-brand text-xs font-bold py-2 rounded-lg hover:bg-brand/30 disabled:opacity-50 cursor-pointer"
+                            >
+                              📤 Напомнить о пропусках
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
                 )}
 
@@ -2093,6 +2165,59 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         <MapPin className="w-6 h-6 text-brand mb-2" />
                         <p className="text-xs font-bold uppercase">Отправить координаты</p>
                         <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          const prog = selectedEvent.program || [];
+                          if (!prog.length) { alert('Программа пока не добавлена'); return; }
+                          if (!window.confirm('Разослать программу всем участникам события в Telegram?')) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const msg = `📋 <b>Программа: ${selectedEvent.title}</b>\n\n${prog.map((p: any, i: number) => `${i + 1}. ${p.time || '—'} <b>${p.title || 'Точка'}</b>\n${p.description || ''}`).join('\n\n')}`;
+                            await sendMessageToAll(msg);
+                            setActionMsg({ ok: true, text: 'Программа разослана' });
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка рассылки' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <BookOpen className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Разослать программу</p>
+                        <p className="text-[10px] text-white/40 mt-1">Всем участникам в бот</p>
+                      </button>
+
+                      <button
+                        onClick={async () => {
+                          const unpaid = (eventStats.registrations || []).filter((r: any) => r.paymentStatus !== 'paid');
+                          if (!unpaid.length) { alert('Все оплатили!'); return; }
+                          if (!window.confirm(`Напомнить об оплате ${unpaid.length} участникам?`)) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const details = selectedEvent.paymentDetails || {};
+                            let msg = `💳 <b>Напоминание об оплате: ${selectedEvent.title}</b>\n\n`;
+                            if (details.erip) msg += `ЕРИП: ${details.erip}\n`;
+                            if (details.card) msg += `Карта: ${details.card}\n`;
+                            if (details.method) msg += `${details.method}\n`;
+                            msg += `\n👉 Раздел «Мои события» → событие → «💳 Оплатить»`;
+                            await sendMessageToAll(msg);
+                            setActionMsg({ ok: true, text: 'Напоминание отправлено' });
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка рассылки' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <DollarSign className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Напомнить об оплате</p>
+                        <p className="text-[10px] text-white/40 mt-1">Кто ещё не оплатил</p>
                       </button>
 
                       <button
