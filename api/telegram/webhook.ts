@@ -498,6 +498,9 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
   if (nav.length) rows.push(nav);
 
+  // Живая статистика: кто едет, машины, палатки, М/Ж — видна всем.
+  rows.push([{ text: '📊 Кто едет · статистика', callback_data: `stats_${ev.id}` }]);
+
   if (ev.price_type === 'paid') rows.push([{ text: '💳 Оплата', callback_data: `pay_${ev.id}` }]);
   if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
 
@@ -551,6 +554,7 @@ async function finishApplication(from: any, chatId: number, context: any) {
     first_name: context.name || from.first_name || null,
     phone: context.phone || null,
     agreed_pd: true,
+    ...(context.gender ? { gender: context.gender } : {}),
   }).eq('telegram_id', tgId);
 
   // Кто пригласил — если пришёл по реф-ссылке, знаем точно.
@@ -755,7 +759,7 @@ export default async function handler(req: any, res: any) {
        * непринятый человек мог открыть событие, занять место в машине и увидеть
        * логистику. Пропускаем лишь вступление, поддержку и модерацию костяка.
        */
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|support|approve_|reject_|payok_|payno_|reply_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|support|approve_|reject_|payok_|payno_|reply_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -840,6 +844,16 @@ export default async function handler(req: any, res: any) {
             'Данные видит только костяк клуба, третьим лицам не передаём (законодательство РБ).',
           reply_markup: kb([[{ text: '✅ Согласен, продолжить', callback_data: 'verify_pd' }]]),
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Пол в конце заявки → завершаем подачу.
+      if (data.startsWith('applyg_')) {
+        const gender = data.slice('applyg_'.length) === 'female' ? 'female' : 'male';
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        const s = await getSession(tgId);
+        await finishApplication(cq.from, chatId, { ...(s?.context || {}), gender });
         return res.status(200).json({ ok: true });
       }
 
@@ -1491,6 +1505,68 @@ export default async function handler(req: any, res: any) {
       }
 
       // === Логистика (участник-driven): меню ===
+      // Живая статистика события: едет / машины / палатки / М-Ж. Видна всем.
+      if (data.startsWith('stats_')) {
+        const evId = data.slice('stats_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const ev = await getEvent(evId);
+
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id,guest_count')
+          .eq('event_id', evId).neq('status', 'cancelled');
+        const people = (regs || []).length;
+        const guests = (regs || []).reduce((s: number, r: any) => s + (Number(r.guest_count) || 0), 0);
+        const total = people + guests;
+
+        const { data: cars } = await supabase
+          .from('rides').select('seats_total,seats_taken')
+          .eq('event_id', evId).eq('active', true).eq('kind', 'car');
+        const carCount = (cars || []).length;
+        const carSeats = (cars || []).reduce((s: number, c: any) => s + (Number(c.seats_total) || 0), 0);
+        const carFree = (cars || []).reduce((s: number, c: any) => s + Math.max(0, (Number(c.seats_total) || 0) - (Number(c.seats_taken) || 0)), 0);
+
+        const { data: tents } = await supabase
+          .from('rides').select('seats_total,seats_taken')
+          .eq('event_id', evId).eq('active', true).eq('kind', 'tent');
+        const tentCount = (tents || []).length;
+        const tentFree = (tents || []).reduce((s: number, t: any) => s + Math.max(0, (Number(t.seats_total) || 0) - (Number(t.seats_taken) || 0)), 0);
+
+        // М/Ж: у одногендерного события — из entry_type; у смешанного —
+        // по members.gender (колонка может ещё не быть — тогда мягко пропускаем).
+        let genderLine = '';
+        if (ev?.entry_type === 'male') genderLine = '👨 Только мужчины\n';
+        else if (ev?.entry_type === 'female') genderLine = '👩 Только женщины\n';
+        else {
+          try {
+            const ids = (regs || []).map((r: any) => Number(r.telegram_id)).filter((n: number) => n > 0);
+            if (ids.length) {
+              const { data: mem } = await supabase.from('members').select('gender').in('telegram_id', ids);
+              const male = (mem || []).filter((m: any) => m.gender === 'male').length;
+              const female = (mem || []).filter((m: any) => m.gender === 'female').length;
+              if (male || female) {
+                const unknown = people - male - female;
+                genderLine = `👨 ${male} · 👩 ${female}${unknown > 0 ? ` · ❔ ${unknown}` : ''}\n`;
+              }
+            }
+          } catch { /* колонка gender ещё не создана — пропускаем */ }
+        }
+
+        const cap = ev?.max_participants ? ` из ${ev.max_participants}` : '';
+        let txt = `📊 <b>${esc(ev?.title || 'Событие')}</b>\n\n`;
+        txt += `👥 Едет: <b>${total}</b>${cap}${guests ? ` (${people} + ${guests} гост${guests === 1 ? 'ь' : 'ей'})` : ''}\n`;
+        txt += genderLine;
+        if (carCount) txt += `🚗 Машин: <b>${carCount}</b> · свободно ${carFree} из ${carSeats} мест\n`;
+        else if (featureOn(ev, 'rides')) txt += `🚗 Машин пока нет — предложи свою в логистике\n`;
+        if (tentCount) txt += `⛺ Палаток: <b>${tentCount}</b> · свободно ${tentFree} мест\n`;
+        txt += `\nЗовём ещё людей — вместе теплее. 📤`;
+
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML', text: txt,
+          reply_markup: kb([[{ text: '📤 Позвать друга', callback_data: `share_${evId}` }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('logi_')) {
         const evId = data.slice('logi_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -2053,7 +2129,16 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'apply_source') {
-          await finishApplication(msg.from, chatId, { ...sess.context, source: text.slice(0, 200) });
+          // Ещё один шаг — пол (для статистики М/Ж и расселения по палаткам).
+          await setSession(msg.from.id, 'apply_gender', { ...sess.context, source: text.slice(0, 200) });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: 'И совсем последнее — укажи пол. Нужно для логистики (расселение по палаткам) и статистики события.',
+            reply_markup: kb([[
+              { text: '👨 Мужской', callback_data: 'applyg_male' },
+              { text: '👩 Женский', callback_data: 'applyg_female' },
+            ]]),
+          });
           return res.status(200).json({ ok: true });
         }
 
