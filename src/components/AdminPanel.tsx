@@ -171,6 +171,7 @@ function ListEditor({ label, items, onChange, onGenerate, placeholder, aiHint }:
 function ShoppingGenerator({ event, registrations }: { event: any; registrations: any[] }) {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [err, setErr] = useState('');
   const people = registrations.length || event.maxParticipants || 10;
   const diet = {
@@ -178,6 +179,14 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     vegetarian: registrations.filter((r) => r.dietary === 'vegetarian').length,
     children: registrations.reduce((s, r) => s + (r.childrenCount || 0), 0),
   };
+
+  // Загрузка сохранённого списка при открытии события
+  useEffect(() => {
+    if (event?.shopping?.items) {
+      setItems(Array.isArray(event.shopping.items) ? event.shopping.items : []);
+    }
+  }, [event?.id]);
+
   const gen = async () => {
     setLoading(true); setErr('');
     try {
@@ -191,26 +200,109 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     } catch (e) { setErr((e as Error).message); }
     setLoading(false);
   };
+
+  const save = async () => {
+    try {
+      const res = await fetch(`/api/admin/events/${event.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopping: { ...event.shopping, items, updated_at: new Date().toISOString() } }),
+      });
+      if (!res.ok) throw new Error('Ошибка сохранения');
+      alert('✅ Список сохранён');
+    } catch (e) { setErr((e as Error).message); }
+  };
+
+  const send = async () => {
+    setSending(true);
+    try {
+      const res = await fetch(`/api/admin/events/${event.id}?action=shopping_send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopping: { ...event.shopping, items } }),
+      });
+      if (!res.ok) throw new Error('Ошибка отправки');
+      alert('✅ Отправлено на согласование');
+    } catch (e) { setErr((e as Error).message); }
+    setSending(false);
+  };
+
+  const approved = Array.isArray(event?.shopping?.approved_by) ? event.shopping.approved_by.length : 0;
+  const estimate = Number(event?.shopping?.estimate) || 0;
+
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
       <div className="flex items-center justify-between gap-2">
-        <h4 className="text-xs font-bold uppercase flex items-center gap-2"><ShoppingCart className="w-4 h-4 text-brand" /> Список закупки (ИИ) · {people} чел</h4>
+        <h4 className="text-xs font-bold uppercase flex items-center gap-2">
+          <ShoppingCart className="w-4 h-4 text-brand" /> Список закупки · {people} чел
+          {approved > 0 && <span className="text-[9px] text-green-400 ml-2">✅ согласили: {approved}</span>}
+        </h4>
         <button type="button" onClick={gen} disabled={loading} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 disabled:opacity-60 shrink-0">
           {loading ? '⏳ Считаю…' : '🤖 Сгенерировать'}
         </button>
       </div>
-      <p className="text-[9px] text-white/35 font-mono">Веган: {diet.vegan} · вегет.: {diet.vegetarian} · детей: {diet.children}. Пересчитывается под текущее число участников.</p>
+      <p className="text-[9px] text-white/35 font-mono">Веган: {diet.vegan} · вегет.: {diet.vegetarian} · детей: {diet.children}</p>
       {err && <p className="text-[11px] text-red-400">{err}</p>}
+
       {items.length > 0 && (
-        <div className="space-y-1">
-          {items.map((it, i) => (
-            <div key={i} className="flex justify-between gap-3 text-xs border-b border-white/5 py-1">
-              <span className="text-white/85">{it.item}</span>
-              <span className="text-white/45 font-mono text-right shrink-0">{it.qty}{it.note ? ` · ${it.note}` : ''}</span>
-            </div>
-          ))}
+        <div className="space-y-2">
+          <div className="space-y-1 max-h-48 overflow-y-auto">
+            {items.map((it, i) => (
+              <div key={i} className="flex justify-between gap-3 text-xs border-b border-white/5 py-1 items-center">
+                <input
+                  type="text"
+                  value={it.item || ''}
+                  onChange={(e) => {
+                    const next = [...items];
+                    next[i] = { ...next[i], item: e.target.value };
+                    setItems(next);
+                  }}
+                  placeholder="Товар"
+                  className="flex-1 bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs placeholder:text-white/30"
+                />
+                <input
+                  type="text"
+                  value={it.qty || ''}
+                  onChange={(e) => {
+                    const next = [...items];
+                    next[i] = { ...next[i], qty: e.target.value };
+                    setItems(next);
+                  }}
+                  placeholder="Кол-во"
+                  className="w-20 bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs placeholder:text-white/30 text-right"
+                />
+                <button
+                  type="button"
+                  onClick={() => setItems(items.filter((_, idx) => idx !== i))}
+                  className="text-red-400/60 hover:text-red-400 cursor-pointer text-xs"
+                >✕</button>
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setItems([...items, { item: '', qty: '' }])}
+            className="text-[10px] text-brand hover:text-brand/80 cursor-pointer"
+          >+ Добавить товар</button>
         </div>
       )}
+
+      {estimate > 0 && <p className="text-[10px] text-white/50">💰 Примерная сумма: <b>{estimate} BYN</b></p>}
+
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={save}
+          disabled={loading}
+          className="text-[10px] font-bold text-green-400 bg-green-400/10 border border-green-400/30 rounded-lg px-3 py-1 cursor-pointer hover:bg-green-400/20 disabled:opacity-60 flex-1"
+        >💾 Сохранить</button>
+        <button
+          type="button"
+          onClick={send}
+          disabled={sending || items.length === 0}
+          className="text-[10px] font-bold text-blue-400 bg-blue-400/10 border border-blue-400/30 rounded-lg px-3 py-1 cursor-pointer hover:bg-blue-400/20 disabled:opacity-60 flex-1"
+        >{sending ? '⏳ Отправляю…' : '📤 На согласование'}</button>
+      </div>
     </div>
   );
 }

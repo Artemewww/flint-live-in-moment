@@ -1824,6 +1824,22 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Согласие с закупкой — копим approved_by в events.shopping.
+      if (data.startsWith('shopok_')) {
+        const evId = data.slice('shopok_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Спасибо, учли твоё согласие!' });
+        try {
+          const { data: ev } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+          const shopping = (ev as any)?.shopping || {};
+          const approved = Array.isArray(shopping.approved_by) ? shopping.approved_by : [];
+          if (!approved.includes(tgId)) {
+            await supabase.from('events').update({ shopping: { ...shopping, approved_by: [...approved, tgId] } }).eq('id', evId);
+          }
+        } catch { /* no-op */ }
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
       // «✅ Понял(а)» под рассылкой — благодарим и убираем кнопку (без спиннера).
       if (data.startsWith('ack_')) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Принято, спасибо!' });

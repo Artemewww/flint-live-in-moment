@@ -112,6 +112,7 @@ function mapEventToCamelCase(event: any) {
     program: event.program || [],
     notifications: event.notifications || {},
     programVoting: event.program_voting,
+    shopping: event.shopping || null,
     createdAt: event.created_at,
     updatedAt: event.updated_at
   };
@@ -276,6 +277,44 @@ export default async function handler(req: any, res: any) {
     try {
       const body = req.body;
 
+      // Отправка списка закупки на согласование участникам. Сохраняет список
+      // (status=sent) и шлёт записанным с кнопкой «✅ Согласен» (бот: shopok_).
+      if (req.query?.action === 'shopping_send') {
+        const eventId = String(body.eventId || body.id || '');
+        if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+        const { data: ev } = await supabase
+          .from('events').select('title,shopping').eq('id', eventId).maybeSingle();
+        const shopping = body.shopping || (ev as any)?.shopping || {};
+        const items = Array.isArray(shopping.items) ? shopping.items : [];
+        if (!items.length) return res.status(400).json({ error: 'Список закупки пуст' });
+
+        const nextShopping = { ...shopping, status: 'sent', approved_by: shopping.approved_by || [], sent_at: new Date().toISOString() };
+        await supabase.from('events').update({ shopping: nextShopping }).eq('id', eventId);
+
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id').eq('event_id', eventId).neq('status', 'cancelled');
+        const ids = Array.from(new Set((regs || [])
+          .map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0)));
+
+        const lines = items.slice(0, 40).map((it: any) => `• ${esc(it.item)}${it.qty ? ` — ${esc(it.qty)}` : ''}${it.note ? ` <i>(${esc(it.note)})</i>` : ''}`).join('\n');
+        const est = Number(shopping.estimate) > 0 ? `\n\n💰 Примерная сумма: <b>${Number(shopping.estimate)} BYN</b>` : '';
+        const text = `🛒 <b>Закупка на «${esc((ev as any)?.title || 'событие')}»</b>\n\nСогласуй список — потом выберем закупщика и разделим расходы поровну.\n\n${lines}${est}`;
+
+        let sent = 0;
+        if (BOT_TOKEN) {
+          await Promise.allSettled(ids.map((chatId) =>
+            fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+                reply_markup: { inline_keyboard: [[{ text: '✅ Согласен с закупкой', callback_data: `shopok_${eventId}` }]] },
+              }),
+            }).then((r) => r.json()).then((j) => { if (j?.ok) sent++; })
+          ));
+        }
+        return res.status(200).json({ ok: true, sent, total: ids.length });
+      }
+
       // Маппинг camelCase -> snake_case для Supabase
       const eventData = {
         id: body.id,
@@ -369,6 +408,7 @@ export default async function handler(req: any, res: any) {
         maxParticipants: 'max_participants',
         paymentDetails: 'payment_details',
         logistics: 'logistics',
+        shopping: 'shopping',
       };
 
       const patch: Record<string, unknown> = {};
