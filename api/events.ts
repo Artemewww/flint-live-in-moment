@@ -401,8 +401,10 @@ export default async function handler(req: any, res: any) {
     // и координатами. Пускаем участника клуба (подписанный initData) или
     // человека с валидным реф-кодом приглашения.
     if ((process.env.GATE_ENABLED ?? '1') !== '0') {
-      let allowed = false;
-      const user = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
+      // Админ (httpOnly-кука сессии) видит афишу всегда — иначе после
+      // закрытия списка гейтом админка оставалась без событий.
+      let allowed = isAdmin(req);
+      const user = allowed ? null : verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
       if (user) {
         const { data: m } = await supabase
           .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();

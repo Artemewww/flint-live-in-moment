@@ -961,6 +961,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       setIsAuthenticated(true);
       setPassword('');
+      // Кука получена — афиша в App теперь доступна, перезагружаем список.
+      window.dispatchEvent(new Event('flint:events-refetch'));
     } catch (e) {
       setLoginError((e as Error).message);
     } finally {

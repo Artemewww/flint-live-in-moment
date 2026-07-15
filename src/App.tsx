@@ -106,6 +106,15 @@ export default function App() {
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
     .find(e => new Date(e.date) >= new Date(new Date().toISOString().split('T')[0]));
 
+  // Рефетч афиши по требованию: админка после логина получает куку,
+  // с которой сервер уже отдаёт список.
+  const [eventsReloadTick, setEventsReloadTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setEventsReloadTick((t) => t + 1);
+    window.addEventListener('flint:events-refetch', bump);
+    return () => window.removeEventListener('flint:events-refetch', bump);
+  }, []);
+
   // Загружаем события из API (Supabase) или fallback на JSON.
   // Афиша закрыта на сервере: шлём initData участника и реф-код приглашения.
   // На 403 фолбэки НЕ используем — иначе статический JSON обходил бы гейт.
@@ -148,8 +157,8 @@ export default function App() {
             });
           });
       });
-    // Перезапрашиваем после прохождения гейта: реф-код появляется в localStorage.
-  }, [gatePassed]);
+    // Перезапрашиваем после прохождения гейта и по событию рефетча (логин админа).
+  }, [gatePassed, eventsReloadTick]);
 
   // Статус в клубе: одобрен ли участник. Нужно, чтобы не показывать «верификацию»
   // тем, кто уже внутри (пришёл по реф-ссылке и принят костяком).
