@@ -640,6 +640,19 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
 }
 
 // --- Сессии диалога (для пошагового ввода текста) ---
+// Бонусные баллы за поощряемые действия (шаринг ресурсов клуба).
+const POINTS_SHARE_CAR = 15;   // предложил машину с местами
+const POINTS_SHARE_TENT = 12;  // предложил места в палатке
+
+/** Начисляет баллы через RPC и возвращает новый баланс (0 при ошибке). */
+async function awardPoints(tgId: number, n: number): Promise<number> {
+  try {
+    await supabase.rpc('award_points', { tg: tgId, n });
+    const { data } = await supabase.from('members').select('points').eq('telegram_id', tgId).maybeSingle();
+    return Number((data as any)?.points) || 0;
+  } catch { return 0; }
+}
+
 async function getSession(tgId: number): Promise<{ state: string; context: any } | null> {
   const { data } = await supabase.from('bot_sessions').select('state,context').eq('telegram_id', tgId).maybeSingle();
   return data ? { state: (data as any).state, context: (data as any).context || {} } : null;
@@ -1635,16 +1648,19 @@ export default async function handler(req: any, res: any) {
           event_id: evId, driver_id: tgId, driver_name: cq.from.first_name || cq.from.username || 'Водитель',
           from_point: from, depart_text: depart, seats_total: seats, fuel_cost: fuel,
         };
+        let carBonus = 0;
         if (existing) {
           await supabase.from('rides').update(rideData).eq('id', (existing as any).id);
         } else {
           await supabase.from('rides').insert(rideData);
+          carBonus = await awardPoints(tgId, POINTS_SHARE_CAR); // баллы только за новую машину
         }
         await clearSession(tgId);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: existing ? 'Поездка обновлена!' : 'Поездка добавлена!' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ ${existing ? 'Твоя поездка обновлена' : 'Готово! Твоя поездка добавлена'}:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' Br/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`,
+          text: `✅ ${existing ? 'Твоя поездка обновлена' : 'Готово! Твоя поездка добавлена'}:\n📍 ${esc(from)}  🕐 ${esc(depart)}\nМест: ${seats}  ⛽ ${fuel ? fuel + ' Br/чел' : 'бесплатно'}\n\nУчастники увидят её в «Кто едет» и смогут занять место.`
+            + (carBonus ? `\n\n🏅 <b>+${POINTS_SHARE_CAR} баллов</b> за то, что везёшь других! Всего: ${carBonus}.` : ''),
           reply_markup: kb([[openBtn]]),
         });
         // Уведомить тех, кто искал попутку.
@@ -1901,10 +1917,12 @@ export default async function handler(req: any, res: any) {
           await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '⚠️ Не удалось добавить палатку. Возможно, ещё не применена миграция палаток (2026-tents-booking.sql).' });
           return res.status(200).json({ ok: true });
         }
+        const tentBonus = myTent ? 0 : await awardPoints(tgId, POINTS_SHARE_TENT); // баллы только за новую палатку
         const grLabel = gender === 'male' ? 'только М' : gender === 'female' ? 'только Ж' : 'любые';
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `✅ Палатка добавлена: ${n} мест · подселение — ${grLabel}.\n\nУчастники увидят её в «🛌 Места в палатках» и смогут занять место.`,
+          text: `✅ Палатка добавлена: ${n} мест · подселение — ${grLabel}.\n\nУчастники увидят её в «🛌 Места в палатках» и смогут занять место.`
+            + (tentBonus ? `\n\n🏅 <b>+${POINTS_SHARE_TENT} баллов</b> за то, что делишься палаткой! Всего: ${tentBonus}.` : ''),
         });
         return res.status(200).json({ ok: true });
       }
