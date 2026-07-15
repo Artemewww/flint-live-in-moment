@@ -220,6 +220,31 @@ export default async function handler(req: any, res: any) {
     // Счётчик участников (не критично, если RPC нет).
     try { await supabase.rpc('increment_participants', { event_id: eventId }); } catch {}
 
+    // Водитель из регистрации → строка в rides, чтобы машина была ВИДНА везде:
+    // бот «Кто едет», статистика события и админ-логистика читают таблицу rides.
+    // Раньше has_transport оставался невидимым — rides создавал только бот-флоу
+    // ridenew. Одна активная машина на человека на событие (повтор = правка).
+    try {
+      const seats = Number(body.transport_seats) || 0;
+      if (body.has_transport && seats > 0) {
+        const { data: existing } = await supabase
+          .from('rides').select('id,kind')
+          .eq('event_id', eventId).eq('driver_id', member.telegram_id).eq('active', true);
+        const car = (existing || []).find((r: any) => r.kind !== 'tent');
+        const rideRow: Record<string, unknown> = {
+          event_id: eventId,
+          driver_id: member.telegram_id,
+          driver_name: name || 'Водитель',
+          from_point: body.transport_details || 'по договорённости',
+          seats_total: seats,
+          kind: 'car',
+          active: true,
+        };
+        if (car) await supabase.from('rides').update(rideRow).eq('id', (car as any).id);
+        else await supabase.from('rides').insert(rideRow);
+      }
+    } catch { /* синхронизация rides не критична для заявки */ }
+
     // 3) Уведомление организатору (best-effort, не роняет заявку).
     let delivered = false;
     if (BOT_TOKEN && ADMIN_CHAT_ID) {

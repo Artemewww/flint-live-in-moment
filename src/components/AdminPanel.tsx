@@ -2219,6 +2219,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                     <p className="text-[9px] text-white/40">из {ride.seats_total || 0}</p>
                                   </div>
                                 </div>
+                                {/* Места визуально: зелёный квадрат = занято, пустой = свободно. */}
+                                {(ride.seats_total || 0) > 0 && (
+                                  <div className="flex flex-wrap gap-1 mt-2" title={`${ride.seats_taken || 0} занято, ${free} свободно`}>
+                                    {Array.from({ length: ride.seats_total || 0 }).map((_, i) => (
+                                      <span
+                                        key={i}
+                                        className={`w-4 h-4 rounded ${i < (ride.seats_taken || 0) ? 'bg-brand border border-brand' : 'bg-transparent border border-white/25'}`}
+                                      />
+                                    ))}
+                                  </div>
+                                )}
                                 {ride.passengers?.length > 0 && (
                                   <p className="text-[10px] text-white/60 mt-2 pt-2 border-t border-white/5">
                                     Пассажиры: {ride.passengers.map((p: any) => p.passenger_name).join(', ')}

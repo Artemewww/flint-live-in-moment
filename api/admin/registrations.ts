@@ -183,8 +183,36 @@ export default async function handler(req: any, res: any) {
         total_amount: registrations.reduce((sum, r) => sum + (r.payment_amount || 0), 0)
       };
 
-      // Живая логистика: машины, которые участники заявили сами, их пассажиры и
-      // SOS-заявки. Это не то же, что has_transport из анкеты — это реальные брони.
+      // Бэкфилл: водители из анкеты (has_transport) без строки в rides. Раньше
+      // rides создавал только бот-флоу, поэтому веб-водители (напр. София с
+      // авто и 2 местами) были невидимы. Самолечение при открытии события —
+      // идемпотентно (создаём только если активной машины ещё нет).
+      try {
+        const drivers = (registrations || []).filter(
+          (r: any) => r.has_transport && Number(r.transport_seats) > 0
+        );
+        if (drivers.length) {
+          const { data: existingRides } = await supabase
+            .from('rides').select('driver_id,kind').eq('event_id', eventId).eq('active', true);
+          const carDrivers = new Set(
+            (existingRides || []).filter((r: any) => r.kind !== 'tent').map((r: any) => String(r.driver_id))
+          );
+          const toCreate = drivers
+            .filter((r: any) => !carDrivers.has(String(r.telegram_id)))
+            .map((r: any) => ({
+              event_id: eventId,
+              driver_id: r.telegram_id,
+              driver_name: r.name || r.first_name || 'Водитель',
+              from_point: r.transport_details || 'по договорённости',
+              seats_total: Number(r.transport_seats) || 0,
+              kind: 'car',
+              active: true,
+            }));
+          if (toCreate.length) await supabase.from('rides').insert(toCreate);
+        }
+      } catch { /* бэкфилл не критичен */ }
+
+      // Живая логистика: машины (реальные брони + синхронизированные из анкет).
       const { data: rides } = await supabase
         .from('rides').select('*').eq('event_id', eventId).eq('active', true).order('created_at');
 
