@@ -46,7 +46,8 @@ async function getEvent(id: string) {
 async function geminiText(prompt: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
   if (!key) return '';
-  const models = [process.env.GEMINI_MODEL, 'gemini-2.0-flash', 'gemini-1.5-flash'].filter(Boolean) as string[];
+  // У gemini-2.0-flash free-квота нулевая (limit: 0), у -latest — есть.
+  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   for (const model of models) {
     try {
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
@@ -54,8 +55,9 @@ async function geminiText(prompt: string): Promise<string> {
         body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
       });
       const j: any = await r.json();
-      const out = j?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (out) return String(out);
+      const parts = j?.candidates?.[0]?.content?.parts || [];
+      const out = parts.map((p: any) => p?.text || '').join('').trim();
+      if (out) return out;
     } catch { /* пробуем следующую модель */ }
   }
   return '';
