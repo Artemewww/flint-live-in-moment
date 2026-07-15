@@ -2285,6 +2285,30 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
                       <button
                         onClick={async () => {
+                          const incomplete = (eventStats.registrations || []).filter((r: any) => !r.dietary || !r.equipment || !r.roles);
+                          if (!incomplete.length) { alert('Все участники заполнили анкету!'); return; }
+                          if (!window.confirm(`Отправить напоминание ${incomplete.length} участникам дополнить анкету?`)) return;
+                          setBroadcasting(selectedEvent.id);
+                          try {
+                            const msg = `📋 <b>Дополни профиль!</b>\n\nЧтобы организаторы знали:\n🍽 Что ты ешь (веган/вегетарианец)\n🎒 Что везёшь (палатка, спальник и т.д.)\n🙌 Чем ты полезен (готовка, аптечка и т.д.)\n\nЭто помогает подготовить событие под каждого.\n\n👉 Открой событие в боте и заполни все пункты в меню регистрации.`;
+                            await sendMessageToAll(msg);
+                            setActionMsg({ ok: true, text: `Напоминание отправлено ${incomplete.length} участникам` });
+                          } catch (e) {
+                            setActionMsg({ ok: false, text: 'Ошибка рассылки' });
+                          } finally {
+                            setBroadcasting(null);
+                          }
+                        }}
+                        disabled={broadcasting === selectedEvent.id}
+                        className="bg-white/5 border border-white/10 rounded-xl p-4 text-left hover:bg-white/10 transition-all cursor-pointer disabled:opacity-50"
+                      >
+                        <ClipboardList className="w-6 h-6 text-brand mb-2" />
+                        <p className="text-xs font-bold uppercase">Напомнить заполнить анкету</p>
+                        <p className="text-[10px] text-white/40 mt-1">Тем, кто не дополнил</p>
+                      </button>
+
+                      <button
+                        onClick={async () => {
                           if (!window.confirm('Разослать меню всем участникам события в Telegram?')) return;
                           setBroadcasting(selectedEvent.id);
                           try {
