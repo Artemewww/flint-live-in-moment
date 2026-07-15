@@ -7,6 +7,60 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+
+function esc(s: any): string {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+/** Краткое текстовое представление маршрута — для сравнения «было/стало». */
+function itinerarySig(logistics: any): string {
+  const it = Array.isArray(logistics?.itinerary) ? logistics.itinerary : [];
+  return it.map((p: any) => `${p.time || ''}|${p.title || ''}|${p.payment || ''}|${p.price || ''}`).join('§');
+}
+
+/**
+ * Уведомление записанных об изменениях события: сравниваем ключевые поля
+ * (дата/время/локация/маршрут) старой и новой версии и шлём только при
+ * реальном отличии, с кнопкой «✅ Понял(а)» (ack_ обрабатывается в вебхуке).
+ */
+async function notifyEventChanges(eventId: string, before: any, after: any): Promise<number> {
+  if (!BOT_TOKEN || !before) return 0;
+  const changes: string[] = [];
+  if ((before.date || '') !== (after.date || '') || (before.date_end || '') !== (after.date_end || '')) {
+    changes.push(`📆 Дата: <b>${esc(after.date_label || after.date)}</b>`);
+  }
+  if ((before.time || '') !== (after.time || '') || (before.time_end || '') !== (after.time_end || '')) {
+    changes.push(`🕐 Время: <b>${esc(after.time || '—')}${after.time_end ? '–' + esc(after.time_end) : ''}</b>`);
+  }
+  if ((before.location || '') !== (after.location || '')) {
+    changes.push(`📍 Место: <b>${esc(after.location)}</b>`);
+  }
+  if (itinerarySig(before.logistics) !== itinerarySig(after.logistics)) {
+    changes.push('🧭 Обновлён маршрут дня — загляни в карточку события');
+  }
+  if (!changes.length) return 0;
+
+  const { data: regs } = await supabase
+    .from('registrations').select('telegram_id').eq('event_id', eventId).neq('status', 'cancelled');
+  const ids = Array.from(new Set((regs || [])
+    .map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0)));
+  if (!ids.length) return 0;
+
+  const text = `✏️ <b>Изменения в событии «${esc(after.title)}»</b>\n\n${changes.join('\n')}\n\nПроверь детали, чтобы не было сюрпризов.`;
+  let sent = 0;
+  await Promise.allSettled(ids.map((chatId) =>
+    fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: [[{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }]] },
+      }),
+    }).then((r) => r.json()).then((j) => { if (j?.ok) sent++; })
+  ));
+  return sent;
+}
+
 // Маппинг snake_case -> camelCase для фронтенда
 function mapEventToCamelCase(event: any) {
   if (!event) return null;
@@ -251,6 +305,12 @@ export default async function handler(req: any, res: any) {
       if (body.paymentDetails) (eventData as any).payment_details = body.paymentDetails;
       if (body.checklist) (eventData as any).checklist = body.checklist;
 
+      // Старая версия — чтобы после сохранения понять, что изменилось, и
+      // уведомить записанных (только при реальном отличии ключевых полей).
+      const { data: before } = await supabase
+        .from('events').select('date,date_end,time,time_end,location,date_label,logistics')
+        .eq('id', body.id).maybeSingle();
+
       const { data: event, error } = await supabase
         .from('events')
         .upsert(eventData, {
@@ -264,7 +324,12 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to save event', details: error.message });
       }
 
-      return res.status(200).json({ success: true, event: mapEventToCamelCase(event) });
+      // Уведомляем об изменениях только при редактировании существующего
+      // события (before есть). Ошибки рассылки не роняют сохранение.
+      let notified = 0;
+      try { if (before) notified = await notifyEventChanges(body.id, before, event); } catch { /* no-op */ }
+
+      return res.status(200).json({ success: true, event: mapEventToCamelCase(event), notified });
     } catch (error) {
       console.error('Error:', error);
       return res.status(500).json({ error: 'Internal server error' });
