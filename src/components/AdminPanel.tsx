@@ -229,6 +229,9 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
 
   const approved = Array.isArray(event?.shopping?.approved_by) ? event.shopping.approved_by.length : 0;
   const estimate = Number(event?.shopping?.estimate) || 0;
+  const buyerId = event?.shopping?.buyer_id;
+  const buyer = registrations.find((r: any) => r.telegramId === buyerId);
+  const notDrivers = registrations.filter((r: any) => !r.hasTransport);
 
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -236,6 +239,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
         <h4 className="text-xs font-bold uppercase flex items-center gap-2">
           <ShoppingCart className="w-4 h-4 text-brand" /> Список закупки · {people} чел
           {approved > 0 && <span className="text-[9px] text-green-400 ml-2">✅ согласили: {approved}</span>}
+          {buyer && <span className="text-[9px] text-blue-400 ml-2">🛒 закупщик: {buyer.name}</span>}
         </h4>
         <button type="button" onClick={gen} disabled={loading} className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 disabled:opacity-60 shrink-0">
           {loading ? '⏳ Считаю…' : '🤖 Сгенерировать'}
@@ -288,6 +292,33 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
       )}
 
       {estimate > 0 && <p className="text-[10px] text-white/50">💰 Примерная сумма: <b>{estimate} BYN</b></p>}
+
+      {/* Выбор закупщика */}
+      <div className="bg-white/5 rounded-lg p-2 border border-white/10">
+        <p className="text-[9px] text-white/50 uppercase mb-1">🛒 Закупщик события</p>
+        <select
+          value={buyerId || ''}
+          onChange={async (e) => {
+            const newBuyerId = e.target.value ? Number(e.target.value) : null;
+            try {
+              await fetch(`/api/admin/events/${event.id}`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ shopping: { ...event.shopping, buyer_id: newBuyerId } }),
+              });
+            } catch { /* no-op */ }
+          }}
+          className="w-full bg-white/5 border border-white/10 rounded px-2 py-1 text-white text-xs placeholder:text-white/30"
+        >
+          <option value="">— не выбран —</option>
+          {notDrivers.map((r: any) => (
+            <option key={r.telegramId} value={r.telegramId} className="bg-[#121212]">
+              {r.name} {r.status === 'confirmed' ? '✅' : '⏳'}
+            </option>
+          ))}
+        </select>
+        {!notDrivers.length && <p className="text-[9px] text-white/40 mt-1">Все участники водители — выбери из них или назначь организатора</p>}
+      </div>
 
       <div className="flex gap-2">
         <button
