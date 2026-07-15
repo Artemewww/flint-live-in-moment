@@ -376,6 +376,48 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ items: parsed.items || [] });
     }
 
+    if (task === 'itinerary') {
+      const prompt =
+        `Ты — организатор сообщества «Живи в моменте» (Минск, Беларусь). ` +
+        `Составь МАРШРУТ ДНЯ (таймлайн по точкам) для события.\n\n` +
+        `Название: «${ev.title || 'Событие'}». Тип: ${typeRu}. Локация: ${ev.location || 'не указана'}. Длительность: ${days}. Людей: ${people}.\n` +
+        (ev.painPoint ? `Смысл/запрос: ${ev.painPoint}.\n` : '') +
+        (Array.isArray(ev.program) && ev.program.length ? `Программа: ${ev.program.slice(0, 12).join('; ')}.\n` : '') +
+        `\nВерни JSON: массив points из ${Number(body?.count) >= 1 && Number(body?.count) <= 15 ? `РОВНО ${Number(body.count)}` : '4–7'} точек по порядку дня. ` +
+        `Каждая точка: time (ЧЧ:ММ), title (короткое название остановки на русском), ` +
+        `payment (одно из: self=платит сам, host=за счёт организатора, split=делим поровну, free=бесплатно), ` +
+        `price (число BYN, 0 если бесплатно/за счёт организатора), priceNote (за что платит, коротко). ` +
+        `Координаты не указывай — их проставит организатор. Цены — ориентировочные по рынку Минска в BYN, реалистичные.`;
+      const parsed = await genJSON(ai, prompt, {
+        type: Type.OBJECT,
+        properties: {
+          points: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                time: { type: Type.STRING },
+                title: { type: Type.STRING },
+                payment: { type: Type.STRING },
+                price: { type: Type.NUMBER },
+                priceNote: { type: Type.STRING },
+              },
+              required: ['title'],
+            },
+          },
+        },
+        required: ['points'],
+      });
+      const points = (parsed.points || []).map((p: any) => ({
+        time: String(p.time || ''),
+        title: String(p.title || ''),
+        payment: ['self', 'host', 'split', 'free'].includes(p.payment) ? p.payment : 'self',
+        price: Number(p.price) || 0,
+        priceNote: String(p.priceNote || ''),
+      }));
+      return res.status(200).json({ points, model: usedModel });
+    }
+
     // task === 'program'
     const prompt =
       `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +

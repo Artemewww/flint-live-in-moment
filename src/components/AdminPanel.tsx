@@ -29,6 +29,19 @@ async function aiProgram(ev: any): Promise<string[] | null> {
   } catch { return null; }
 }
 
+/** ИИ-генерация точек маршрута дня (logistics.itinerary). */
+async function aiItinerary(ev: any, count?: number): Promise<any[] | null> {
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: 'itinerary', event: ev, people: ev.maxParticipants, count }),
+    });
+    const j = await res.json();
+    return Array.isArray(j.points) && j.points.length ? j.points : null;
+  } catch { return null; }
+}
+
 /** Нормализация времени: "1800" → "18:00", пусто → "". */
 function normalizeTime(t: string): string {
   if (!t) return '';
@@ -243,13 +256,23 @@ function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) =
  * Структура точки: { time, title, lat, lng, payment, price, priceNote }.
  * payment: self (плачу сам) | host (организатор) | split (делим) | free.
  */
-function ItineraryEditor({ value, onChange }: { value: any[]; onChange: (v: any[]) => void }) {
+function ItineraryEditor({ value, onChange, event }: { value: any[]; onChange: (v: any[]) => void; event?: any }) {
   const pts: any[] = Array.isArray(value) ? value : [];
+  const [gen, setGen] = useState(false);
   const inp = 'bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
   const PAY: [string, string][] = [['self', 'Плачу сам'], ['host', 'Организатор'], ['split', 'Делим поровну'], ['free', 'Бесплатно']];
 
   const upd = (i: number, patch: any) => onChange(pts.map((p, idx) => (idx === i ? { ...p, ...patch } : p)));
   const add = () => onChange([...pts, { title: '', time: '', payment: 'self' }]);
+  const generate = async () => {
+    if (!event) return;
+    setGen(true);
+    // Координаты у ИИ-точек пустые — сохраняем уже проставленные, если совпадает порядок.
+    const ai = await aiItinerary(event, pts.length || undefined);
+    setGen(false);
+    if (ai) onChange(ai.map((p: any, i: number) => ({ ...p, lat: pts[i]?.lat, lng: pts[i]?.lng })));
+    else alert('Не удалось сгенерировать маршрут. Попробуй ещё раз или добавь точки вручную.');
+  };
   const del = (i: number) => onChange(pts.filter((_, idx) => idx !== i));
   const move = (i: number, dir: -1 | 1) => {
     const j = i + dir;
@@ -263,7 +286,14 @@ function ItineraryEditor({ value, onChange }: { value: any[]; onChange: (v: any[
     <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-3">
       <div className="flex items-center justify-between">
         <label className="text-[10px] text-white/40 uppercase font-mono">🧭 Маршрут дня — точки по времени</label>
-        <button type="button" onClick={add} className="text-[11px] font-bold text-brand hover:text-brand/80 cursor-pointer">+ точка</button>
+        <div className="flex items-center gap-3">
+          {event && (
+            <button type="button" onClick={generate} disabled={gen} className="text-[11px] font-bold text-brand hover:text-brand/80 cursor-pointer disabled:opacity-50">
+              {gen ? '⏳ Генерирую…' : '🤖 Сгенерировать'}
+            </button>
+          )}
+          <button type="button" onClick={add} className="text-[11px] font-bold text-brand hover:text-brand/80 cursor-pointer">+ точка</button>
+        </div>
       </div>
       {pts.length === 0 && (
         <p className="text-white/30 text-xs">Пока нет точек. Добавь остановки — бот покажет их в карточке и построит маршрут в Яндекс.Картах (нужны координаты у 2+ точек).</p>
@@ -2985,6 +3015,7 @@ function EditEventModal({ event, onClose, onSave }: {
           <ItineraryEditor
             value={formData.logistics?.itinerary || []}
             onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+            event={formData}
           />
 
           <div>
@@ -3480,6 +3511,7 @@ function AddEventModal({ onClose, onAdd }: {
                 <ItineraryEditor
                   value={formData.logistics?.itinerary || []}
                   onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+                  event={formData}
                 />
                 <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
                 <textarea placeholder="Описание" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className={inp} rows={3} />
