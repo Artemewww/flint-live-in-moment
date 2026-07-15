@@ -271,6 +271,28 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // Чистка галерей: через 7 дней после события остаётся топ-5 по голосам
+    // (is_keeper), остальные строки удаляются. Сами файлы живут в Telegram
+    // у отправителей — «удаление» значит только уход из галереи.
+    try {
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { data: oldEvents } = await supabase
+        .from('events').select('id').lt('date', weekAgo).limit(50);
+      for (const ev of oldEvents || []) {
+        const { data: media } = await supabase
+          .from('event_media').select('id,is_keeper')
+          .eq('event_id', (ev as any).id)
+          .order('votes', { ascending: false }).order('created_at', { ascending: true });
+        if (!media || !media.length) continue;
+        if (media.every((m: any) => m.is_keeper)) continue;
+        const keep = media.slice(0, 5).map((m: any) => m.id);
+        const drop = media.slice(5).map((m: any) => m.id);
+        await supabase.from('event_media').update({ is_keeper: true }).in('id', keep);
+        if (drop.length) await supabase.from('event_media').delete().in('id', drop);
+        (report as any).galleriesCleaned = ((report as any).galleriesCleaned || 0) + 1;
+      }
+    } catch { /* чистка не должна ронять напоминания */ }
+
     return res.status(200).json({ ok: true, ...report });
   } catch (err) {
     return res.status(200).json({ ok: false, ...report, error: (err as Error).message });

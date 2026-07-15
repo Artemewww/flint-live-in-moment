@@ -277,6 +277,87 @@ async function handleImage(req: any, res: any) {
  * Именно её видит друг в Telegram/Viber — с большой картинкой, названием,
  * датой и описанием. Кнопка ведёт в бота, реф-код сохраняется.
  */
+/**
+ * Прокси медиа из Telegram. Стримим содержимое сами: redirect на
+ * file-URL Telegram недопустим — путь содержит токен бота.
+ */
+async function handleMedia(req: any, res: any) {
+  const fid = String(req.query?.fid || '');
+  if (!fid || !BOT_TOKEN) return res.status(400).end();
+  try {
+    const gf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fid }),
+    }).then((r) => r.json());
+    const path = gf?.result?.file_path;
+    if (!path) return res.status(404).end();
+    const fr = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`);
+    if (!fr.ok) return res.status(404).end();
+    const buf = Buffer.from(await fr.arrayBuffer());
+    // Лимит ответа Vercel-функции — держим запас (фото Telegram сжимает до ~300КБ).
+    if (buf.length > 8 * 1024 * 1024) return res.status(413).end();
+    res.setHeader('Content-Type', fr.headers.get('content-type') || (path.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg'));
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    return res.status(200).send(buf);
+  } catch {
+    return res.status(502).end();
+  }
+}
+
+/** Галерея события: мобильная страница с голосованием (открывается как Mini App из бота). */
+async function handleGallery(req: any, res: any) {
+  const evId = String(req.query?.id || '');
+  if (!evId) return res.status(400).send('Missing id');
+  const { data: ev } = await supabase.from('events').select('title,date').eq('id', evId).maybeSingle();
+  const { data: media } = await supabase
+    .from('event_media').select('id,file_id,media_type,votes')
+    .eq('event_id', evId)
+    .order('votes', { ascending: false }).order('created_at', { ascending: true })
+    .limit(300);
+  const title = escapeHtml(ev?.title || 'Событие');
+  const cards = (media || []).map((m: any) => {
+    const src = `/api/events?action=media&fid=${encodeURIComponent(m.file_id)}`;
+    const inner = m.media_type === 'video'
+      ? `<video src="${src}" controls preload="none" playsinline></video>`
+      : `<img src="${src}" loading="lazy" alt="">`;
+    return `<figure data-id="${m.id}">${inner}<button class="vote" onclick="vote(this,'${m.id}')">❤️ <span>${m.votes}</span></button></figure>`;
+  }).join('');
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  return res.status(200).send(`<!doctype html><html lang="ru"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📸 ${title}</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  body{margin:0;background:#0d0f0c;color:#e8ffe0;font:15px/1.4 -apple-system,system-ui,sans-serif}
+  header{padding:16px;position:sticky;top:0;background:#0d0f0ccc;backdrop-filter:blur(8px)}
+  h1{margin:0;font-size:17px} p{margin:4px 0 0;color:#9fb098;font-size:13px}
+  .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;padding:6px}
+  @media(min-width:640px){.grid{grid-template-columns:repeat(3,1fr)}}
+  figure{margin:0;position:relative;aspect-ratio:1;overflow:hidden;border-radius:12px;background:#1a1e17}
+  figure img,figure video{width:100%;height:100%;object-fit:cover}
+  .vote{position:absolute;right:6px;bottom:6px;border:0;border-radius:20px;padding:5px 10px;background:#000a;color:#fff;font-size:13px;cursor:pointer}
+  .vote.on{background:#e6fd3a;color:#000}
+  .empty{padding:48px 24px;text-align:center;color:#9fb098}
+</style></head><body>
+<header><h1>📸 ${title}</h1><p>Тапни ❤️ за лучшие кадры — топ-5 останется в истории события</p></header>
+${cards ? `<div class="grid">${cards}</div>` : '<div class="empty">Пока пусто. Пришли боту фото с события — они появятся здесь.</div>'}
+<script>
+async function vote(btn, id){
+  const initData = window.Telegram?.WebApp?.initData || '';
+  if(!initData){ btn.textContent='Голос — из Telegram'; return; }
+  btn.disabled = true;
+  try{
+    const r = await fetch('/api/events', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({action:'media_vote', mediaId:id, initData})});
+    const j = await r.json();
+    if(j.votes !== undefined){ btn.querySelector('span').textContent = j.votes; btn.classList.add('on'); }
+  }catch(e){}
+  btn.disabled = false;
+}
+window.Telegram?.WebApp?.expand?.();
+</script></body></html>`);
+}
+
 async function handleOg(req: any, res: any) {
   const id = String(req.query.id || '');
   const ref = String(req.query.ref || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
@@ -395,6 +476,9 @@ export default async function handler(req: any, res: any) {
     // Публичные: превью-страница приглашения и картинка события.
     if (req.query?.action === 'og') return await handleOg(req, res);
     if (req.query?.action === 'image') return await handleImage(req, res);
+    // Галерея события и прокси медиа (file_id неугадываем, голос — только участникам).
+    if (req.query?.action === 'gallery') return await handleGallery(req, res);
+    if (req.query?.action === 'media') return await handleMedia(req, res);
 
     // Афиша — только для своих. Раньше список отдавался публично целиком
     // (select *): любой, знающий URL, видел закрытые события с деталями оплат
@@ -448,6 +532,27 @@ export default async function handler(req: any, res: any) {
     try {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
       const action = body.action || req.query?.action;
+
+      // Голос за кадр в галерее: только участник клуба, один голос на файл.
+      if (action === 'media_vote') {
+        const user = verifyInitData(body.initData, BOT_TOKEN);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+        const { data: m } = await supabase
+          .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        if (!m || !(m.status === 'approved' || m.is_core)) return res.status(403).json({ error: 'members_only' });
+        const mediaId = String(body.mediaId || '');
+        if (!mediaId) return res.status(400).json({ error: 'Missing mediaId' });
+        await supabase.from('event_media_votes').upsert(
+          { media_id: mediaId, telegram_id: user.id },
+          { onConflict: 'media_id,telegram_id', ignoreDuplicates: true }
+        );
+        // votes — пересчёт, а не инкремент: идемпотентно при повторных тапах.
+        const { count } = await supabase
+          .from('event_media_votes').select('media_id', { count: 'exact', head: true })
+          .eq('media_id', mediaId);
+        await supabase.from('event_media').update({ votes: count || 0 }).eq('id', mediaId);
+        return res.status(200).json({ ok: true, votes: count || 0 });
+      }
 
       if (action === 'vote') return await handleVote(body, res);
       if (action === 'interest') return await handleInterest(body, res);

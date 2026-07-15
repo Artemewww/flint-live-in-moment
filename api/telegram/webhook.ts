@@ -364,7 +364,7 @@ async function sendPreferencesPrompt(chatId: number) {
 function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Уже записанному не предлагаем записаться ещё раз — показываем статус и отказ.
   const rows: any[] = registered
-    ? [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]]
+    ? [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]]
     : [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
@@ -1211,6 +1211,23 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // «📸 Фото и видео» — сбор медиа в галерею + ссылка на просмотр.
+      if (data.startsWith('media_')) {
+        const evId = data.slice('media_'.length);
+        await setSession(tgId, 'media_upload', { eventId: evId });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text:
+            '📸 <b>Галерея события</b>\n\n' +
+            'Пришли сюда фото или видео с события (до 30 файлов) — они попадут в общую галерею.\n' +
+            'Там же голосуем ❤️ за лучшие кадры: топ-5 останется в истории события, остальное удалится через 7 дней.\n\n' +
+            'Закончил — жми /start.',
+          reply_markup: kb([[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}` } }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // Подтверждение прочтения рассылки: тап «✅ Понял(а)».
       if (data.startsWith('ack_')) {
         const evId = data.slice('ack_'.length);
@@ -1740,6 +1757,42 @@ export default async function handler(req: any, res: any) {
     }
 
     const msg = update.message || update.edited_message;
+
+    // Фото/видео в сессии сбора медиа — в галерею события.
+    // Файл остаётся в Telegram (file_id), в БД только метаданные.
+    if (msg?.from?.id && (msg.photo || msg.video) && msg.chat?.type === 'private') {
+      const sess = await getSession(msg.from.id);
+      if (sess?.state === 'media_upload' && sess.context?.eventId) {
+        const evId = String(sess.context.eventId);
+        const src = msg.video || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null);
+        if (src?.file_id) {
+          const { count } = await supabase
+            .from('event_media').select('id', { count: 'exact', head: true })
+            .eq('event_id', evId).eq('telegram_id', msg.from.id);
+          if ((count || 0) >= 30) {
+            await tg('sendMessage', { chat_id: msg.chat.id, text: 'Лимит 30 файлов на человека — этого хватит для галереи 🙌' });
+            return res.status(200).json({ ok: true });
+          }
+          const { error } = await supabase.from('event_media').insert({
+            event_id: evId,
+            telegram_id: msg.from.id,
+            file_id: src.file_id,
+            file_unique_id: src.file_unique_id,
+            media_type: msg.video ? 'video' : 'photo',
+          });
+          // 23505 = дубликат (unique event_id+file_unique_id) — не ошибка.
+          if (error && !String(error.code) .includes('23505')) {
+            await tg('sendMessage', { chat_id: msg.chat.id, text: 'Не получилось сохранить, попробуй ещё раз.' });
+          } else {
+            await tg('sendMessage', {
+              chat_id: msg.chat.id,
+              text: error ? 'Это фото уже в галерее 😉' : `✅ В галерее! (${(count || 0) + 1}/30) Шли ещё или жми /start, когда закончишь.`,
+            });
+          }
+        }
+        return res.status(200).json({ ok: true });
+      }
+    }
 
     // Телефон, присланный кнопкой «Отправить мой номер» — это не текст.
     if (msg?.contact && msg.from?.id) {
