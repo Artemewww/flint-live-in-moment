@@ -128,9 +128,20 @@ export default async function handler(req: any, res: any) {
 
         const { data: regs } = await supabase
           .from('registrations')
-          .select('telegram_id,payment_status')
+          .select('telegram_id,payment_status,dietary,equipment,roles')
           .eq('event_id', (ev as any).id)
           .neq('status', 'cancelled');
+
+        // За 3 дня: напомнить про неполную анкету
+        if (h.days === 3) {
+          const incomplete = (regs || []).filter((r: any) => !r.dietary || !r.equipment || !r.roles);
+          for (const r of realIds(incomplete)) {
+            await send(
+              Number(r.telegram_id),
+              `📋 <b>Дополни профиль</b>\n\nДо события осталось 3 дня. Организаторам нужно знать:\n🍽 Питание\n🎒 Снаряжение\n🙌 Роль\n\nОтвори событие в боте и заполни.`
+            );
+          }
+        }
 
         for (const r of realIds(regs || [])) {
           const chatId = Number(r.telegram_id);
@@ -181,6 +192,22 @@ export default async function handler(req: any, res: any) {
                 { inline_keyboard: [[{ text: '👀 Занять место в машине', callback_data: `rides_${(ev as any).id}` }]] }
               );
             }
+          }
+        }
+
+        // За 1 день до события — чек-лист сборки + меню
+        if (h.days === 1) {
+          const { data: allRegs } = await supabase
+            .from('registrations')
+            .select('telegram_id')
+            .eq('event_id', (ev as any).id)
+            .neq('status', 'cancelled');
+
+          for (const r of realIds(allRegs || [])) {
+            await send(
+              Number(r.telegram_id),
+              `🎒 <b>Завтра выезд на «${esc((ev as any).title)}»!</b>\n\n<b>Чеклист сборки:</b>\n☐ Паспорт/ID\n☐ Деньги (если взносы)\n☐ Телефон + зарядка\n☐ Лекарства (свои)\n☐ Одежда по погоде\n☐ Средства гигиены\n☐ Фонарик\n☐ Снаряжение (палатка, спальник, коврик)\n\n⏰ Время сборки уточни в чате события или спроси организатора.`
+            );
           }
         }
 

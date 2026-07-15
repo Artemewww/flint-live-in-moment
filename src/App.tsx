@@ -97,6 +97,7 @@ export default function App() {
   // Уже принятый в клуб участник не должен проходить «верификацию» заново
   // при каждой записи. null = ещё не знаем, true/false = ответ сервера.
   const [clubApproved, setClubApproved] = useState<boolean | null>(null);
+  const [incompleteProfile, setIncompleteProfile] = useState(false);
   /** Участник заблокирован (members.status === 'blocked') — афиша ему недоступна. */
   const [banned, setBanned] = useState(false);
 
