@@ -62,13 +62,11 @@ export interface CommunityEvent {
   deputyId?: number;
   lockedHint?: string;
   program: string[];
-  notifications: {
-    reminder7d: boolean;
-    reminder3d: boolean;
-    reminder1d: boolean;
-    reminder3h: boolean;
-    reminder1h: boolean;
-  };
+  /**
+   * Напоминания (reminder7d/3d/1d/3h/1h) + флаги функций события
+   * (feat_food/feat_rides/feat_tents — вкл/выкл разделов в боте).
+   */
+  notifications: Record<string, boolean | undefined>;
   programVoting?: {
     enabled: boolean;
     deadline: string;

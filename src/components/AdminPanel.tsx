@@ -2686,6 +2686,46 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 }
 
 // Edit Event Modal
+/**
+ * Тумблеры функций события. Выключено — раздела нет в боте (готовка при
+ * записи, машины/попутки, палатки); включил — процесс сразу доступен.
+ * Без явного флага поведение определяется типом события (как раньше).
+ */
+function FeatureToggles({ value, type, onChange }: {
+  value: Record<string, any>;
+  type: string;
+  onChange: (v: Record<string, any>) => void;
+}) {
+  const defFood = ['active', 'male', 'mixed'].includes(type);
+  const defLogi = type !== 'intellectual';
+  const items = [
+    { key: 'feat_food', label: '🍽 Готовка и меню', def: defFood },
+    { key: 'feat_rides', label: '🚗 Машины и попутки', def: defLogi },
+    { key: 'feat_tents', label: '⛺ Палатки', def: defLogi },
+  ];
+  return (
+    <div>
+      <label className="text-[11px] uppercase tracking-widest text-white/40 block mb-2">Функции события</label>
+      <div className="flex flex-wrap gap-2">
+        {items.map((it) => {
+          const on = typeof value?.[it.key] === 'boolean' ? value[it.key] : it.def;
+          return (
+            <button
+              key={it.key}
+              type="button"
+              onClick={() => onChange({ ...value, [it.key]: !on })}
+              className={`px-3 py-2 rounded-xl border text-xs font-mono transition-colors cursor-pointer ${on ? 'border-[#E6FD3A]/60 text-[#E6FD3A] bg-[#E6FD3A]/10' : 'border-white/10 text-white/40 bg-transparent'}`}
+            >
+              {on ? '✓ ' : '– '}{it.label}
+            </button>
+          );
+        })}
+      </div>
+      <p className="text-[11px] text-white/30 mt-1.5">Выключено — раздела нет в боте. Включил — участники сразу могут пользоваться.</p>
+    </div>
+  );
+}
+
 function EditEventModal({ event, onClose, onSave }: {
   event: CommunityEvent;
   onClose: () => void;
@@ -2716,7 +2756,8 @@ function EditEventModal({ event, onClose, onSave }: {
     program: (event.program || []) as string[],
     logistics: (event.logistics || {}) as Record<string, any>,
     paymentDetails: (event.paymentDetails || {}) as Record<string, any>,
-    houseQualities: (event.houseQualities || []) as HouseQuality[]
+    houseQualities: (event.houseQualities || []) as HouseQuality[],
+    notifications: ((event as any).notifications || {}) as Record<string, any>
   });
 
   // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
@@ -2757,7 +2798,8 @@ function EditEventModal({ event, onClose, onSave }: {
       program: formData.program,
       logistics: formData.logistics,
       paymentDetails: formData.paymentDetails,
-      houseQualities: formData.houseQualities
+      houseQualities: formData.houseQualities,
+      notifications: formData.notifications
     });
   };
 
@@ -3032,6 +3074,12 @@ function EditEventModal({ event, onClose, onSave }: {
             onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold({ ...formData, type: event.type }).join(' • ')})}
           />
 
+          <FeatureToggles
+            value={formData.notifications}
+            type={event.type}
+            onChange={(v) => setFormData({ ...formData, notifications: v })}
+          />
+
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
               Статус
@@ -3104,6 +3152,7 @@ function AddEventModal({ onClose, onAdd }: {
     houseQualities: [] as HouseQuality[],
     distanceFromMinsk: 0 as number | undefined,
     travelTime: 0 as number | undefined,
+    notifications: {} as Record<string, any>,
   });
 
   const isMinsk = formData.location && /^минск|мнск/i.test(formData.location.replace(/[^а-яА-Яa-zA-Z]/g, ''));
@@ -3214,7 +3263,7 @@ function AddEventModal({ onClose, onAdd }: {
       paymentDetails: formData.paymentDetails,
       distanceFromMinsk: formData.distanceFromMinsk,
       travelTime: formData.travelTime,
-      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true }
+      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications }
     };
     onAdd(newEvent);
   };
@@ -3372,6 +3421,7 @@ function AddEventModal({ onClose, onAdd }: {
                 <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
                 <ListEditor label="Программа" placeholder="Шаг" items={formData.program} aiHint onChange={(v) => setFormData({...formData, program: v})} onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }} />
                 <ListEditor label="Порог входа" placeholder="Условие" items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []} onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})} onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})} />
+                <FeatureToggles value={formData.notifications} type={formData.type} onChange={(v) => setFormData({ ...formData, notifications: v })} />
               </div>
             )}
           </div>

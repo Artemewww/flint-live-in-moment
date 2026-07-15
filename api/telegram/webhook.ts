@@ -310,7 +310,18 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
   return true;
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
-function foodNeeded(ev: any) { return ['active', 'male', 'mixed'].includes(ev?.type); }
+/**
+ * Флаги функций события. Админ включает/выключает в карточке события
+ * (живут в events.notifications: feat_food/feat_rides/feat_tents, без DDL).
+ * Флага нет — поведение по типу события, как раньше.
+ */
+function featureOn(ev: any, key: 'food' | 'rides' | 'tents'): boolean {
+  const v = ev?.notifications?.[`feat_${key}`];
+  if (typeof v === 'boolean') return v;
+  if (key === 'food') return ['active', 'male', 'mixed'].includes(ev?.type);
+  return ev?.type !== 'intellectual';
+}
+function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
 
 /**
  * Постоянное меню внизу чата. 4 пункта по UX-аудиту: меньше когнитивной
@@ -455,7 +466,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if (nav.length) rows.push(nav);
 
   if (ev.price_type === 'paid') rows.push([{ text: '💳 Оплата', callback_data: `pay_${ev.id}` }]);
-  if (ev.type !== 'intellectual') rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
 
   rows.push([
     { text: '❓ Спросить', callback_data: `ask_${ev.id}` },
@@ -728,8 +739,10 @@ export default async function handler(req: any, res: any) {
         if (ev?.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
         const p = payRow(ev);
         if (p) rows.push(p);
-        if (ev && ev.type !== 'intellectual') {
+        if (ev && (featureOn(ev, 'rides') || featureOn(ev, 'tents'))) {
           rows.push([{ text: '🚗 Логистика и брони', callback_data: `logi_${ev.id}` }]);
+        }
+        if (ev && ev.type !== 'intellectual') {
           rows.push([{ text: '📋 Организация (снаряжение, роли)', callback_data: `org_${ev.id}` }]);
         }
         if (ev) rows.push([{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]);
@@ -1448,16 +1461,26 @@ export default async function handler(req: any, res: any) {
       if (data.startsWith('logi_')) {
         const evId = data.slice('logi_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Секции — по включённым у события функциям (машины/палатки).
+        const logiEv = await getEvent(evId);
+        const rows: any[] = [];
+        if (featureOn(logiEv, 'rides')) {
+          rows.push([{ text: '🚗 Еду на машине — предложить места', callback_data: `ridenew_${evId}` }]);
+          rows.push([{ text: '👀 Кто едет / занять место', callback_data: `rides_${evId}` }]);
+          rows.push([{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }]);
+        }
+        if (featureOn(logiEv, 'tents')) {
+          rows.push([{ text: '⛺ Своя палатка — предложить места', callback_data: `tentnew_${evId}` }]);
+          rows.push([{ text: '🛌 Места в палатках', callback_data: `tents_${evId}` }]);
+        }
+        if (!rows.length) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Для этого события логистика не нужна — организатор всё продумал.' });
+          return res.status(200).json({ ok: true });
+        }
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text: '🚗 <b>Логистика и брони</b>\n\nЗдесь всё по инициативе участников: кто едет — сам предлагает места, кому нужно — ищет попутку.',
-          reply_markup: kb([
-            [{ text: '🚗 Еду на машине — предложить места', callback_data: `ridenew_${evId}` }],
-            [{ text: '👀 Кто едет / занять место', callback_data: `rides_${evId}` }],
-            [{ text: '🚶 Нужна попутка', callback_data: `rideseek_${evId}` }],
-            [{ text: '⛺ Своя палатка — предложить места', callback_data: `tentnew_${evId}` }],
-            [{ text: '🛌 Места в палатках', callback_data: `tents_${evId}` }],
-          ]),
+          reply_markup: kb(rows),
         });
         return res.status(200).json({ ok: true });
       }
