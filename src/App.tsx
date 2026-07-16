@@ -639,9 +639,10 @@ export default function App() {
 
         {/* Row 2: COMPONENT 2 - Featured Highlight Event Hero Card */}
         <section id="featured-hero-banner-block" className="pt-2">
-          <InfoSection 
-            events={events} 
-            onRegisterClick={(evt) => setRegisteringEvent(evt)} 
+          <InfoSection
+            events={events}
+            registeredEventIds={registeredEventIds}
+            onRegisterClick={(evt) => setRegisteringEvent(evt)}
             onOpenManifesto={() => setShowManifestoModal(true)}
             onOpenDetails={(evt) => setActiveDetailEvent(evt)}
           />

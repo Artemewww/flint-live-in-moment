@@ -1,12 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Info } from 'lucide-react';
+import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Info, CheckCircle2 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { getToday } from '../data';
 
 interface InfoSectionProps {
   events: CommunityEvent[];
+  registeredEventIds: string[];
   onRegisterClick: (event: CommunityEvent) => void;
   onOpenManifesto: () => void;
   onOpenDetails: (event: CommunityEvent) => void;
@@ -14,6 +15,7 @@ interface InfoSectionProps {
 
 export default function InfoSection({ 
   events, 
+  registeredEventIds,
   onRegisterClick, 
   onOpenManifesto,
   onOpenDetails
@@ -36,6 +38,8 @@ export default function InfoSection({
   if (!featuredEvent) {
     return null;
   }
+
+  const isRegistered = registeredEventIds.includes(featuredEvent.id);
 
   // Calculated registered slots
   const maxSpots = featuredEvent.maxParticipants || 15;
@@ -164,14 +168,25 @@ export default function InfoSection({
 
           {/* Action trigger row */}
           <div className="flex flex-col sm:flex-row gap-3 pt-2 items-stretch sm:items-center">
-            <button
-              onClick={() => onRegisterClick(featuredEvent)}
-              className="flex-1 bg-brand hover:bg-brand-hover text-black font-black uppercase text-xs sm:text-sm tracking-widest py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 group cursor-pointer shadow-lg shadow-brand/10 border-none active:scale-98"
-              id="hero-friendly-cta-btn"
-            >
-              Занять свое место в кругу
-              <Compass className="w-4 h-4 text-black group-hover:rotate-45 transition-transform duration-300" />
-            </button>
+            {isRegistered ? (
+              <button
+                onClick={() => onOpenDetails(featuredEvent)}
+                className="flex-1 bg-white/10 border border-brand/40 text-brand font-black uppercase text-xs sm:text-sm tracking-widest py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 group cursor-pointer active:scale-98"
+                id="hero-friendly-cta-btn"
+              >
+                Ты записан(а) — открыть событие
+                <CheckCircle2 className="w-4 h-4 text-brand" />
+              </button>
+            ) : (
+              <button
+                onClick={() => onRegisterClick(featuredEvent)}
+                className="flex-1 bg-brand hover:bg-brand-hover text-black font-black uppercase text-xs sm:text-sm tracking-widest py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 group cursor-pointer shadow-lg shadow-brand/10 border-none active:scale-98"
+                id="hero-friendly-cta-btn"
+              >
+                Занять свое место в кругу
+                <Compass className="w-4 h-4 text-black group-hover:rotate-45 transition-transform duration-300" />
+              </button>
+            )}
 
             <button 
               type="button"
