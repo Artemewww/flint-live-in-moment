@@ -1064,6 +1064,19 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
             className="w-full mt-1 text-[10px] font-black uppercase text-black bg-brand rounded-lg px-3 py-2 cursor-pointer hover:bg-brand/80 disabled:opacity-50"
           >{splitBusy ? '⏳ Считаю…' : '📤 Разослать сплит в бот (по ртам: участник + гости)'}</button>
           {splitResult && <pre className="text-[9px] text-white/60 whitespace-pre-wrap mt-1">{splitResult}</pre>}
+
+          {/* Долги: висят, пока должник не переведёт, а ПОЛУЧАТЕЛЬ не подтвердит */}
+          {Array.isArray(event?.shopping?.split?.transfers) && event.shopping.split.transfers.length > 0 && (
+            <div className="mt-2 space-y-0.5">
+              <p className="text-[9px] text-white/50 uppercase font-bold">Долги ({event.shopping.split.transfers.filter((t: any) => t.status !== 'confirmed').length} открыто)</p>
+              {event.shopping.split.transfers.map((t: any, i: number) => (
+                <p key={i} className="text-[10px] text-white/70">
+                  {t.status === 'confirmed' ? '✅' : t.status === 'sent' ? '🔵' : '🟡'} {t.from_name} → {t.to_name}: <b>{t.amount} BYN</b>
+                  <span className="text-white/40"> · {t.status === 'confirmed' ? 'подтверждено' : t.status === 'sent' ? 'переведено, ждёт подтверждения получателя' : 'висит'}</span>
+                </p>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

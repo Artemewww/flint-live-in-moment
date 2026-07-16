@@ -1325,6 +1325,139 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Панель организатора (все adm*-кнопки — только для костяка).
+      if (data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_')) {
+        if (!(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
+          return res.status(200).json({ ok: true });
+        }
+        if (data.startsWith('adm_')) {
+          const evId = data.slice('adm_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '⚙️ <b>Что сделать?</b>',
+            reply_markup: kb([
+              [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
+              [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
+              [{ text: '📋 Пингануть незаполнивших', callback_data: `admping_${evId}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (data.startsWith('admsplit_')) {
+          const evId = data.slice('admsplit_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Считаю…' });
+          // Переиспользуем admin API (там вся математика сплита) через Bearer.
+          try {
+            const r = await fetch(`${site}/api/admin/events?action=split_send`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.ADMIN_TOKEN || ''}` },
+              body: JSON.stringify({ eventId: evId }),
+            });
+            const j = await r.json();
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: j.ok
+                ? `✅ Сплит разослан ${j.sent} участникам.\nВсего: <b>${j.total} BYN</b>\n\n${(j.transfers || []).map((s: string) => `• ${esc(s)}`).join('\n') || 'Переводы не нужны — все в расчёте.'}`
+                : `⚠️ ${esc(j.error || 'Ошибка')}`,
+            });
+          } catch { await tg('sendMessage', { chat_id: chatId, text: 'Ошибка запуска сплита, попробуй из админки.' }); }
+          return res.status(200).json({ ok: true });
+        }
+        if (data.startsWith('admdebt_')) {
+          const evId = data.slice('admdebt_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          const { data: evRow } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+          const trs: any[] = (evRow as any)?.shopping?.split?.transfers || [];
+          const lines = trs.map((t: any) =>
+            `${t.status === 'confirmed' ? '✅' : t.status === 'sent' ? '🔵' : '🟡'} ${esc(t.from_name)} → ${esc(t.to_name)}: <b>${t.amount} BYN</b> — ${t.status === 'confirmed' ? 'закрыт' : t.status === 'sent' ? 'ждёт подтверждения получателя' : 'висит'}`);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: lines.length ? `💸 <b>Долги — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines.join('\n')}` : 'Сплит ещё не рассылался — долгов нет.' });
+          return res.status(200).json({ ok: true });
+        }
+        // admping_: доборщик вручную — пингуем только тех, у кого есть пробелы.
+        const evId = data.slice('admping_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пингую…' });
+        const { data: evRow } = await supabase.from('events').select('title').eq('id', evId).maybeSingle();
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id,dietary,equipment,roles,has_transport')
+          .eq('event_id', evId).neq('status', 'cancelled');
+        let pinged = 0;
+        for (const r of (regs || []).filter((x: any) => Number(x.telegram_id) > 0)) {
+          const gaps: string[] = [];
+          if (r.has_transport === null || r.has_transport === undefined) gaps.push('🚗 Транспорт');
+          if (!r.dietary) gaps.push('🍽 Питание');
+          if (!r.equipment) gaps.push('🎒 Снаряжение');
+          if (!r.roles) gaps.push('🙌 Роль');
+          if (!gaps.length) continue;
+          const buttons: any[][] = [];
+          if (gaps.includes('🚗 Транспорт')) buttons.push([{ text: '🚗 Указать транспорт', callback_data: `trask_${evId}` }]);
+          buttons.push([{ text: '📋 Заполнить остальное', callback_data: `org_${evId}` }]);
+          try {
+            await tg('sendMessage', {
+              chat_id: Number(r.telegram_id), parse_mode: 'HTML',
+              text: `📋 <b>Организаторам не хватает данных — «${esc((evRow as any)?.title || '')}»</b>\n\nЗаполни, пожалуйста:\n${gaps.join('\n')}\n\nЭто минута — жми кнопки.`,
+              reply_markup: kb(buttons),
+            });
+            pinged++;
+          } catch { /* заблокировал бота */ }
+        }
+        await tg('sendMessage', { chat_id: chatId, text: pinged ? `✅ Пинганул ${pinged} участников с пробелами в анкете.` : '✅ У всех анкеты полные — пинговать некого.' });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Сплит-долг: должник говорит «перевёл» → получатель должен подтвердить.
+      if (data.startsWith('payd_') || data.startsWith('payc_') || data.startsWith('payx_')) {
+        const kind = data.slice(0, 4); // payd | payc | payx
+        const rest = data.slice(5);
+        const us = rest.lastIndexOf('_');
+        const evId = rest.slice(0, us);
+        const trId = rest.slice(us + 1);
+        const { data: evRow } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+        const shopping = (evRow as any)?.shopping || {};
+        const split = shopping.split || {};
+        const transfers: any[] = Array.isArray(split.transfers) ? split.transfers : [];
+        const t = transfers.find((x: any) => String(x.id) === trId);
+        if (!t) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Перевод не найден' }); return res.status(200).json({ ok: true }); }
+        const saveSplit = () => supabase.from('events').update({ shopping: { ...shopping, split: { ...split, transfers } } }).eq('id', evId);
+
+        if (kind === 'payd') {
+          // Только сам должник может отметить перевод.
+          if (Number(t.from) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это не твой долг' }); return res.status(200).json({ ok: true }); }
+          t.status = 'sent'; t.sent_at = new Date().toISOString();
+          await saveSplit();
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отметил! Ждём подтверждения получателя' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+          // Подтверждает ТОТ, КОМУ должны — до его «Получил» долг висит.
+          try {
+            await tg('sendMessage', {
+              chat_id: Number(t.to), parse_mode: 'HTML',
+              text: `💸 <b>${esc(t.from_name)}</b> отметил перевод <b>${t.amount} BYN</b> тебе (событие «${esc((evRow as any)?.title || '')}»).\nПроверь и подтверди получение.`,
+              reply_markup: kb([[
+                { text: '✅ Получил', callback_data: `payc_${evId}_${trId}` },
+                { text: '❌ Не получал', callback_data: `payx_${evId}_${trId}` },
+              ]]),
+            });
+          } catch { /* получатель мог не открыть бота */ }
+          return res.status(200).json({ ok: true });
+        }
+        // Подтверждение/отклонение — только получатель.
+        if (Number(t.to) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждает получатель перевода' }); return res.status(200).json({ ok: true }); }
+        if (kind === 'payc') {
+          t.status = 'confirmed'; t.confirmed_at = new Date().toISOString();
+          await saveSplit();
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Долг закрыт' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+          try { await tg('sendMessage', { chat_id: Number(t.from), parse_mode: 'HTML', text: `✅ ${esc(t.to_name)} подтвердил получение <b>${t.amount} BYN</b> — долг закрыт, спасибо!` }); } catch { /* no-op */ }
+        } else {
+          t.status = 'pending'; delete t.sent_at;
+          await saveSplit();
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Вернул долг в ожидание' });
+          try { await tg('sendMessage', { chat_id: Number(t.from), parse_mode: 'HTML', text: `⚠️ ${esc(t.to_name)} не видит перевод <b>${t.amount} BYN</b>. Проверь реквизиты и попробуй ещё раз — долг снова в ожидании.` }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       // «Другое число» гостей при регистрации — просим ввести число текстом.
       if (data.startsWith('rgx_')) {
         const evId = data.slice('rgx_'.length);
@@ -2869,6 +3002,25 @@ export default async function handler(req: any, res: any) {
       }
       if (cmd === '/help') {
         await sendHelp(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      // Панель организатора в боте: сплит, должники, пинг незаполнивших.
+      if (cmd === '/admin') {
+        if (!(await isCore(msg.from.id))) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Эта команда — только для костяка клуба.' });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: evs } = await supabase
+          .from('events').select('id,title,date').eq('status', 'open').order('date').limit(8);
+        if (!evs?.length) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Открытых событий нет.' });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '⚙️ <b>Панель организатора</b>\nВыбери событие:',
+          reply_markup: kb(evs.map((e: any) => [{ text: `${e.title} · ${e.date}`, callback_data: `adm_${e.id}` }])),
+        });
         return res.status(200).json({ ok: true });
       }
       if (cmd === '/diet') {

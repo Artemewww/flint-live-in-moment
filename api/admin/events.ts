@@ -454,26 +454,41 @@ export default async function handler(req: any, res: any) {
         }
 
         const total = round2(expenses.reduce((s: number, x: any) => s + (Number(x.amount) || 0), 0));
+
+        // Долги фиксируем в shopping.split: висят как pending, пока должник не
+        // переведёт (payd_), а ПОЛУЧАТЕЛЬ не подтвердит получение (payc_).
+        const trRecords = transfers.map((t, n) => ({
+          id: `${Date.now().toString(36)}${n}`, from: t.from, from_name: t.fromName,
+          to: t.to, to_name: t.toName, amount: t.amount, status: 'pending',
+        }));
+        const shopping0 = (ev as any)?.shopping || {};
+        await supabase.from('events').update({
+          shopping: { ...shopping0, split: { transfers: trRecords, total, sent_at: new Date().toISOString() } },
+        }).eq('id', eventId);
+
         let sent = 0;
         if (BOT_TOKEN) {
           for (const p of debtors) {
             if (!(Number.isFinite(p.id) && p.id > 0)) continue;
-            const my = transfers.filter((t) => t.from === p.id);
-            const toMe = transfers.filter((t) => t.to === p.id);
+            const my = trRecords.filter((t) => t.from === p.id);
+            const toMe = trRecords.filter((t) => t.to === p.id);
             const lines = [
               `💰 <b>Итог по расходам — «${esc((ev as any)?.title || 'событие')}»</b>`,
               '',
               `Всего потрачено: <b>${total} BYN</b>.`,
               `Твоя доля: <b>${round2(p.owed)} BYN</b>${p.mouths > 1 ? ` (за тебя + ${p.mouths - 1} гост${p.mouths - 1 === 1 ? 'я' : 'ей'} — собери с них сам)` : ''}.`,
               p.paid > 0 ? `Ты уже потратил(а): <b>${round2(p.paid)} BYN</b>.` : '',
-              ...my.map((t) => `➡️ Переведи <b>${t.amount} BYN</b> — ${esc(t.toName)}`),
-              ...toMe.map((t) => `⬅️ Тебе переведёт ${esc(t.fromName)}: <b>${t.amount} BYN</b>`),
+              ...my.map((t) => `➡️ Переведи <b>${t.amount} BYN</b> — ${esc(t.to_name)}`),
+              ...toMe.map((t) => `⬅️ Тебе переведёт ${esc(t.from_name)}: <b>${t.amount} BYN</b> (подтверди, когда придёт)`),
               (!my.length && !toMe.length) ? '✅ Ты в расчёте — ничего переводить не нужно.' : '',
+              my.length ? '\nКак переведёшь — жми кнопку, получатель подтвердит.' : '',
             ].filter(Boolean);
+            // Кнопка «Я перевёл» на каждый долг должника.
+            const buttons = my.map((t) => ([{ text: `✅ Я перевёл ${t.amount} BYN → ${t.to_name}`.slice(0, 60), callback_data: `payd_${eventId}_${t.id}` }]));
             try {
               const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chat_id: p.id, text: lines.join('\n'), parse_mode: 'HTML' }),
+                body: JSON.stringify({ chat_id: p.id, text: lines.join('\n'), parse_mode: 'HTML', reply_markup: buttons.length ? { inline_keyboard: buttons } : undefined }),
               }).then((x) => x.json());
               if (r?.ok) sent++;
             } catch { /* no-op */ }
@@ -482,7 +497,7 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({
           ok: true, sent, total,
           split: debtors.map((p) => ({ name: p.name, mouths: p.mouths, owed: round2(p.owed), paid: round2(p.paid), balance: p.bal })),
-          transfers: transfers.map((t) => `${t.fromName} → ${t.toName}: ${t.amount} BYN`),
+          transfers: trRecords.map((t) => `${t.from_name} → ${t.to_name}: ${t.amount} BYN`),
         });
       }
 
