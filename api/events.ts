@@ -426,9 +426,18 @@ async function handleOg(req: any, res: any) {
   const imageUrl = (ev as any).image ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}` : `${site}/assets/images/og-default.png`;
   const botUrl = `https://t.me/${BOT_USERNAME}?start=${ref ? `ref_${ref}_ev_${id}` : `event_${id}`}`;
 
-  const title = `${(ev as any).title} — Живи в моменте`;
-  const desc = [((ev as any).date_label || (ev as any).date), (ev as any).location]
-    .filter(Boolean).join(' · ') + (((ev as any).description) ? ` — ${String((ev as any).description).slice(0, 160)}` : '');
+  const title = `Живи в моменте: ${(ev as any).title}`;
+  // Описание для превью: схлопываем пробелы/переносы и режем по границе слова,
+  // иначе в OG-карточке текст рвётся посреди слова (была «каша» в пересылке).
+  const dateLabel = String((ev as any).date_label || (ev as any).date || '');
+  const rawDesc = String((ev as any).description || '').replace(/\s+/g, ' ').trim();
+  let shortDesc = rawDesc.slice(0, 120);
+  if (rawDesc.length > 120) {
+    const sp = shortDesc.lastIndexOf(' ');
+    if (sp > 40) shortDesc = shortDesc.slice(0, sp);
+    shortDesc += '…';
+  }
+  const desc = `📅 ${dateLabel}${shortDesc ? ` — ${shortDesc}` : ''} Присоединяйся! 🏕`;
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Cache-Control', 'public, max-age=300');
@@ -460,7 +469,7 @@ async function handleOg(req: any, res: any) {
   <div class="body">
     <h1>${escapeHtml((ev as any).title)}</h1>
     <p>${escapeHtml(desc)}</p>
-    <a href="${escapeHtml(botUrl)}">Открыть в Telegram</a>
+    <a href="${escapeHtml(botUrl)}">✅ Забронировать место</a>
   </div>
 </div>
 <script>setTimeout(function(){location.href=${JSON.stringify(botUrl)}},1200)</script>

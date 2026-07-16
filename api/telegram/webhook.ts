@@ -1475,11 +1475,23 @@ export default async function handler(req: any, res: any) {
         const photo = ev.image && !String(ev.image).startsWith('data:')
           ? String(ev.image)
           : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`;
+        // Карточка-приглашение: заголовок с эмодзи, дата, локация, короткое описание,
+        // и заметная кнопка «Забронировать место» (url-кнопка переживает пересылку).
+        const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
+        const rawDesc = ev.description ? String(ev.description).replace(/\s+/g, ' ').trim() : '';
+        const shortDesc = rawDesc ? rawDesc.slice(0, 160) + (rawDesc.length > 160 ? '…' : '') : '';
         const caption =
-          `📤 <b>Позови друга</b>\n\n${esc(invite)}\n\n` +
-          `Твоя ссылка:\n<code>${esc(link)}</code>\n\n` +
-          `<i>Нажми на ссылку — скопируется. Друг откроет её, увидит событие и попадёт в клуб по твоему приглашению.</i>`;
-        const markup = kb([[{ text: '📤 Отправить другу', url: shareUrl }]]);
+          `🎉 <b>${esc(ev.title)} — идём вместе!</b>\n\n` +
+          `📅 ${esc(dateLine)}\n` +
+          (ev.location ? `📍 ${esc(ev.location)}\n` : '') +
+          (ev.price_label ? `💳 ${esc(ev.price_label)}\n` : '') +
+          (shortDesc ? `\n${esc(shortDesc)}\n` : '') +
+          `\n<i>Жми «Забронировать место» — откроется событие, друг попадёт в клуб по твоему приглашению.</i>\n\n` +
+          `Ссылка (можно переслать вручную):\n<code>${esc(link)}</code>`;
+        const markup = kb([
+          [{ text: '✅ Забронировать место', url: link }],
+          [{ text: '📤 Отправить другу', url: shareUrl }],
+        ]);
 
         const sentPhoto = ev.image
           ? await tg('sendPhoto', { chat_id: chatId, photo, parse_mode: 'HTML', caption, reply_markup: markup })
