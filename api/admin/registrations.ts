@@ -367,7 +367,7 @@ export default async function handler(req: any, res: any) {
     // Обновить статус регистрации
     try {
       const { registrationId } = req.query;
-      const { status, paymentStatus, paymentAmount, attended } = req.body;
+      const { status, paymentStatus, paymentAmount, attended, hasTransport, transportSeats, transportDetails, guestCount } = req.body;
 
       if (!registrationId) {
         return res.status(400).json({ error: 'Missing registrationId' });
@@ -385,6 +385,12 @@ export default async function handler(req: any, res: any) {
       if (paymentStatus) updateData.payment_status = paymentStatus;
       if (paymentAmount !== undefined) updateData.payment_amount = paymentAmount;
       if (attended !== undefined) updateData.attended = !!attended;
+      // Транспорт и гости: админ правит руками, когда участник заполнил не всё
+      // (или сообщил детали голосом/в чате). Марка+цвет — в transport_details.
+      if (hasTransport !== undefined) updateData.has_transport = hasTransport === null ? null : !!hasTransport;
+      if (transportSeats !== undefined) updateData.transport_seats = Number(transportSeats) || 0;
+      if (transportDetails !== undefined) updateData.transport_details = String(transportDetails || '').slice(0, 200) || null;
+      if (guestCount !== undefined) updateData.guest_count = Math.max(0, Math.min(50, Number(guestCount) || 0));
 
       const { data: registration, error } = await supabase
         .from('registrations')

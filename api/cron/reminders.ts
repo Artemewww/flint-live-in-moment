@@ -134,15 +134,26 @@ export default async function handler(req: any, res: any) {
 
         // За 3 дня: напомнить про неполную анкету
         if (h.days === 3) {
-          const incomplete = (regs || []).filter((r: any) => !r.dietary || !r.equipment || !r.roles);
+          // «Доборщик»: ловим каждого, кто бросил опрос на полпути — по КАЖДОМУ
+          // незаполненному полю, включая транспорт (дырка: регистрация создаётся
+          // до опроса, и человек мог не дойти до вопросов).
+          const incomplete = (regs || []).filter((r: any) =>
+            !r.dietary || !r.equipment || !r.roles || r.has_transport === null || r.has_transport === undefined);
           for (const r of realIds(incomplete)) {
+            const gaps: string[] = [];
+            if (r.has_transport === null || r.has_transport === undefined) gaps.push('🚗 Транспорт (как добираешься)');
+            if (!r.dietary) gaps.push('🍽 Питание (веган/вегетарианец/всеядный)');
+            if (!r.equipment) gaps.push('🎒 Снаряжение (что везёшь)');
+            if (!r.roles) gaps.push('🙌 Роль (чем полезен)');
+            const buttons: any[][] = [];
+            if (r.has_transport === null || r.has_transport === undefined) buttons.push([{ text: '🚗 Указать транспорт', callback_data: `trask_${(ev as any).id}` }]);
+            if (!r.dietary || !r.equipment || !r.roles) buttons.push([{ text: '📋 Заполнить остальное', callback_data: `org_${(ev as any).id}` }]);
             await send(
               Number(r.telegram_id),
               `📋 <b>Дополни профиль — «${esc((ev as any).title)}»</b>\n\n` +
-                `До выезда 3 дня, а организаторам ещё нужно знать по тебе:\n` +
-                `🍽 Питание (веган/вегетарианец/всеядный)\n🎒 Снаряжение (что везёшь)\n🙌 Роль (чем полезен)\n\n` +
-                `Это 1 минута — жми кнопку ниже.`,
-              { inline_keyboard: [[{ text: '📋 Заполнить', callback_data: `org_${(ev as any).id}` }]] }
+                `До выезда 3 дня, а организаторам по тебе не хватает:\n${gaps.join('\n')}\n\n` +
+                `Это 1 минута — жми кнопки ниже.`,
+              { inline_keyboard: buttons }
             );
           }
         }

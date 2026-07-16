@@ -24,6 +24,8 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   const [phone, setPhone] = useState('');
   const [formData, setFormData] = useState({
     hasTransport: false,
+    // Обязательный выбор способа добраться: null = ещё не ответил (не пропустить).
+    transportMode: null as null | 'car' | 'seek' | 'self',
     transportDetails: '',
     transportSeats: 0,
     inventory: '',
@@ -104,9 +106,11 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
       telegram: tg.startsWith('@') ? tg : `@${tg}`,
       status: 'pending',
       registeredAt: new Date().toISOString(),
-      hasTransport: formData.hasTransport,
-      transportDetails: formData.hasTransport ? formData.transportDetails : undefined,
-      transportSeats: formData.hasTransport ? formData.transportSeats : 0,
+      hasTransport: formData.transportMode === 'car',
+      transportDetails: formData.transportMode === 'car'
+        ? formData.transportDetails
+        : formData.transportMode === 'seek' ? 'Ищет попутку' : undefined,
+      transportSeats: formData.transportMode === 'car' ? formData.transportSeats : 0,
       inventory: formData.inventory ? formData.inventory.split(',').map(item => item.trim()).filter(Boolean) : [],
       paymentStatus: 'pending',
       paymentAmount: 0,
@@ -147,6 +151,8 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     if (!phone.trim()) return setError('Пожалуйста, укажите телефон для связи');
     if (!inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
+    if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
+    if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
 
     // Вне Telegram идентификатор — телефон с префиксом (уходит в отрицательный id, без коллизий с реальными TG).
     finishSuccess(fullName, `web-${phone.replace(/\D/g, '')}`, phone);
@@ -414,38 +420,51 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       />
                     </div>
 
-                    {/* Транспорт */}
+                    {/* Транспорт — обязательный выбор (без него логистика слепая) */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <div className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          id="hasTransport"
-                          checked={(formData as any).hasTransport || false}
-                          onChange={(e) => setFormData({...formData, hasTransport: e.target.checked} as any)}
-                        />
-                        <label htmlFor="hasTransport" className="text-xs text-white/60 flex items-center gap-2">
-                          <Truck className="w-4 h-4 text-brand" />
-                          У меня есть транспорт
-                        </label>
+                      <label className="text-xs text-white/60 flex items-center gap-2">
+                        <Truck className="w-4 h-4 text-brand" />
+                        Как добираетесь? <span className="text-brand">*</span>
+                      </label>
+                      <div className="space-y-2">
+                        {([
+                          { mode: 'car' as const, label: '🚗 На своём авто' },
+                          { mode: 'seek' as const, label: '🙋 Нужна попутка — возьмите меня' },
+                          { mode: 'self' as const, label: '🚶 Без авто, доберусь сам' },
+                        ]).map(({ mode, label }) => (
+                          <button
+                            key={mode}
+                            type="button"
+                            onClick={() => setFormData({...formData, transportMode: mode, hasTransport: mode === 'car'} as any)}
+                            className={`w-full py-2.5 px-3 rounded-lg text-xs font-bold text-left transition-all ${
+                              (formData as any).transportMode === mode
+                                ? 'bg-brand text-black'
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                            }`}
+                          >
+                            {label}
+                          </button>
+                        ))}
                       </div>
 
-                      {(formData as any).hasTransport && (
-                        <div className="space-y-2 pl-6">
+                      {(formData as any).transportMode === 'car' && (
+                        <div className="space-y-2 pl-2">
                           <input
                             type="text"
                             value={(formData as any).transportDetails || ''}
                             onChange={(e) => setFormData({...formData, transportDetails: e.target.value} as any)}
                             className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
-                            placeholder="Марка/модель авто"
+                            placeholder="Марка и цвет (напр. «Kia Rio, белая») *"
                           />
                           <input
                             type="number"
                             value={(formData as any).transportSeats || 0}
                             onChange={(e) => setFormData({...formData, transportSeats: parseInt(e.target.value) || 0} as any)}
                             className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
-                            placeholder="Количество мест (включая ваше)"
-                            min="1"
+                            placeholder="Свободных мест (без вас)"
+                            min="0"
                           />
+                          <p className="text-[10px] text-white/40 italic">Марка и цвет помогут попутчикам найти вас на точке сбора.</p>
                         </div>
                       )}
                     </div>

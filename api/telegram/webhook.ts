@@ -1097,10 +1097,10 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: '🚗 Как добираешься?',
           reply_markup: kb([
-            [{ text: '🚗 На авто — могу подвезти', callback_data: `rt:${ev.id}:car` }],
-            [{ text: '🚗 Авто есть, но мест нет', callback_data: `rt:${ev.id}:carfull` }],
-            [{ text: '🚶 Нужна попутка', callback_data: `rt:${ev.id}:seek` }],
-            [{ text: 'Доберусь сам', callback_data: `rt:${ev.id}:self` }],
+            [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${ev.id}:car` }],
+            [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${ev.id}:carfull` }],
+            [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${ev.id}:seek` }],
+            [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${ev.id}:self` }],
           ]),
         });
       };
@@ -1207,6 +1207,52 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Пропуск марки авто: ставим нейтральное описание и продолжаем опрос.
+      if (data.startsWith('carskip_')) {
+        const evId = data.slice('carskip_'.length);
+        const ev = await getEvent(evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await clearSession(tgId);
+        const { data: rr } = await supabase.from('registrations').select('transport_details').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        if (!(rr as any)?.transport_details) await updateReg(evId, tgId, { transport_details: 'Свой автомобиль' });
+        if (foodNeeded(ev)) {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: '🍽 Твоё питание? (учтём в списке закупки)',
+            reply_markup: kb([
+              [{ text: '🍗 Всеядный', callback_data: `rf:${evId}:all` }],
+              [{ text: '🥗 Вегетарианец', callback_data: `rf:${evId}:veg` }],
+              [{ text: '🌱 Веган', callback_data: `rf:${evId}:vegan` }],
+              [{ text: '🥡 Привезу своё — без общей еды', callback_data: `rf:${evId}:own` }],
+            ]),
+          });
+        } else {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: `✅ Готово! Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>». Детали придут сюда.`,
+            reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Переспрос транспорта (из крон-напоминания, если поле осталось пустым).
+      if (data.startsWith('trask_')) {
+        const evId = data.slice('trask_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🚗 Как добираешься?',
+          reply_markup: kb([
+            [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${evId}:car` }],
+            [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${evId}:carfull` }],
+            [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${evId}:seek` }],
+            [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${evId}:self` }],
+          ]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // «Другое число» гостей при регистрации — просим ввести число текстом.
       if (data.startsWith('rgx_')) {
         const evId = data.slice('rgx_'.length);
@@ -1233,8 +1279,13 @@ export default async function handler(req: any, res: any) {
             });
           } else if (val === 'carfull') {
             // Авто есть, но без свободных мест (везёт вещи/заезжает по пути).
-            await updateReg(evId, tgId, { has_transport: true, transport_seats: 0, transport_details: 'Авто без свободных мест' });
-            if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
+            await updateReg(evId, tgId, { has_transport: true, transport_seats: 0 });
+            await setSession(tgId, 'reg_car', { evId });
+            await tg('editMessageText', {
+              chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+              text: '🚗 Понял, без свободных мест. Напиши марку и цвет авто — чтобы тебя узнали на точке сбора.\n<i>Например: «VW Passat, серый»</i>',
+              reply_markup: kb([[{ text: 'Пропустить', callback_data: `carskip_${evId}` }]]),
+            });
           } else {
             await updateReg(evId, tgId, { has_transport: false, transport_details: val === 'seek' ? 'Ищет попутку' : null });
             if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
@@ -1243,7 +1294,13 @@ export default async function handler(req: any, res: any) {
         }
         if (action === 'rs') {
           await updateReg(evId, tgId, { has_transport: true, transport_seats: Number(val) });
-          if (foodNeeded(ev)) await askFood(evId); else await finalConfirm(ev);
+          // Марка и цвет авто — чтобы на точке сбора люди знали, какую машину искать.
+          await setSession(tgId, 'reg_car', { evId });
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: `🚗 Мест: <b>${Number(val)}</b>. Напиши марку и цвет авто — так попутчики найдут тебя на точке сбора.\n<i>Например: «Kia Rio, белая»</i>`,
+            reply_markup: kb([[{ text: 'Пропустить', callback_data: `carskip_${evId}` }]]),
+          });
           return res.status(200).json({ ok: true });
         }
         if (action === 'rf') {
@@ -2473,6 +2530,34 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `✏️ <b>Замечание к закупке</b>\n${esc(ev?.title || evId)}\nКто: ${who}\n\n<i>${esc(note)}</i>` });
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Передал организаторам! Учтём и пришлём обновлённый список на согласование.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Марка и цвет авто при регистрации: сохраняем и продолжаем опрос.
+        if (sess && sess.state === 'reg_car') {
+          const evId = sess.context?.evId;
+          const ev = await getEvent(evId);
+          await clearSession(msg.from.id);
+          const car = String(text).trim().slice(0, 120);
+          if (car && car !== '-') await updateReg(evId, msg.from.id, { transport_details: car });
+          if (foodNeeded(ev)) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `🚗 Записал: <b>${esc(car || 'авто')}</b>. Дальше — 🍽 твоё питание? (учтём в закупке)`,
+              reply_markup: kb([
+                [{ text: '🍗 Всеядный', callback_data: `rf:${evId}:all` }],
+                [{ text: '🥗 Вегетарианец', callback_data: `rf:${evId}:veg` }],
+                [{ text: '🌱 Веган', callback_data: `rf:${evId}:vegan` }],
+                [{ text: '🥡 Привезу своё — без общей еды', callback_data: `rf:${evId}:own` }],
+              ]),
+            });
+          } else {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `✅ Готово! Авто: <b>${esc(car || '—')}</b>. Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>».`,
+              reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+            });
+          }
           return res.status(200).json({ ok: true });
         }
 

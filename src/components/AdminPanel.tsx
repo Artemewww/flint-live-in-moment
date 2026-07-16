@@ -2106,12 +2106,39 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               
                               {/* Транспорт и инвентарь */}
                               <div className="grid grid-cols-2 gap-2 mt-2">
-                                <div className={`p-2 rounded-lg border ${
+                                {/* Клик — правка транспорта руками: участник мог не заполнить в боте
+                                    или сообщить детали голосом («у Саши 4-местный седан»). */}
+                                <div
+                                  onClick={async () => {
+                                    const has = window.confirm(`У «${reg.name}» есть автомобиль?\n\nОК — есть, Отмена — нет/пешком.`);
+                                    let body: any;
+                                    if (has) {
+                                      const car = window.prompt('Марка и цвет авто (чтобы находили на точке сбора):', reg.transportDetails && reg.transportDetails !== 'Свой автомобиль' ? reg.transportDetails : '') || '';
+                                      const seats = window.prompt('Свободных мест (без водителя):', String(reg.transportSeats || 0)) || '0';
+                                      body = { hasTransport: true, transportDetails: car.trim() || 'Свой автомобиль', transportSeats: parseInt(seats, 10) || 0 };
+                                    } else {
+                                      body = { hasTransport: false, transportDetails: null, transportSeats: 0 };
+                                    }
+                                    try {
+                                      const res = await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+                                        method: 'PATCH',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify(body),
+                                      });
+                                      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                                      setActionMsg({ ok: true, text: `Транспорт «${reg.name}» обновлён` });
+                                    } catch (err) {
+                                      setActionMsg({ ok: false, text: `Не удалось обновить транспорт: ${(err as Error).message}` });
+                                    }
+                                    await refreshStats(selectedEvent);
+                                  }}
+                                  title="Нажми, чтобы указать авто, марку/цвет и число мест"
+                                  className={`p-2 rounded-lg border cursor-pointer hover:border-brand/60 transition-colors ${
                                   reg.hasTransport ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10'
                                 }`}>
                                   <div className="flex items-center gap-1 mb-1">
                                     <Truck className="w-3 h-3 text-brand" />
-                                    <span className="text-[9px] font-bold uppercase">Транспорт</span>
+                                    <span className="text-[9px] font-bold uppercase">Транспорт ✏️</span>
                                   </div>
                                   {reg.hasTransport ? (
                                     <div>
