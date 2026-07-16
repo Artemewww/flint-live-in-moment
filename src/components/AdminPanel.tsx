@@ -317,6 +317,16 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
 
       {estimate > 0 && <p className="text-[10px] text-white/50">💰 Примерная сумма: <b>{estimate} BYN</b></p>}
 
+      {/* Замечания участников к закупке (кнопка «Есть замечания» в боте) */}
+      {Array.isArray(event?.shopping?.objections) && event.shopping.objections.length > 0 && (
+        <div className="bg-yellow-400/5 border border-yellow-400/20 rounded-lg p-2 space-y-1">
+          <p className="text-[9px] text-yellow-400 uppercase">✏️ Замечания ({event.shopping.objections.length})</p>
+          {event.shopping.objections.slice(-6).map((o: any, i: number) => (
+            <p key={i} className="text-[10px] text-white/70"><b>{o.name || o.tg_id}</b>: {o.text}</p>
+          ))}
+        </div>
+      )}
+
       {/* Выбор закупщика */}
       <div className="bg-white/5 rounded-lg p-2 border border-white/10">
         <p className="text-[9px] text-white/50 uppercase mb-1">🛒 Закупщик события</p>
@@ -403,6 +413,10 @@ function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) =
       </div>
       <input value={v.returnInfo || ''} onChange={(e) => set('returnInfo', e.target.value)} placeholder="Обратная дорога (напр. ~22:00 обратно к метро)" className={inp} />
       <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
+      {/* Памятка: правила места, юридика, безопасность, снаряжение. Бот показывает
+          кнопкой «Как готовиться» и прикладывает к чек-листу за день до выезда. */}
+      <label className="text-[10px] text-white/40 uppercase font-mono block pt-1">📖 Памятка участнику (подготовка · правила · безопасность)</label>
+      <textarea value={v.prep || ''} onChange={(e) => set('prep', e.target.value)} placeholder={'Что взять, правила локации, штрафы, протокол при проверках, погода…\nУчастники увидят это в боте кнопкой «Как готовиться».'} rows={6} className={inp} />
     </div>
   );
 }
@@ -468,8 +482,14 @@ function ItineraryEditor({ value, onChange, event }: { value: any[]; onChange: (
               <button type="button" onClick={() => del(i)} title="Удалить" className="text-red-400/70 hover:text-red-400 px-1 cursor-pointer">✕</button>
             </div>
             <div className="grid grid-cols-2 gap-2">
-              <input type="number" step="any" value={p.lat ?? ''} onChange={(e) => upd(i, { lat: e.target.value === '' ? undefined : parseFloat(e.target.value) })} placeholder="Широта (lat)" className={inp} />
-              <input type="number" step="any" value={p.lng ?? ''} onChange={(e) => upd(i, { lng: e.target.value === '' ? undefined : parseFloat(e.target.value) })} placeholder="Долгота (lng)" className={inp} />
+              {/* Вставка «53.28, 24.51» одной строкой (из Яндекс.Карт) раскидывается на оба поля */}
+              <input type="text" inputMode="decimal" value={p.lat ?? ''} onChange={(e) => {
+                const v = e.target.value.trim();
+                const pair = v.match(/^(-?\d+(?:[.,]\d+)?)[,;\s]+(-?\d+(?:[.,]\d+)?)$/);
+                if (pair) { upd(i, { lat: parseFloat(pair[1].replace(',', '.')), lng: parseFloat(pair[2].replace(',', '.')) }); return; }
+                upd(i, { lat: v === '' ? undefined : parseFloat(v.replace(',', '.')) || undefined });
+              }} placeholder="Широта или «lat, lng»" className={inp} />
+              <input type="text" inputMode="decimal" value={p.lng ?? ''} onChange={(e) => upd(i, { lng: e.target.value === '' ? undefined : parseFloat(e.target.value.replace(',', '.')) || undefined })} placeholder="Долгота (lng)" className={inp} />
             </div>
             <div className="grid grid-cols-3 gap-2">
               <select value={p.payment || 'self'} onChange={(e) => upd(i, { payment: e.target.value })} className={inp}>

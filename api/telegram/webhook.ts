@@ -496,6 +496,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   const nav: any[] = [];
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
+  if (ev.logistics?.prep) nav.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
   if (nav.length) rows.push(nav);
 
   // Компактная строка: статистика + логистика + оплата
@@ -1443,6 +1444,33 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Памятка участнику (logistics.prep): подготовка, правила места, безопасность.
+      if (data.startsWith('prep_')) {
+        const ev = await getEvent(data.slice('prep_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const prep = String(ev?.logistics?.prep || '').trim();
+        if (!prep) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Памятка ещё готовится — пришлю, как появится.' });
+          return res.status(200).json({ ok: true });
+        }
+        // Telegram режет сообщения на 4096 символов — шлём кусками по границе строки.
+        const header = `🎒 <b>Как готовиться: ${esc(ev.title)}</b>\n\n`;
+        let rest = esc(prep);
+        let first = true;
+        while (rest.length) {
+          const budget = 3800 - (first ? header.length : 0);
+          let chunk = rest.slice(0, budget);
+          if (rest.length > budget) {
+            const nl = chunk.lastIndexOf('\n');
+            if (nl > budget * 0.5) chunk = chunk.slice(0, nl);
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: (first ? header : '') + chunk });
+          rest = rest.slice(chunk.length);
+          first = false;
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       // Вопрос организатору и идея по улучшению — свободный текст через сессию.
       if (data.startsWith('ask_') || data.startsWith('idea_')) {
         const isAsk = data.startsWith('ask_');
@@ -1893,6 +1921,15 @@ export default async function handler(req: any, res: any) {
           }
         } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
+      // «✏️ Есть замечания» к закупке — собираем корректировку текстом.
+      if (data.startsWith('shopno_')) {
+        const evId = data.slice('shopno_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'shop_feedback', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✏️ Напиши, что поменять в закупке: чего не хватает, что лишнее, твои предпочтения по еде. Организаторы учтут и пришлют обновлённый список.' });
         return res.status(200).json({ ok: true });
       }
 
@@ -2404,6 +2441,26 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `👥 <b>Убавил гостей</b>\n${esc(ev?.title || evId)}\nКто: ${who}\nБыло +${from} → стало <b>+${to}</b>\nПричина: <i>${reason}</i>` });
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Спасибо, учли! Места освободились для других.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Замечание к закупке: копим в shopping.objections + пингуем оргов.
+        if (sess && sess.state === 'shop_feedback') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const ev = await getEvent(evId);
+          const note = String(text).slice(0, 600);
+          try {
+            const shopping = (ev as any)?.shopping || {};
+            const objections = Array.isArray(shopping.objections) ? shopping.objections : [];
+            objections.push({ tg_id: msg.from.id, name: msg.from.first_name || msg.from.username || '', text: note, at: new Date().toISOString() });
+            await supabase.from('events').update({ shopping: { ...shopping, objections } }).eq('id', evId);
+          } catch { /* best-effort */ }
+          const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `✏️ <b>Замечание к закупке</b>\n${esc(ev?.title || evId)}\nКто: ${who}\n\n<i>${esc(note)}</i>` });
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Передал организаторам! Учтём и пришлём обновлённый список на согласование.' });
           return res.status(200).json({ ok: true });
         }
 

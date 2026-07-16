@@ -355,7 +355,10 @@ export default async function handler(req: any, res: any) {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true,
-                reply_markup: { inline_keyboard: [[{ text: '✅ Согласен с закупкой', callback_data: `shopok_${eventId}` }]] },
+                reply_markup: { inline_keyboard: [
+                  [{ text: '✅ Согласен с закупкой', callback_data: `shopok_${eventId}` }],
+                  [{ text: '✏️ Есть замечания', callback_data: `shopno_${eventId}` }],
+                ] },
               }),
             }).then((r) => r.json()).then((j) => { if (j?.ok) sent++; })
           ));

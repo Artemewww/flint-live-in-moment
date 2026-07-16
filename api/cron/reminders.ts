@@ -118,7 +118,7 @@ export default async function handler(req: any, res: any) {
       const target = dayOffset(h.days);
       const { data: events } = await supabase
         .from('events')
-        .select('id,title,date,date_label,location,price_type,notifications,status')
+        .select('id,title,date,date_label,location,price_type,notifications,status,logistics')
         .eq('date', target)
         .eq('status', 'open');
 
@@ -233,7 +233,11 @@ export default async function handler(req: any, res: any) {
                 `\n<b>Чек-лист сборки:</b>\n` +
                 `☐ Паспорт / ID\n☐ Деньги (если взносы)\n☐ Телефон + зарядка / повербанк\n☐ Личные лекарства\n☐ Одежда по погоде\n☐ Средства гигиены\n☐ Фонарик\n☐ Снаряжение (палатка, спальник, коврик)\n\n` +
                 `⏰ Точное время сбора — в чате события или у организатора.`,
-              { inline_keyboard: [[{ text: '✅ Собираюсь', callback_data: `ack_${(ev as any).id}` }]] }
+              { inline_keyboard: [
+                [{ text: '✅ Собираюсь', callback_data: `ack_${(ev as any).id}` }],
+                // Памятка (правила места, безопасность) — если организатор её заполнил.
+                ...((ev as any).logistics?.prep ? [[{ text: '🎒 Как готовиться', callback_data: `prep_${(ev as any).id}` }]] : []),
+              ] }
             );
           }
         }
