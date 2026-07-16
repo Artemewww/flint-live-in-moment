@@ -408,6 +408,84 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true, sent });
       }
 
+      // Финальный сплит расходов: доля по ртам (участник + его гости; за гостей
+      // собирает пригласивший), отказы (optout) не платят за позицию. Каждому в
+      // бот — его сумма и кому переводить; сводка — в админ-чат и в ответ API.
+      if (req.query?.action === 'split_send') {
+        const eventId = String(body.eventId || body.id || '');
+        if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+        const { data: ev } = await supabase
+          .from('events').select('title,shopping').eq('id', eventId).maybeSingle();
+        const expenses = Array.isArray((ev as any)?.shopping?.expenses) ? (ev as any).shopping.expenses : [];
+        if (!expenses.length) return res.status(400).json({ error: 'Расходов пока нет' });
+
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id,name,guest_count')
+          .eq('event_id', eventId).neq('status', 'cancelled');
+        const people = (regs || []).map((r: any) => ({
+          id: Number(r.telegram_id), name: String(r.name || 'Участник'),
+          mouths: 1 + (Number(r.guest_count) || 0), owed: 0, paid: 0,
+        }));
+        if (!people.length) return res.status(400).json({ error: 'Нет участников' });
+
+        for (const ex of expenses) {
+          const optout: number[] = Array.isArray(ex.optout) ? ex.optout.map(Number) : [];
+          const share = people.filter((p) => !optout.includes(p.id));
+          const mouths = share.reduce((s, p) => s + p.mouths, 0);
+          if (!mouths) continue;
+          for (const p of share) p.owed += (Number(ex.amount) || 0) * p.mouths / mouths;
+          const payer = people.find((p) => p.id === Number(ex.by_id));
+          if (payer) payer.paid += Number(ex.amount) || 0;
+        }
+
+        // Жадный матчинг должников и переплативших — минимум переводов.
+        const round2 = (x: number) => Math.round(x * 100) / 100;
+        const debtors = people.map((p) => ({ ...p, bal: round2(p.owed - p.paid) }));
+        const owes = debtors.filter((p) => p.bal > 0.01).sort((a, b) => b.bal - a.bal).map((p) => ({ ...p }));
+        const gets = debtors.filter((p) => p.bal < -0.01).sort((a, b) => a.bal - b.bal).map((p) => ({ ...p, bal: -p.bal }));
+        const transfers: { from: number; fromName: string; to: number; toName: string; amount: number }[] = [];
+        let i = 0, j = 0;
+        while (i < owes.length && j < gets.length) {
+          const pay = round2(Math.min(owes[i].bal, gets[j].bal));
+          if (pay > 0.01) transfers.push({ from: owes[i].id, fromName: owes[i].name, to: gets[j].id, toName: gets[j].name, amount: pay });
+          owes[i].bal = round2(owes[i].bal - pay); gets[j].bal = round2(gets[j].bal - pay);
+          if (owes[i].bal <= 0.01) i++;
+          if (gets[j].bal <= 0.01) j++;
+        }
+
+        const total = round2(expenses.reduce((s: number, x: any) => s + (Number(x.amount) || 0), 0));
+        let sent = 0;
+        if (BOT_TOKEN) {
+          for (const p of debtors) {
+            if (!(Number.isFinite(p.id) && p.id > 0)) continue;
+            const my = transfers.filter((t) => t.from === p.id);
+            const toMe = transfers.filter((t) => t.to === p.id);
+            const lines = [
+              `💰 <b>Итог по расходам — «${esc((ev as any)?.title || 'событие')}»</b>`,
+              '',
+              `Всего потрачено: <b>${total} BYN</b>.`,
+              `Твоя доля: <b>${round2(p.owed)} BYN</b>${p.mouths > 1 ? ` (за тебя + ${p.mouths - 1} гост${p.mouths - 1 === 1 ? 'я' : 'ей'} — собери с них сам)` : ''}.`,
+              p.paid > 0 ? `Ты уже потратил(а): <b>${round2(p.paid)} BYN</b>.` : '',
+              ...my.map((t) => `➡️ Переведи <b>${t.amount} BYN</b> — ${esc(t.toName)}`),
+              ...toMe.map((t) => `⬅️ Тебе переведёт ${esc(t.fromName)}: <b>${t.amount} BYN</b>`),
+              (!my.length && !toMe.length) ? '✅ Ты в расчёте — ничего переводить не нужно.' : '',
+            ].filter(Boolean);
+            try {
+              const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: p.id, text: lines.join('\n'), parse_mode: 'HTML' }),
+              }).then((x) => x.json());
+              if (r?.ok) sent++;
+            } catch { /* no-op */ }
+          }
+        }
+        return res.status(200).json({
+          ok: true, sent, total,
+          split: debtors.map((p) => ({ name: p.name, mouths: p.mouths, owed: round2(p.owed), paid: round2(p.paid), balance: p.bal })),
+          transfers: transfers.map((t) => `${t.fromName} → ${t.toName}: ${t.amount} BYN`),
+        });
+      }
+
       // Маппинг camelCase -> snake_case для Supabase
       const eventData = {
         id: body.id,

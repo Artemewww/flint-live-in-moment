@@ -42,6 +42,43 @@ async function getEvent(id: string) {
   return data;
 }
 
+/** Общий расход события: сохраняет в shopping.expenses и рассылает всем участникам
+ *  чек с кнопкой отказа от позиции. Делится при финальном сплите по ртам (1 + гости). */
+async function saveAndBroadcastExpense(evId: string, from: any, title: string, amount: number, photoFileId: string | null) {
+  const { data: evRow } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+  const shopping = (evRow as any)?.shopping || {};
+  const expenses = Array.isArray(shopping.expenses) ? shopping.expenses : [];
+  const expId = Date.now().toString(36);
+  expenses.push({
+    id: expId, title: title.slice(0, 120), amount: Math.round(amount * 100) / 100,
+    by_id: from.id, by_name: from.first_name || from.username || 'Участник',
+    photo: photoFileId, at: new Date().toISOString(), optout: [],
+  });
+  await supabase.from('events').update({ shopping: { ...shopping, expenses } }).eq('id', evId);
+
+  const { data: regs } = await supabase
+    .from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
+  const ids = Array.from(new Set((regs || [])
+    .map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0 && id !== from.id)));
+
+  const caption =
+    `💸 <b>Общий расход — «${esc((evRow as any)?.title || 'событие')}»</b>\n\n` +
+    `${esc(from.first_name || 'Участник')} купил(а): <b>${esc(title)}</b> — <b>${amount} BYN</b>\n\n` +
+    `Разделим на всех при финальном сплите: доля = ты + твои гости (за гостей собираешь сам).\n` +
+    `Не пользуешься этой позицией — откажись кнопкой.`;
+  const markup = kb([[{ text: '🚫 Не скидываюсь на это', callback_data: `expout_${evId}_${expId}` }]]);
+  for (const id of ids) {
+    try {
+      if (photoFileId) await tg('sendPhoto', { chat_id: id, photo: photoFileId, parse_mode: 'HTML', caption, reply_markup: markup });
+      else await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: caption, reply_markup: markup });
+    } catch { /* участник мог заблокировать бота */ }
+  }
+  if (ADMIN_CHAT_ID) {
+    try { await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `💸 Новый расход: «${esc(title)}» — ${amount} BYN (${esc(from.first_name || '')}, ${photoFileId ? 'с чеком' : 'без чека'}). Событие: ${esc((evRow as any)?.title || evId)}` }); } catch { /* no-op */ }
+  }
+  return ids.length;
+}
+
 /** Прямой вызов Gemini (REST): SDK живёт в api/ai.ts, в вебхук его не тащим. */
 async function geminiText(prompt: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
@@ -1253,6 +1290,41 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Добавить общий расход (чек): «Мясо 45.50» → фото чека → рассылка всем.
+      if (data.startsWith('expadd_')) {
+        const evId = data.slice('expadd_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'exp_add', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '💸 Что купил(а) и на какую сумму? Напиши одной строкой: название и сумма в BYN.\n<i>Например: «Мясо 45.50» или «Угли и розжиг 18»</i>' });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Отказ от конкретной позиции расхода — не делим её на этого участника.
+      if (data.startsWith('expout_')) {
+        const rest = data.slice('expout_'.length);
+        const us = rest.lastIndexOf('_');
+        const evId = rest.slice(0, us);
+        const expId = rest.slice(us + 1);
+        try {
+          const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+          const shopping = (evRow as any)?.shopping || {};
+          const expenses = Array.isArray(shopping.expenses) ? shopping.expenses : [];
+          const exp = expenses.find((x: any) => String(x.id) === expId);
+          if (exp) {
+            const optout = Array.isArray(exp.optout) ? exp.optout : [];
+            if (!optout.includes(tgId)) exp.optout = [...optout, tgId];
+            await supabase.from('events').update({ shopping: { ...shopping, expenses } }).eq('id', evId);
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ок, эту позицию на тебя не делим' });
+            if (ADMIN_CHAT_ID) {
+              await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🚫 ${esc(cq.from.first_name || 'Участник')} отказался скидываться: «${esc(exp.title || '')}» (${exp.amount} BYN)` });
+            }
+          } else {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Позиция не найдена' });
+          }
+        } catch { await tg('answerCallbackQuery', { callback_query_id: cq.id }); }
+        return res.status(200).json({ ok: true });
+      }
+
       // «Другое число» гостей при регистрации — просим ввести число текстом.
       if (data.startsWith('rgx_')) {
         const evId = data.slice('rgx_'.length);
@@ -1717,6 +1789,9 @@ export default async function handler(req: any, res: any) {
           rows.push([{ text: '⛺ Своя палатка — предложить места', callback_data: `tentnew_${evId}` }]);
           rows.push([{ text: '🛌 Места в палатках', callback_data: `tents_${evId}` }]);
         }
+        // Общие расходы: любой участник фиксирует покупку с чеком — видно всем,
+        // делится на всех по ртам (участник + его гости) при финальном сплите.
+        rows.push([{ text: '💸 Добавить расход (чек)', callback_data: `expadd_${evId}` }]);
         if (!rows.length) {
           await tg('sendMessage', { chat_id: chatId, text: 'Для этого события логистика не нужна — организатор всё продумал.' });
           return res.status(200).json({ ok: true });
@@ -2239,6 +2314,15 @@ export default async function handler(req: any, res: any) {
     // Файл остаётся в Telegram (file_id), в БД только метаданные.
     if (msg?.from?.id && (msg.photo || msg.video) && msg.chat?.type === 'private') {
       const sess = await getSession(msg.from.id);
+      // Фото чека для общего расхода — сохраняем file_id и рассылаем всем.
+      if (sess?.state === 'exp_photo' && sess.context?.evId && msg.photo) {
+        const { evId, title, amount } = sess.context;
+        await clearSession(msg.from.id);
+        const ph = Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null;
+        const sent = await saveAndBroadcastExpense(evId, msg.from, String(title || 'Покупка'), Number(amount) || 0, ph?.file_id || null);
+        await tg('sendMessage', { chat_id: msg.chat.id, parse_mode: 'HTML', text: `✅ Расход записан: <b>${esc(String(title))}</b> — <b>${amount} BYN</b>, чек приложен. Уведомил ${sent} участников. Доли посчитаем при финальном сплите.` });
+        return res.status(200).json({ ok: true });
+      }
       if (sess?.state === 'media_upload' && sess.context?.eventId) {
         const evId = String(sess.context.eventId);
         const src = msg.video || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null);
@@ -2510,6 +2594,34 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `👥 <b>Убавил гостей</b>\n${esc(ev?.title || evId)}\nКто: ${who}\nБыло +${from} → стало <b>+${to}</b>\nПричина: <i>${reason}</i>` });
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Спасибо, учли! Места освободились для других.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Общий расход, шаг 1: «Мясо 45.50» → название + сумма → просим чек.
+        if (sess && sess.state === 'exp_add') {
+          const evId = sess.context?.evId;
+          const m = String(text).trim().match(/^(.*?)[\s—-]+(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn|руб\.?|р\.?)?$/i);
+          if (!m || !m[1].trim()) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Не разобрал 🙈 Напиши название и сумму одной строкой, например: <i>«Мясо 45.50»</i>' });
+            return res.status(200).json({ ok: true });
+          }
+          const title = m[1].trim();
+          const amount = parseFloat(m[2].replace(',', '.'));
+          await setSession(msg.from.id, 'exp_photo', { evId, title, amount });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(title)}</b> — <b>${amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Общий расход, шаг 2 текстом: «без чека» — публикуем без фото.
+        if (sess && sess.state === 'exp_photo') {
+          const { evId, title, amount } = sess.context || {};
+          if (/без\s*чека|нет|скип|skip|^-$/i.test(String(text).trim())) {
+            await clearSession(msg.from.id);
+            const sent = await saveAndBroadcastExpense(evId, msg.from, String(title || 'Покупка'), Number(amount) || 0, null);
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Расход записан: <b>${esc(String(title))}</b> — <b>${amount} BYN</b> (без чека). Уведомил ${sent} участников.` });
+          } else {
+            await tg('sendMessage', { chat_id: chatId, text: 'Пришли фото чека (или напиши «без чека»).' });
+          }
           return res.status(200).json({ ok: true });
         }
 

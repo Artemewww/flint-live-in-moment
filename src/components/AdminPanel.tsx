@@ -988,7 +988,26 @@ function MenuPanel({ eventId }: { eventId: string }) {
 }
 
 // Пост-сверка общих расходов события: делёж по головам + матрица «кто кому».
-function ExpenseSplitter({ registrations }: { registrations: any[] }) {
+function ExpenseSplitter({ registrations, event }: { registrations: any[]; event?: any }) {
+  // Сохранённые расходы из бота (кнопка «💸 Добавить расход» у участников).
+  const saved: any[] = Array.isArray(event?.shopping?.expenses) ? event.shopping.expenses : [];
+  const [splitBusy, setSplitBusy] = useState(false);
+  const [splitResult, setSplitResult] = useState<string>('');
+  const sendSplit = async () => {
+    if (!window.confirm('Разослать каждому участнику его долю и кому переводить?')) return;
+    setSplitBusy(true); setSplitResult('');
+    try {
+      const res = await fetch(`/api/admin/events?action=split_send`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: event.id }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || 'Ошибка');
+      setSplitResult(`✅ Разослано ${j.sent} участникам · всего ${j.total} BYN\n` + (j.transfers || []).join('\n'));
+    } catch (e) { setSplitResult(`❌ ${(e as Error).message}`); }
+    setSplitBusy(false);
+  };
+
   const attended = registrations.filter((r) => r.attended);
   const confirmed = registrations.filter((r) => r.status === 'confirmed');
   const base = (attended.length ? attended : confirmed.length ? confirmed : registrations).map((r) => r.name || 'Гость');
@@ -1026,8 +1045,30 @@ function ExpenseSplitter({ registrations }: { registrations: any[] }) {
       <h4 className="text-xs font-bold uppercase flex items-center gap-2">
         <DollarSign className="w-4 h-4 text-brand" /> Делёж расходов · {people.length} чел · доля {Math.round(share)} Br
       </h4>
+
+      {/* Расходы, внесённые участниками через бота (с чеками и отказами) */}
+      {saved.length > 0 && (
+        <div className="bg-white/5 border border-white/10 rounded-lg p-2 space-y-1">
+          <p className="text-[9px] text-brand uppercase font-bold">💸 Из бота ({saved.length}) · всего {Math.round(saved.reduce((s, x) => s + (Number(x.amount) || 0), 0) * 100) / 100} BYN</p>
+          {saved.map((x: any, i: number) => (
+            <p key={i} className="text-[10px] text-white/70">
+              <b>{x.title}</b> — {x.amount} BYN · {x.by_name}
+              {x.photo ? ' · 🧾 чек' : ''}
+              {Array.isArray(x.optout) && x.optout.length > 0 ? ` · 🚫 отказов: ${x.optout.length}` : ''}
+            </p>
+          ))}
+          <button
+            type="button"
+            onClick={sendSplit}
+            disabled={splitBusy}
+            className="w-full mt-1 text-[10px] font-black uppercase text-black bg-brand rounded-lg px-3 py-2 cursor-pointer hover:bg-brand/80 disabled:opacity-50"
+          >{splitBusy ? '⏳ Считаю…' : '📤 Разослать сплит в бот (по ртам: участник + гости)'}</button>
+          {splitResult && <pre className="text-[9px] text-white/60 whitespace-pre-wrap mt-1">{splitResult}</pre>}
+        </div>
+      )}
+
       {expenses.length === 0 && (
-        <p className="text-[11px] text-white/40 italic">Добавь общие покупки (мясо, угли, аренда) — кто платил и сколько. Поделим поровну и покажем, кто кому переводит.</p>
+        <p className="text-[11px] text-white/40 italic">Добавь общие покупки (мясо, угли, аренда) — кто платил и сколько. Поделим поровну и покажем, кто кому переводит. Участники также сами вносят расходы с чеками в боте: «Логистика → 💸 Добавить расход».</p>
       )}
       {expenses.map((e, i) => (
         <div key={i} className="bg-black/20 border border-white/10 rounded-lg p-2.5 space-y-2">
@@ -2612,7 +2653,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     )}
 
                     {logiPanel === 'split' && (
-                      <ExpenseSplitter registrations={eventStats.registrations || []} />
+                      <ExpenseSplitter registrations={eventStats.registrations || []} event={selectedEvent} />
                     )}
 
                     {/* Транспортный план — из таблицы rides, а не из анкеты */}
