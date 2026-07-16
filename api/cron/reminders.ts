@@ -138,7 +138,11 @@ export default async function handler(req: any, res: any) {
           for (const r of realIds(incomplete)) {
             await send(
               Number(r.telegram_id),
-              `📋 <b>Дополни профиль</b>\n\nДо события осталось 3 дня. Организаторам нужно знать:\n🍽 Питание\n🎒 Снаряжение\n🙌 Роль\n\nОтвори событие в боте и заполни.`
+              `📋 <b>Дополни профиль — «${esc((ev as any).title)}»</b>\n\n` +
+                `До выезда 3 дня, а организаторам ещё нужно знать по тебе:\n` +
+                `🍽 Питание (веган/вегетарианец/всеядный)\n🎒 Снаряжение (что везёшь)\n🙌 Роль (чем полезен)\n\n` +
+                `Это 1 минута — жми кнопку ниже.`,
+              { inline_keyboard: [[{ text: '📋 Заполнить', callback_data: `org_${(ev as any).id}` }]] }
             );
           }
         }
@@ -183,7 +187,8 @@ export default async function handler(req: any, res: any) {
           if (unpaid) {
             const sent = await send(
               chatId,
-              `💳 Напоминание: участие в «<b>${esc((ev as any).title)}</b>» ещё не оплачено.`,
+              `💳 <b>Оплата участия — «${esc((ev as any).title)}»</b>\n\n` +
+                `Твоё участие ещё не оплачено. Оплати заранее, чтобы место осталось за тобой — жми кнопку ниже.`,
               { inline_keyboard: [[{ text: '💳 Оплатить участие', callback_data: `pay_${(ev as any).id}` }]] }
             );
             if (sent) report.paymentReminders++;
@@ -222,7 +227,13 @@ export default async function handler(req: any, res: any) {
           for (const r of realIds(allRegs || [])) {
             await send(
               Number(r.telegram_id),
-              `🎒 <b>Завтра выезд на «${esc((ev as any).title)}»!</b>\n\n<b>Чеклист сборки:</b>\n☐ Паспорт/ID\n☐ Деньги (если взносы)\n☐ Телефон + зарядка\n☐ Лекарства (свои)\n☐ Одежда по погоде\n☐ Средства гигиены\n☐ Фонарик\n☐ Снаряжение (палатка, спальник, коврик)\n\n⏰ Время сборки уточни в чате события или спроси организатора.`
+              `🎒 <b>Завтра выезд — «${esc((ev as any).title)}»!</b>\n` +
+                ((ev as any).date_label ? `📅 ${esc((ev as any).date_label)}\n` : '') +
+                ((ev as any).location ? `📍 ${esc((ev as any).location)}\n` : '') +
+                `\n<b>Чек-лист сборки:</b>\n` +
+                `☐ Паспорт / ID\n☐ Деньги (если взносы)\n☐ Телефон + зарядка / повербанк\n☐ Личные лекарства\n☐ Одежда по погоде\n☐ Средства гигиены\n☐ Фонарик\n☐ Снаряжение (палатка, спальник, коврик)\n\n` +
+                `⏰ Точное время сбора — в чате события или у организатора.`,
+              { inline_keyboard: [[{ text: '✅ Собираюсь', callback_data: `ack_${(ev as any).id}` }]] }
             );
           }
         }
