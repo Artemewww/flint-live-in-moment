@@ -1917,7 +1917,19 @@ export default async function handler(req: any, res: any) {
           const shopping = (ev as any)?.shopping || {};
           const approved = Array.isArray(shopping.approved_by) ? shopping.approved_by : [];
           if (!approved.includes(tgId)) {
-            await supabase.from('events').update({ shopping: { ...shopping, approved_by: [...approved, tgId] } }).eq('id', evId);
+            const nextApproved = [...approved, tgId];
+            // Кворум >50% участников — утверждаем сразу, не дожидаясь крона.
+            const { data: regsAll } = await supabase
+              .from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
+            const total = (regsAll || []).filter((r: any) => Number(r.telegram_id) > 0).length;
+            const quorum = total > 0 && nextApproved.length > total / 2 && shopping.status === 'sent';
+            await supabase.from('events').update({
+              shopping: { ...shopping, approved_by: nextApproved, ...(quorum ? { status: 'approved', approved_at: new Date().toISOString() } : {}) },
+            }).eq('id', evId);
+            if (quorum && ADMIN_CHAT_ID) {
+              const { data: evRow } = await supabase.from('events').select('title').eq('id', evId).maybeSingle();
+              await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🛒 <b>Закупка утверждена</b> — «${esc((evRow as any)?.title || evId)}»\nЗа: ${nextApproved.length} из ${total} (>50%). Можно запускать закупщика из админки.` });
+            }
           }
         } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }

@@ -15,17 +15,31 @@ const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api'
  * Раньше здесь лежал пароль, и он уезжал в публичный JS-бандл.
  */
 
-/** ИИ-генерация программы (Gemini). Возвращает null при ошибке/без ключа — тогда фолбэк на локальный генератор. */
-async function aiProgram(ev: any): Promise<string[] | null> {
+/** ИИ-генерация программы (Gemini). Возвращает null при ошибке/без ключа — тогда фолбэк на локальный генератор.
+ *  instruction + current → режим правки: ИИ редактирует текущую программу (перенос дат, пожелания). */
+async function aiProgram(ev: any, instruction?: string, current?: string[]): Promise<string[] | null> {
   try {
     const res = await fetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // count: сколько ячеек программы админ создал — столько пунктов и генерим.
-      body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants, count: Array.isArray(ev.program) ? ev.program.length : undefined }),
+      body: JSON.stringify({ task: 'program', event: ev, people: ev.maxParticipants, count: Array.isArray(ev.program) ? ev.program.length : undefined, instruction: instruction || undefined, current: current && current.length ? current : undefined }),
     });
     const j = await res.json();
     return Array.isArray(j.program) && j.program.length ? j.program : null;
+  } catch { return null; }
+}
+
+/** ИИ-генерация памятки участнику (logistics.prep): правила, сезон, снаряжение, протоколы. */
+async function aiPrep(ev: any): Promise<string | null> {
+  try {
+    const res = await fetch('/api/ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task: 'prep', event: ev, people: ev.maxParticipants }),
+    });
+    const j = await res.json();
+    return typeof j.prep === 'string' && j.prep.trim() ? j.prep : null;
   } catch { return null; }
 }
 
@@ -399,9 +413,10 @@ function PaymentDetailsEditor({ value, onChange }: { value: any; onChange: (v: a
 }
 
 /** Структурный редактор логистики события (точка/время выезда, бензин, обратная дорога). */
-function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+function LogisticsEditor({ value, onChange, event }: { value: any; onChange: (v: any) => void; event?: any }) {
   const v = value || {};
   const set = (k: string, val: any) => onChange({ ...v, [k]: val });
+  const [prepGen, setPrepGen] = useState(false);
   const inp = 'w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
   return (
     <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
@@ -415,7 +430,22 @@ function LogisticsEditor({ value, onChange }: { value: any; onChange: (v: any) =
       <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
       {/* Памятка: правила места, юридика, безопасность, снаряжение. Бот показывает
           кнопкой «Как готовиться» и прикладывает к чек-листу за день до выезда. */}
-      <label className="text-[10px] text-white/40 uppercase font-mono block pt-1">📖 Памятка участнику (подготовка · правила · безопасность)</label>
+      <div className="flex items-center justify-between pt-1">
+        <label className="text-[10px] text-white/40 uppercase font-mono block">📖 Памятка участнику (подготовка · правила · безопасность)</label>
+        {event && (
+          <button
+            type="button"
+            disabled={prepGen}
+            onClick={async () => {
+              setPrepGen(true);
+              const prep = await aiPrep(event);
+              if (prep) set('prep', prep);
+              setPrepGen(false);
+            }}
+            className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-2 py-1 cursor-pointer hover:bg-brand/20 disabled:opacity-60 shrink-0"
+          >{prepGen ? '⏳ Пишу…' : '🤖 Сгенерировать'}</button>
+        )}
+      </div>
       <textarea value={v.prep || ''} onChange={(e) => set('prep', e.target.value)} placeholder={'Что взять, правила локации, штрафы, протокол при проверках, погода…\nУчастники увидят это в боте кнопкой «Как готовиться».'} rows={6} className={inp} />
     </div>
   );
@@ -3208,6 +3238,9 @@ function EditEventModal({ event, onClose, onSave }: {
   onSave: (event: CommunityEvent) => void;
 }) {
   const [generatingCover, setGeneratingCover] = useState(false);
+  // Правка программы промптом + пересчёт при смене даты (правки из PDF 16.07).
+  const [progPrompt, setProgPrompt] = useState('');
+  const [progBusy, setProgBusy] = useState(false);
   const [formData, setFormData] = useState({
     title: event.title,
     description: event.description,
@@ -3391,7 +3424,7 @@ function EditEventModal({ event, onClose, onSave }: {
             <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />
           )}
 
-          <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
+          <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
 
           <ItineraryEditor
             value={formData.logistics?.itinerary || []}
@@ -3548,6 +3581,45 @@ function EditEventModal({ event, onClose, onSave }: {
             onChange={(v) => setFormData({...formData, program: v})}
             onGenerate={async () => { const ctx = { ...formData, type: event.type }; const ai = await aiProgram(ctx); setFormData({...formData, program: ai || generateProgram(ctx)}); }}
           />
+
+          {/* Дата/время изменились, а программа осталась — предлагаем пересчитать (ИИ перенесёт дни и время). */}
+          {(formData.date !== event.date || formData.dateEnd !== (event.dateEnd || '') || formData.time !== (event.time || '')) && formData.program.length > 0 && (
+            <div className="bg-yellow-400/10 border border-yellow-400/30 rounded-xl p-3 flex items-center justify-between gap-2">
+              <p className="text-[11px] text-yellow-400">⚠️ Даты изменились — программа может ссылаться на старые дни/время.</p>
+              <button
+                type="button"
+                disabled={progBusy}
+                onClick={async () => {
+                  setProgBusy(true);
+                  const ai = await aiProgram({ ...formData, type: event.type }, `Событие перенесено: начало ${formData.date}${formData.time ? ` в ${formData.time}` : ''}${formData.dateEnd ? `, окончание ${formData.dateEnd}` : ''}. Пересчитай все дни недели, даты и время в пунктах.`, formData.program);
+                  if (ai) setFormData({ ...formData, program: ai });
+                  setProgBusy(false);
+                }}
+                className="text-[10px] font-bold text-black bg-yellow-400 rounded-lg px-3 py-1.5 cursor-pointer hover:bg-yellow-300 disabled:opacity-60 shrink-0"
+              >{progBusy ? '⏳…' : '🤖 Пересчитать'}</button>
+            </div>
+          )}
+
+          {/* Правка программы промптом: «стартуем в 19:00», «добавь игры у костра» и т.п. */}
+          <div className="flex gap-2">
+            <input
+              value={progPrompt}
+              onChange={(e) => setProgPrompt(e.target.value)}
+              placeholder="✏️ Что поменять в программе? (промптом)"
+              className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30"
+            />
+            <button
+              type="button"
+              disabled={progBusy || !progPrompt.trim() || !formData.program.length}
+              onClick={async () => {
+                setProgBusy(true);
+                const ai = await aiProgram({ ...formData, type: event.type }, progPrompt.trim(), formData.program);
+                if (ai) { setFormData({ ...formData, program: ai }); setProgPrompt(''); }
+                setProgBusy(false);
+              }}
+              className="text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-3 cursor-pointer hover:bg-brand/20 disabled:opacity-50 shrink-0"
+            >{progBusy ? '⏳' : 'Применить'}</button>
+          </div>
 
           <ListEditor
             label="Порог входа (условия прохода)"
@@ -3888,7 +3960,7 @@ function AddEventModal({ onClose, onAdd }: {
                 )}
 
                 {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
-                <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
+                <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
                 <ItineraryEditor
                   value={formData.logistics?.itinerary || []}
                   onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
@@ -3909,6 +3981,7 @@ function AddEventModal({ onClose, onAdd }: {
 
                 <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
                 <ListEditor label="Программа" placeholder="Шаг" items={formData.program} aiHint onChange={(v) => setFormData({...formData, program: v})} onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }} />
+
                 <ListEditor label="Порог входа" placeholder="Условие" items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []} onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})} onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})} />
                 <FeatureToggles value={formData.notifications} type={formData.type} onChange={(v) => setFormData({ ...formData, notifications: v })} />
               </div>

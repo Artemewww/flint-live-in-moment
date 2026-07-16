@@ -118,7 +118,7 @@ export default async function handler(req: any, res: any) {
       const target = dayOffset(h.days);
       const { data: events } = await supabase
         .from('events')
-        .select('id,title,date,date_label,location,price_type,notifications,status,logistics')
+        .select('id,title,date,date_label,location,price_type,notifications,status,logistics,shopping')
         .eq('date', target)
         .eq('status', 'open');
 
@@ -144,6 +144,36 @@ export default async function handler(req: any, res: any) {
                 `Это 1 минута — жми кнопку ниже.`,
               { inline_keyboard: [[{ text: '📋 Заполнить', callback_data: `org_${(ev as any).id}` }]] }
             );
+          }
+        }
+
+        // Согласование закупки: пингуем неответивших; >50% «за» — автопринятие.
+        const shopping = (ev as any).shopping || {};
+        if ((h.days === 3 || h.days === 1) && shopping.status === 'sent' && Array.isArray(shopping.items) && shopping.items.length) {
+          const approved: number[] = Array.isArray(shopping.approved_by) ? shopping.approved_by.map(Number) : [];
+          const objected: number[] = Array.isArray(shopping.objections) ? shopping.objections.map((o: any) => Number(o.tg_id)) : [];
+          const all = realIds(regs || []).map((r: any) => Number(r.telegram_id));
+          if (all.length && approved.length > all.length / 2) {
+            // Кворум собран — утверждаем и сообщаем всем.
+            await supabase.from('events').update({ shopping: { ...shopping, status: 'approved', approved_at: new Date().toISOString() } }).eq('id', (ev as any).id);
+            const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+            await send(Number(adminChat), `🛒 <b>Закупка утверждена</b> — «${esc((ev as any).title)}»\nЗа: ${approved.length} из ${all.length} (>50%). Можно запускать закупщика из админки.`);
+            for (const id of all) {
+              await send(id, `🛒 Закупка на «<b>${esc((ev as any).title)}</b>» утверждена командой (${approved.length}/${all.length} за). Спасибо!`);
+            }
+          } else {
+            // Кворума нет — пингуем только тех, кто ещё не ответил.
+            const silent = all.filter((id) => !approved.includes(id) && !objected.includes(id));
+            for (const id of silent) {
+              await send(
+                id,
+                `🛒 <b>Согласуй закупку — «${esc((ev as any).title)}»</b>\n\nКоманда ждёт твой голос: закупаем, когда «за» больше половины. Займёт 10 секунд.`,
+                { inline_keyboard: [
+                  [{ text: '✅ Согласен с закупкой', callback_data: `shopok_${(ev as any).id}` }],
+                  [{ text: '✏️ Есть замечания', callback_data: `shopno_${(ev as any).id}` }],
+                ] }
+              );
+            }
           }
         }
 
