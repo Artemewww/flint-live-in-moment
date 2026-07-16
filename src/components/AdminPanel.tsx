@@ -206,7 +206,8 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
 
   const save = async () => {
     try {
-      const res = await fetch(`/api/admin/events/${event.id}`, {
+      // Query-форма (?eventId=) — путь-форма /events/:id на Vercel даёт 404 (нет [id]-роута).
+      const res = await fetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopping: { ...event.shopping, items, updated_at: new Date().toISOString() } }),
@@ -219,10 +220,10 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
   const send = async () => {
     setSending(true);
     try {
-      const res = await fetch(`/api/admin/events/${event.id}?action=shopping_send`, {
+      const res = await fetch(`/api/admin/events?action=shopping_send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopping: { ...event.shopping, items } }),
+        body: JSON.stringify({ eventId: event.id, shopping: { ...event.shopping, items } }),
       });
       if (!res.ok) throw new Error('Ошибка отправки');
       alert('✅ Отправлено на согласование');
@@ -236,10 +237,10 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     if (!items.length) { setErr('Список пуст — сгенерируй или добавь товары'); return; }
     setSending(true); setErr('');
     try {
-      const res = await fetch(`/api/admin/events/${event.id}?action=shopping_launch`, {
+      const res = await fetch(`/api/admin/events?action=shopping_launch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopping: { ...event.shopping, items } }),
+        body: JSON.stringify({ eventId: event.id, shopping: { ...event.shopping, items } }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error || 'Ошибка запуска');
@@ -324,7 +325,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
           onChange={async (e) => {
             const newBuyerId = e.target.value ? Number(e.target.value) : null;
             try {
-              await fetch(`/api/admin/events/${event.id}`, {
+              await fetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ shopping: { ...event.shopping, buyer_id: newBuyerId } }),
@@ -2303,7 +2304,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           if (!window.confirm(`Отправить список машин ${needsRide.length} участникам без транспорта?`)) return;
                           setBroadcasting(selectedEvent.id);
                           try {
-                            const res = await fetch(`/api/admin/events/${selectedEvent.id}?action=rides_send`, {
+                            const res = await fetch(`/api/admin/events?action=rides_send`, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ eventId: selectedEvent.id }),
