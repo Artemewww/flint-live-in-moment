@@ -118,7 +118,7 @@ export default async function handler(req: any, res: any) {
       const target = dayOffset(h.days);
       const { data: events } = await supabase
         .from('events')
-        .select('id,title,date,date_label,location,price_type,notifications,status,logistics,shopping')
+        .select('id,title,date,date_end,date_label,location,price_type,notifications,status,logistics,shopping')
         .eq('date', target)
         .eq('status', 'open');
 
@@ -280,6 +280,23 @@ export default async function handler(req: any, res: any) {
                 ...((ev as any).logistics?.prep ? [[{ text: '🎒 Как готовиться', callback_data: `prep_${(ev as any).id}` }]] : []),
               ] }
             );
+          }
+        }
+
+        // За 1 день: у ночёвки все должны где-то спать. Мест (палатки + машины
+        // с ночёвкой не считаем — только заявленные палатки) < людей → сигнал оргам.
+        if (h.days === 1 && (ev as any).date_end && (ev as any).date_end !== (ev as any).date) {
+          const { data: tents } = await supabase
+            .from('rides').select('seats_total')
+            .eq('event_id', (ev as any).id).eq('active', true).eq('kind', 'tent');
+          const beds = (tents || []).reduce((s: number, t: any) => s + (Number(t.seats_total) || 0), 0);
+          const sleepers = (regs || []).reduce((s: number, r: any) => s + 1 + (Number(r.guest_count) || 0), 0);
+          if (sleepers > beds) {
+            const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+            await send(Number(adminChat),
+              `🛌 <b>Дефицит мест для сна — «${esc((ev as any).title)}»</b>\n\n` +
+                `Людей (с гостями): <b>${sleepers}</b>, заявленных мест в палатках: <b>${beds}</b>.\n` +
+                `Не хватает: <b>${sleepers - beds}</b>. Попроси участников заявить палатки («⛺ Своя палатка» в логистике) или продумай сон в машинах.`);
           }
         }
 

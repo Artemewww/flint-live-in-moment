@@ -3702,6 +3702,36 @@ function EditEventModal({ event, onClose, onSave }: {
             >{progBusy ? '⏳' : 'Применить'}</button>
           </div>
 
+          {/* ИИ раскидывает ответственных по пунктам из реальных участников (имя + роли из анкет) */}
+          <button
+            type="button"
+            disabled={progBusy || !formData.program.length}
+            onClick={async () => {
+              setProgBusy(true);
+              try {
+                const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
+                const j = await res.json();
+                const regs: any[] = j.registrations || [];
+                const roster = regs
+                  .filter((r: any) => r.status !== 'cancelled')
+                  .map((r: any) => {
+                    const roles = Array.isArray(r.roles) ? r.roles.join(', ') : String(r.roles || '');
+                    return `${r.name}${roles ? ` (${roles})` : ''}`;
+                  })
+                  .slice(0, 30).join('; ');
+                if (!roster) { alert('Нет участников — некому назначать'); setProgBusy(false); return; }
+                const ai = await aiProgram(
+                  { ...formData, type: event.type },
+                  `Добавь к каждому пункту программы ответственного в конце строки в формате «— отв. Имя». Участники (имя и чем готовы помочь): ${roster}. Распредели нагрузку равномерно, учитывай роли (готовка → кто указал готовку и т.п.). Текст пунктов не меняй.`,
+                  formData.program
+                );
+                if (ai) setFormData({ ...formData, program: ai });
+              } catch { alert('Не удалось получить участников'); }
+              setProgBusy(false);
+            }}
+            className="w-full text-[10px] font-bold text-brand bg-brand/10 border border-brand/30 rounded-lg px-3 py-2 cursor-pointer hover:bg-brand/20 disabled:opacity-50"
+          >{progBusy ? '⏳…' : '🙌 Назначить ответственных по пунктам (ИИ, по ролям участников)'}</button>
+
           <ListEditor
             label="Порог входа (условия прохода)"
             placeholder="Условие"
