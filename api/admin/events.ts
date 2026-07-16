@@ -257,10 +257,11 @@ export default async function handler(req: any, res: any) {
 
       // Занятые места считаем из registrations — единый источник правды
       // с сайтом и ботом (колонка participants_count — легаси, расходилась).
+      // Каждая регистрация = сам участник (1) + его гости (guest_count).
       const { data: regs } = await supabase
-        .from('registrations').select('event_id').neq('status', 'cancelled');
+        .from('registrations').select('event_id, guest_count').neq('status', 'cancelled');
       const counts = new Map<string, number>();
-      for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1);
+      for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1 + (Number((r as any).guest_count) || 0));
 
       const mappedEvents = (events || []).map((e: any) =>
         mapEventToCamelCase({ ...e, participants_count: counts.get(e.id) || 0 }));

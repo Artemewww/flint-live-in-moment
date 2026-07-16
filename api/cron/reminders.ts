@@ -128,7 +128,7 @@ export default async function handler(req: any, res: any) {
 
         const { data: regs } = await supabase
           .from('registrations')
-          .select('telegram_id,payment_status,dietary,equipment,roles')
+          .select('telegram_id,payment_status,dietary,equipment,roles,has_transport,guest_count')
           .eq('event_id', (ev as any).id)
           .neq('status', 'cancelled');
 
@@ -159,6 +159,22 @@ export default async function handler(req: any, res: any) {
             ]] }
           );
           if (ok) report.eventReminders++;
+
+          // Контроль гостей: у кого записаны +N гостей — просим подтвердить состав.
+          // «Все со мной» / «Изменить число» / отмена уже покрыта кнопкой RSVP выше.
+          const gc = Number(r.guest_count) || 0;
+          if (gc > 0) {
+            await send(
+              chatId,
+              `👥 <b>Подтверди состав на «${esc((ev as any).title)}»</b>\n\n` +
+                `У тебя записано <b>+${gc}</b> ${gc === 1 ? 'гость' : 'гостя/гостей'} (кроме тебя).\n` +
+                `Всё в силе? Если кто-то отпадёт — измени число, чтобы освободить места и не заказать лишнюю еду.`,
+              { inline_keyboard: [
+                [{ text: `✅ Да, все ${gc} со мной`, callback_data: `gconf_${(ev as any).id}` }],
+                [{ text: '✏️ Изменить число', callback_data: `gedit_${(ev as any).id}` }],
+              ] }
+            );
+          }
 
           // Оплата ещё не заявлена — отдельным сообщением с кнопкой.
           const unpaid = (ev as any).price_type === 'paid'

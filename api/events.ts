@@ -566,10 +566,11 @@ export default async function handler(req: any, res: any) {
 
       // Единый источник правды по занятым местам — registrations, а не колонка
       // participants_count (её задавали руками и она расходилась с реальностью).
+      // Каждая регистрация = сам участник (1) + его гости (guest_count).
       const { data: regs } = await supabase
-        .from('registrations').select('event_id').neq('status', 'cancelled');
+        .from('registrations').select('event_id, guest_count').neq('status', 'cancelled');
       const counts = new Map<string, number>();
-      for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1);
+      for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1 + (Number((r as any).guest_count) || 0));
       const withCounts = (events || []).map((e: any) => ({ ...e, participants_count: counts.get(e.id) || 0 }));
 
       return res.status(200).json({ events: withCounts.map(mapEventToCamelCase) });

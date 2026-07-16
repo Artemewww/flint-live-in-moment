@@ -508,36 +508,46 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       </select>
                     </div>
 
-                    {/* Кнопки «один/с компанией» */}
+                    {/* Гости: сколько человек берёшь с собой (0–2 кнопкой или своё число) */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <label className="text-xs text-white/60 block">Вы участвуете?</label>
+                      <label className="text-xs text-white/60 block">Берёте кого-то с собой?</label>
                       <div className="flex gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setFormData({...formData, guestCount: 0})}
-                          className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all ${
-                            formData.guestCount === 0
-                              ? 'bg-brand text-black'
-                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                        {[0, 1, 2].map((n) => (
+                          <button
+                            key={n}
+                            type="button"
+                            onClick={() => setFormData({...formData, guestCount: n})}
+                            className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all ${
+                              formData.guestCount === n
+                                ? 'bg-brand text-black'
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                            }`}
+                          >
+                            {n === 0 ? 'Один' : `+${n}`}
+                          </button>
+                        ))}
+                        {/* Своё число: инпут подсвечивается, когда выбрано 3+ */}
+                        <input
+                          type="number"
+                          min={0}
+                          max={50}
+                          inputMode="numeric"
+                          placeholder="своё"
+                          value={formData.guestCount && formData.guestCount > 2 ? formData.guestCount : ''}
+                          onChange={(e) => {
+                            const v = Math.max(0, Math.min(50, parseInt(e.target.value, 10) || 0));
+                            setFormData({...formData, guestCount: v});
+                          }}
+                          className={`w-16 py-3 rounded-lg text-xs font-bold text-center transition-all border ${
+                            (formData.guestCount || 0) > 2
+                              ? 'bg-brand text-black border-brand'
+                              : 'bg-white/10 text-white/60 border-white/10 placeholder:text-white/30'
                           }`}
-                        >
-                          Один
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setFormData({...formData, guestCount: 1})}
-                          className={`flex-1 py-3 rounded-lg text-xs font-bold transition-all ${
-                            formData.guestCount === 1
-                              ? 'bg-brand text-black'
-                              : 'bg-white/10 text-white/60 hover:bg-white/20'
-                          }`}
-                        >
-                          С компанией
-                        </button>
+                        />
                       </div>
-                      {formData.guestCount === 1 && (
+                      {(formData.guestCount || 0) > 0 && (
                         <p className="text-[10px] text-white/50 italic">
-                          Вы берёте с собой гостя. Взнос оплачивается за двоих.
+                          Вы берёте с собой {formData.guestCount} {(formData.guestCount || 0) === 1 ? 'гостя' : 'человек'}. За гостей отвечаете и оплачиваете вы.
                         </p>
                       )}
                     </div>

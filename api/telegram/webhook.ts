@@ -841,9 +841,13 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           text: '👥 Берёшь кого-то с собой?\n<i>За гостя отвечаешь и оплачиваешь его долю ты. Он не проходит регистрацию отдельно.</i>',
           reply_markup: kb([
-            [{ text: 'Я один', callback_data: `rg:${evId}:0` }],
-            [{ text: '+1 гость', callback_data: `rg:${evId}:1` }],
-            [{ text: '+2 гостя', callback_data: `rg:${evId}:2` }],
+            [
+              { text: 'Я один', callback_data: `rg:${evId}:0` },
+              { text: '+1', callback_data: `rg:${evId}:1` },
+              { text: '+2', callback_data: `rg:${evId}:2` },
+              { text: '+3', callback_data: `rg:${evId}:3` },
+            ],
+            [{ text: '✏️ Другое число', callback_data: `rgx_${evId}` }],
           ]),
         });
       };
@@ -1199,6 +1203,15 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await beginReg(ev);
+        return res.status(200).json({ ok: true });
+      }
+
+      // «Другое число» гостей при регистрации — просим ввести число текстом.
+      if (data.startsWith('rgx_')) {
+        const evId = data.slice('rgx_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'reg_guest', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 Сколько человек берёшь с собой (кроме тебя)? Напиши число.\n<i>Например: 5. За гостей отвечаешь и оплачиваешь ты.</i>' });
         return res.status(200).json({ ok: true });
       }
 
@@ -1836,6 +1849,25 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Контроль гостей: «✅ Все со мной» — состав подтверждён, ничего не меняем.
+      if (data.startsWith('gconf_')) {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Состав подтверждён, спасибо!' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🔥 Отлично, ждём всю компанию! Если что-то поменяется — открой событие в боте.' });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Контроль гостей: «✏️ Изменить число» — просим новое число текстом.
+      if (data.startsWith('gedit_')) {
+        const evId = data.slice('gedit_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        const { data: rr } = await supabase.from('registrations').select('guest_count').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        await setSession(tgId, 'guest_edit', { evId, from: Number((rr as any)?.guest_count) || 0 });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 Сколько человек будет с тобой (кроме тебя)? Напиши число.\n<i>0 — еду один. Например: 3</i>' });
+        return res.status(200).json({ ok: true });
+      }
+
       // Согласие с закупкой — копим approved_by в events.shopping.
       if (data.startsWith('shopok_')) {
         const evId = data.slice('shopok_'.length);
@@ -2306,6 +2338,73 @@ export default async function handler(req: any, res: any) {
             });
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Понял, снял тебя с события — место освободилось для других. Спасибо, что предупредил(а)! Захочешь вернуться — открой событие заново.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Контроль гостей: пришло новое число гостей (из кнопки «Изменить число»).
+        if (sess && sess.state === 'guest_edit') {
+          const evId = sess.context?.evId;
+          const from = Number(sess.context?.from) || 0;
+          const ev = await getEvent(evId);
+          const to = Math.max(0, Math.min(50, parseInt(String(text).replace(/[^\d]/g, ''), 10) || 0));
+          await updateReg(evId, msg.from.id, { guest_count: to });
+          if (to < from) {
+            // Стало меньше — спросим причину и запомним дельту для оргов.
+            await setSession(msg.from.id, 'guest_reason', { evId, from, to });
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `Обновил: с тобой теперь <b>+${to}</b> вместо +${from}. Напиши пару слов — почему меньше? (или «-», если без причины). Это поможет организаторам с закупкой и логистикой.` });
+          } else {
+            await clearSession(msg.from.id);
+            const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
+            if (ADMIN_CHAT_ID && to !== from) {
+              await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `👥 <b>Изменил число гостей</b>\n${esc(ev?.title || evId)}\nКто: ${who}\nБыло +${from} → стало <b>+${to}</b>` });
+            }
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: to > 0 ? `✅ Готово! С тобой будет <b>+${to}</b>. За гостей отвечаешь и оплачиваешь ты.` : '✅ Готово, отметил что едешь один.' });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
+        // Причина, почему гостей стало меньше — пингуем оргов.
+        if (sess && sess.state === 'guest_reason') {
+          const { evId, from, to } = sess.context || {};
+          const ev = await getEvent(evId);
+          await clearSession(msg.from.id);
+          const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
+          const reason = String(text).trim() === '-' ? '—' : esc(String(text).slice(0, 600));
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `👥 <b>Убавил гостей</b>\n${esc(ev?.title || evId)}\nКто: ${who}\nБыло +${from} → стало <b>+${to}</b>\nПричина: <i>${reason}</i>` });
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Спасибо, учли! Места освободились для других.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // «Другое число» гостей при регистрации: сохраняем и продолжаем опрос.
+        if (sess && sess.state === 'reg_guest') {
+          const evId = sess.context?.evId;
+          const ev = await getEvent(evId);
+          const n = Math.max(0, Math.min(50, parseInt(String(text).replace(/[^\d]/g, ''), 10) || 0));
+          await updateReg(evId, msg.from.id, { guest_count: n });
+          // Семейные события — уточним детей (учёт в еде). Иначе завершаем.
+          // Детей соберёт callback rc:, он читает guest_count из БД — сессию чистим.
+          await clearSession(msg.from.id);
+          if (ev?.type === 'mixed') {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `Принял: с тобой <b>+${n}</b>. 👶 Дети с тобой? (учтём в еде — детская порция)`,
+              reply_markup: kb([[
+                { text: 'Без детей', callback_data: `rc:${evId}:0` },
+                { text: '1 ребёнок', callback_data: `rc:${evId}:1` },
+                { text: '2+', callback_data: `rc:${evId}:2` },
+              ]]),
+            });
+          } else {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `✅ Готово! Ты записан(а)${n > 0 ? ` (+${n} гост${n === 1 ? 'ь' : 'я'})` : ''} на «<b>${esc(ev?.title || 'событие')}</b>».` +
+                (n > 0 ? '\n<i>За гостей отвечаешь и оплачиваешь ты.</i>' : '') +
+                '\n\nЛогистика, снаряжение и оплата — кнопки ниже.',
+              reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+            });
+          }
           return res.status(200).json({ ok: true });
         }
 
