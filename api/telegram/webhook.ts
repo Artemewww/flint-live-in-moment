@@ -1896,6 +1896,24 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Закупщик отметил «Закупка сделана» — фиксируем статус и пингуем оргов.
+      if (data.startsWith('boughtok_')) {
+        const evId = data.slice('boughtok_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Огонь, спасибо! Отметил.' });
+        try {
+          const { data: ev } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+          const shopping = (ev as any)?.shopping || {};
+          await supabase.from('events').update({ shopping: { ...shopping, status: 'bought', bought_at: new Date().toISOString() } }).eq('id', evId);
+          const who = `${esc(cq.from.first_name || '')} ${cq.from.username ? '@' + esc(cq.from.username) : ''}`;
+          if (ADMIN_CHAT_ID) {
+            await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `✅ <b>Закупка выполнена</b>\n${esc((ev as any)?.title || evId)}\nЗакупщик: ${who}\n\nОсталось разделить расходы поровну между участниками.` });
+          }
+        } catch { /* no-op */ }
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🙌 Спасибо, что взял закупку на себя! Организаторы разделят расходы поровну. Чеки/сумму можешь скинуть прямо сюда.' });
+        return res.status(200).json({ ok: true });
+      }
+
       // «✅ Понял(а)» под рассылкой — благодарим и убираем кнопку (без спиннера).
       if (data.startsWith('ack_')) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Принято, спасибо!' });

@@ -363,6 +363,48 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true, sent, total: ids.length });
       }
 
+      // Запуск закупки: шлём список ТОЛЬКО назначенному закупщику + кнопку «сделано».
+      // Организатор запускает процесс сам, не дожидаясь крона.
+      if (req.query?.action === 'shopping_launch') {
+        const eventId = String(body.eventId || body.id || '');
+        if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+        const { data: ev } = await supabase
+          .from('events').select('title,shopping').eq('id', eventId).maybeSingle();
+        const shopping = body.shopping || (ev as any)?.shopping || {};
+        const items = Array.isArray(shopping.items) ? shopping.items : [];
+        if (!items.length) return res.status(400).json({ error: 'Список закупки пуст' });
+        const buyerId = Number(shopping.buyer_id);
+        if (!Number.isFinite(buyerId) || buyerId <= 0) return res.status(400).json({ error: 'Сначала выбери закупщика' });
+
+        const nextShopping = { ...shopping, status: 'buying', launched_at: new Date().toISOString() };
+        await supabase.from('events').update({ shopping: nextShopping }).eq('id', eventId);
+
+        // Группируем по категориям — так закупщику удобнее в магазине.
+        const byCat = new Map<string, any[]>();
+        for (const it of items.slice(0, 60)) {
+          const c = String(it.category || 'Прочее');
+          if (!byCat.has(c)) byCat.set(c, []);
+          byCat.get(c)!.push(it);
+        }
+        const listBlocks = Array.from(byCat.entries()).map(([cat, its]) =>
+          `<b>${esc(cat)}</b>\n` + its.map((it: any) => `☐ ${esc(it.item)}${it.qty ? ` — ${esc(it.qty)}` : ''}${it.note ? ` <i>(${esc(it.note)})</i>` : ''}`).join('\n')
+        ).join('\n\n');
+        const est = Number(shopping.estimate) > 0 ? `\n\n💰 Ориентир по сумме: <b>${Number(shopping.estimate)} BYN</b> (потом разделим поровну)` : '';
+        const text = `🛒 <b>Ты — закупщик на «${esc((ev as any)?.title || 'событие')}»!</b>\n\nВот список на общий котёл. Отметь галочками в магазине, а как закупишься — жми кнопку ниже.${est}\n\n${listBlocks}`;
+
+        let sent = false;
+        if (BOT_TOKEN) {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: buyerId, text, parse_mode: 'HTML', disable_web_page_preview: true,
+              reply_markup: { inline_keyboard: [[{ text: '✅ Закупка сделана', callback_data: `boughtok_${eventId}` }]] },
+            }),
+          }).then((r) => r.json()).then((j) => { sent = !!j?.ok; }).catch(() => {});
+        }
+        return res.status(200).json({ ok: true, sent });
+      }
+
       // Маппинг camelCase -> snake_case для Supabase
       const eventData = {
         id: body.id,

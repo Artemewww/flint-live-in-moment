@@ -173,7 +173,10 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState('');
-  const people = registrations.length || event.maxParticipants || 10;
+  // Реальный счёт ртов = сами участники + их гости (+N). Гости без анкеты —
+  // считаем всеядными, но в общий счёт людей включаем, иначе будет недозакуп.
+  const guests = registrations.reduce((s, r) => s + (r.guestCount || 0), 0);
+  const people = (registrations.length + guests) || event.maxParticipants || 10;
   const diet = {
     vegan: registrations.filter((r) => r.dietary === 'vegan').length,
     vegetarian: registrations.filter((r) => r.dietary === 'vegetarian').length,
@@ -193,7 +196,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
       const res = await fetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ task: 'shopping', event, people, diet }),
+        body: JSON.stringify({ task: 'shopping', event, people, diet, guests }),
       });
       const j = await res.json();
       if (j.error) setErr(j.error); else setItems(j.items || []);
@@ -227,6 +230,24 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     setSending(false);
   };
 
+  // Запуск закупки: список уходит назначенному закупщику с кнопкой «сделано».
+  const launch = async () => {
+    if (!event?.shopping?.buyer_id) { setErr('Сначала выбери закупщика ниже'); return; }
+    if (!items.length) { setErr('Список пуст — сгенерируй или добавь товары'); return; }
+    setSending(true); setErr('');
+    try {
+      const res = await fetch(`/api/admin/events/${event.id}?action=shopping_launch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopping: { ...event.shopping, items } }),
+      });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error || 'Ошибка запуска');
+      alert(j.sent ? '🛒 Список отправлен закупщику!' : '⚠️ Закупщик не в боте — список сохранён, но сообщение не дошло');
+    } catch (e) { setErr((e as Error).message); }
+    setSending(false);
+  };
+
   const approved = Array.isArray(event?.shopping?.approved_by) ? event.shopping.approved_by.length : 0;
   const estimate = Number(event?.shopping?.estimate) || 0;
   const buyerId = event?.shopping?.buyer_id;
@@ -245,7 +266,9 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
           {loading ? '⏳ Считаю…' : '🤖 Сгенерировать'}
         </button>
       </div>
-      <p className="text-[9px] text-white/35 font-mono">Веган: {diet.vegan} · вегет.: {diet.vegetarian} · детей: {diet.children}</p>
+      <p className="text-[9px] text-white/35 font-mono">
+        {registrations.length} запис.{guests > 0 ? ` + ${guests} гост.` : ''} · веган: {diet.vegan} · вегет.: {diet.vegetarian} · детей: {diet.children}
+      </p>
       {err && <p className="text-[11px] text-red-400">{err}</p>}
 
       {items.length > 0 && (
@@ -334,6 +357,17 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
           className="text-[10px] font-bold text-blue-400 bg-blue-400/10 border border-blue-400/30 rounded-lg px-3 py-1 cursor-pointer hover:bg-blue-400/20 disabled:opacity-60 flex-1"
         >{sending ? '⏳ Отправляю…' : '📤 На согласование'}</button>
       </div>
+
+      {/* Запуск закупки — список уходит закупщику, ждать крон не нужно */}
+      <button
+        type="button"
+        onClick={launch}
+        disabled={sending || items.length === 0 || !buyerId}
+        className="w-full text-xs font-black uppercase text-black bg-brand rounded-lg px-3 py-2.5 cursor-pointer hover:bg-brand/80 disabled:opacity-40 disabled:cursor-not-allowed"
+        title={!buyerId ? 'Сначала выбери закупщика' : 'Отправить список закупщику'}
+      >🛒 Запустить закупку {buyerId ? '' : '(выбери закупщика)'}</button>
+      {event?.shopping?.status === 'buying' && <p className="text-[10px] text-yellow-400 text-center">⏳ Закупщик закупается…</p>}
+      {event?.shopping?.status === 'bought' && <p className="text-[10px] text-green-400 text-center">✅ Закупка выполнена</p>}
     </div>
   );
 }
