@@ -479,9 +479,26 @@ export default async function handler(req: any, res: any) {
             const lg = (ev as any).logistics || {};
             if (distKm > 30 && !lg.assemblyPoint) {
               const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+              // ИИ предлагает точку сбора на выезде из Минска по направлению маршрута.
+              let hint = '';
+              try {
+                const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+                if (key) {
+                  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${key}`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      contents: [{ parts: [{ text: `Колонна машин выезжает из Минска к точке ${lat},${lng} («${(ev as any).location || ''}»). Предложи ОДНО удобное место сбора колонны на выезде из Минска по этому направлению (АЗС или парковка у МКАД, где легко встать 5+ машинам). Ответ одной строкой: название места и примерные координаты.` }] }],
+                      generationConfig: { maxOutputTokens: 200, thinkingConfig: { thinkingBudget: 0 } },
+                    }),
+                  });
+                  const j: any = await r.json();
+                  hint = ((j?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('') || '').trim().slice(0, 300);
+                }
+              } catch { /* подсказка — best-effort */ }
               await send(Number(adminChat),
                 `🧭 <b>Нет точки сбора колонны — «${esc((ev as any).title)}»</b>\n\n` +
-                  `Выезд дальний (~${Math.round(distKm)} км): задай в админке (Логистика) точку сбора на выезде из Минска (координаты) и время — встретимся, познакомимся и стартуем колонной.`);
+                  `Выезд дальний (~${Math.round(distKm)} км): задай в админке (Логистика) точку сбора на выезде из Минска (координаты) и время — встретимся, познакомимся и стартуем колонной.` +
+                  (hint ? `\n\n💡 <b>Предложение Flint:</b> ${esc(hint)}\n<i>Проверь по карте перед публикацией.</i>` : ''));
             }
           }
         }

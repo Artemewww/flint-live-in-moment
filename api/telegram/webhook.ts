@@ -168,6 +168,29 @@ async function saveAndBroadcastExpense(evId: string, from: any, title: string, a
 }
 
 /** Прямой вызов Gemini (REST): SDK живёт в api/ai.ts, в вебхук его не тащим. */
+/** Гарантированный JSON от Gemini (responseMimeType) + повтор: текстовый
+ *  вариант отвечал прозой и парс задач срабатывал через раз. */
+async function geminiJSON(prompt: string): Promise<any | null> {
+  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+  if (!key) return null;
+  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  const attempt = async (model: string): Promise<any | null> => {
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: 1200, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
+      }),
+    });
+    const j: any = await r.json();
+    const txt = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('').trim();
+    if (!txt) return null;
+    try { return JSON.parse(txt); } catch { const m = txt.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; }
+  };
+  for (const model of models) { try { const out = await attempt(model); if (out) return out; } catch { /* next */ } }
+  return null;
+}
+
 async function geminiText(prompt: string): Promise<string> {
   const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
   if (!key) return '';
@@ -677,18 +700,16 @@ async function createTaskFlow(evId: string, from: any, chatId: number, rawText: 
   let targetTime = '';
   let clarify = '';
   try {
-    const aiResp = await geminiText(
-      `Участник клуба надиктовал задачу (возможны ошибки распознавания): "${rawText}"\n\n` +
-      `Верни СТРОГО JSON без пояснений:\n` +
-      `{"title":"публичная формулировка задачи: грамотно, кратко (до 140 симв.), БЕЗ телефонов, БЕЗ точных адресов и имён контактов — их увидит только исполнитель",` +
-      `"needs_car":true/false (нужен автомобиль: забрать/отвезти/привезти),` +
+    const parsed = await geminiJSON(
+      `Участник клуба надиктовал задачу (возможны ошибки распознавания, надо ПЕРЕПИСАТЬ грамотно): "${rawText}"\n\n` +
+      `Верни JSON:\n` +
+      `{"title":"публичная формулировка: перепиши грамотным русским, кратко (до 140 симв.), БЕЗ телефонов, БЕЗ точных адресов и имён контактов — их увидит только исполнитель",` +
+      `"needs_car":true|false — true ТОЛЬКО если без автомобиля задачу физически не выполнить (крупный груз, далеко везти). Купить мелочь/зайти в магазин = false,` +
       `"time":"когда нужно, если указано, иначе пустая строка",` +
-      `"clarify":"ОДИН уточняющий вопрос, только если критично не хватает данных для исполнителя (откуда забрать / куда привезти / когда), иначе пустая строка"}`
+      `"clarify":"ОДИН уточняющий вопрос, только если критично не хватает данных исполнителю (куда доставить/когда), иначе пустая строка"}`
     );
-    const match = aiResp.match(/\{[\s\S]*\}/);
-    if (match) {
-      const parsed = JSON.parse(match[0]);
-      if (parsed.title) cleanTitle = String(parsed.title).slice(0, 200);
+    if (parsed && parsed.title) {
+      cleanTitle = String(parsed.title).slice(0, 200);
       needsCar = !!parsed.needs_car;
       targetTime = String(parsed.time || '').slice(0, 80);
       clarify = String(parsed.clarify || '').slice(0, 200);
@@ -706,11 +727,14 @@ async function createTaskFlow(evId: string, from: any, chatId: number, rawText: 
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
     text: `👀 <b>Так разошлю задачу:</b>\n\n${esc(cleanTitle)}${targetTime ? `\n⏰ ${esc(targetTime)}` : ''}${needsCar ? '\n🚗 нужен автомобиль → уйдёт водителям' : ''}\n\n<i>Контакты/адреса из твоего текста получит только исполнитель.</i>`,
-    reply_markup: kb([[
-      { text: '✅ Отправить', callback_data: 'tprev_go' },
-      { text: '✏️ Переписать', callback_data: 'tprev_redo' },
-      { text: '❌ Отмена', callback_data: 'tprev_no' },
-    ]]),
+    reply_markup: kb([
+      [{ text: `Кому: ${needsCar ? '🚗 только водителям' : '👥 всем участникам'} — сменить`, callback_data: 'tprev_aud' }],
+      [
+        { text: '✅ Отправить', callback_data: 'tprev_go' },
+        { text: '✏️ Переписать', callback_data: 'tprev_redo' },
+        { text: '❌ Отмена', callback_data: 'tprev_no' },
+      ],
+    ]),
   });
 }
 
@@ -1594,6 +1618,24 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
       // Предпросмотр задачи: отправить / переписать / отмена (черновик в сессии).
+      if (data === 'tprev_aud') {
+        const sessA = await getSession(tgId);
+        if (!sessA || sessA.state !== 'task_preview') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+        const nc = !sessA.context?.needsCar;
+        await setSession(tgId, 'task_preview', { ...sessA.context, needsCar: nc });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: nc ? 'Только водителям' : 'Всем участникам' });
+        try {
+          await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([
+            [{ text: `Кому: ${nc ? '🚗 только водителям' : '👥 всем участникам'} — сменить`, callback_data: 'tprev_aud' }],
+            [
+              { text: '✅ Отправить', callback_data: 'tprev_go' },
+              { text: '✏️ Переписать', callback_data: 'tprev_redo' },
+              { text: '❌ Отмена', callback_data: 'tprev_no' },
+            ],
+          ]) });
+        } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
       if (data === 'tprev_go' || data === 'tprev_redo' || data === 'tprev_no') {
         const sessP = await getSession(tgId);
         if (!sessP || sessP.state !== 'task_preview') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел — создай задачу заново' }); return res.status(200).json({ ok: true }); }
