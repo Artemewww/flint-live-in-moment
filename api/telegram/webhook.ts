@@ -2417,7 +2417,7 @@ export default async function handler(req: any, res: any) {
         const evId = data.slice('ridenew_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         await setSession(tgId, 'ride_point', { evId });
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📍 Откуда выезжаешь? Напиши точку сбора (напр. «м. Каменная Горка, стоянка»).' });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📍 <b>Откуда выезжаешь?</b>\nЛучше всего — <b>координаты цифрами</b>, чтобы попутчикам построился точный маршрут.\n\n<i>Где взять: Яндекс.Карты → зажми точку на карте → скопируй координаты (напр. «53.905, 27.559»). Или пришли геопозицию 📎. Можно и словами: «м. Каменная Горка, стоянка».</i>' });
         return res.status(200).json({ ok: true });
       }
       // Кол-во мест (из сессии).
@@ -3052,7 +3052,11 @@ export default async function handler(req: any, res: any) {
         const sess = await getSession(msg.from.id);
         if (sess && sess.state === 'ride_point') {
           await setSession(msg.from.id, 'ride_depart', { ...sess.context, from: text.slice(0, 120) });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🕐 Когда выезжаешь? Напиши дату и время (напр. «5 июля, 17:00»).' });
+          // Подставляем дату события — чтобы не лезть в календарь.
+          const evD = await getEvent(sess.context?.evId);
+          const dayLbl = evD ? (evD.date_label || dayPhrase(evD.date)) : '';
+          const example = evD ? `${dayPhrase(evD.date)}, 08:00` : '18 июля, 08:00';
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🕐 <b>Когда выезжаешь?</b>${dayLbl ? `\nСобытие: <b>${esc(dayLbl)}</b>${evD?.time ? `, старт в ${esc(evD.time)}` : ''}.` : ''}\nНапиши дату и время выезда — напр. «${esc(example)}».` });
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'ride_depart') {
