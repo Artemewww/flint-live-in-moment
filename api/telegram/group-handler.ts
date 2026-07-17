@@ -176,8 +176,7 @@ export async function handleGroupMessage(msg: any, chatId: number) {
     `Молчи, если: обычная болтовня; вопрос уже закрыт людьми; добавить нечего.\n\n` +
     `Верни ТОЛЬКО JSON:\n` +
     `{"speak": true|false, "reason": "почему", "reply": "ответ до 600 символов: дружелюбно, по делу, только факты из данных выше, без выдумок", ` +
-    `"task": {"title": "что сделать", "assignee": "имя из чата"} или null, ` +
-    `"map": {"lat": число, "lon": число, "label": "что это за точка"} или null — только если вопрос про место/куда ехать/где сбор И координаты есть в данных выше}`;
+    `"task": {"title": "что сделать", "assignee": "имя из чата"} или null}`;
 
   const verdict = await aiJSON(prompt, 900);
   if (!verdict || typeof verdict !== 'object') return;
@@ -190,12 +189,11 @@ export async function handleGroupMessage(msg: any, chatId: number) {
       .eq('chat_id', chatId).order('message_id', { ascending: false }).limit(30);
     const match = (authors || []).find((a: any) =>
       assignee && ((a.first_name || '').toLowerCase().includes(assignee) || (a.username || '').toLowerCase() === assignee));
-    // В tasks нет колонки имени — только telegram_id взявшего.
     await supabase.from('tasks').insert({
       event_id: eventId,
       title: String(verdict.task.title).slice(0, 150),
       taken_by: match ? (match as any).telegram_id : msg.from.id,
-      created_by: msg.from.id,
+      taker_name: match ? ((match as any).first_name || (match as any).username || '') : (msg.from.first_name || ''),
       done: false,
     });
     await logAction(chatId, eventId, 'task_created', text, String(verdict.task.title), null);
@@ -203,14 +201,7 @@ export async function handleGroupMessage(msg: any, chatId: number) {
 
   if (verdict.speak && verdict.reply) {
     const reply = String(verdict.reply).slice(0, 900);
-    const lat = Number(verdict.map?.lat), lon = Number(verdict.map?.lon);
-    const hasMap = Number.isFinite(lat) && Number.isFinite(lon) && Math.abs(lat) <= 90 && Math.abs(lon) <= 180;
-    await tg('sendMessage', {
-      chat_id: chatId, parse_mode: 'HTML', text: `🤖 ${esc(reply)}`,
-      ...(hasMap ? { reply_markup: { inline_keyboard: [[{ text: `🗺 ${String(verdict.map.label || 'Точка на карте').slice(0, 40)}`, url: `https://yandex.ru/maps/?text=${lat},${lon}&z=16` }]] } } : {}),
-    });
-    // Локация отдельным сообщением — её можно переслать кому угодно.
-    if (hasMap) { try { await tg('sendLocation', { chat_id: chatId, latitude: lat, longitude: lon }); } catch { /* no-op */ } }
+    await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🤖 ${esc(reply)}` });
     await logAction(chatId, eventId, 'expert_reply', text, reply, { msg_id: msg.message_id, reason: verdict.reason || '' });
   } else {
     await logAction(chatId, eventId, 'silent', text.slice(0, 100), '', { reason: verdict.reason || '' });

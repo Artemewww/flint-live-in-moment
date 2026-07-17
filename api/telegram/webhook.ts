@@ -646,21 +646,6 @@ async function sendPreferencesPrompt(chatId: number) {
  * интеллектуальному клубу не нужна логистика, бесплатному — оплата,
  * событию без координат — маршрут.
  */
-/** Координаты «lat, lon» из свободного текста точки (или null). */
-function pointCoords(s: string): string | null {
-  const m = String(s || '').match(/(-?\d{1,2}[.,]\d{4,7})[,;\s]+(-?\d{1,3}[.,]\d{4,7})/);
-  return m ? `${m[1].replace(',', '.')},${m[2].replace(',', '.')}` : null;
-}
-
-/** Ссылка на Яндекс.Карты: по координатам, иначе поиском по тексту. */
-function pointMapUrl(s: string): string | null {
-  if (!s) return null;
-  const c = pointCoords(s);
-  return c
-    ? `https://yandex.ru/maps/?text=${c}&z=16`
-    : `https://yandex.ru/maps/?text=${encodeURIComponent(String(s).slice(0, 80))}`;
-}
-
 function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Незаписанному — только запись и базовая информация. Рабочие инструменты
   // (логистика/задачи/голосования/чат) открываются после регистрации.
@@ -674,31 +659,23 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     rows.push([openBtn]);
     return rows;
   }
-  // Записанному — высокочастотное наверх: точки дня, чат, «кто едет».
-  const lgB: any = ev.logistics || {};
-  const rows: any[] = [];
-  const pts: any[] = [];
-  const depUrl = pointMapUrl(lgB.assemblyPoint || '');
-  const arrUrl = pointMapUrl(lgB.arrivalPoint || ev.location || '');
-  if (depUrl) pts.push({ text: '🚩 Точка выезда', url: depUrl });
-  if (arrUrl) pts.push({ text: '🏁 Точка прибытия', url: arrUrl });
-  if (pts.length) rows.push(pts);
-  const rowChat: any[] = [{ text: '📍 Переслать точки', callback_data: `points_${ev.id}` }];
+  const rows: any[] = [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]];
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
-  if (ev.telegram_bot_url) rowChat.push({ text: '💬 Чат события', url: ev.telegram_bot_url });
-  rows.push(rowChat);
+  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
   // Мультиточечный маршрут дня приоритетнее одиночной точки.
   const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
-  const nav: any[] = [{ text: '📊 Кто едет', callback_data: `stats_${ev.id}` }];
+  const nav: any[] = [];
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
-  rows.push(nav);
+  if (ev.logistics?.prep) nav.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
+  if (nav.length) rows.push(nav);
 
+  // Компактная строка: статистика + логистика + оплата
   const logi: any[] = [];
-  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Логистика', callback_data: `logi_${ev.id}` });
-  if (ev.price_type === 'paid') logi.push({ text: '💳 Оплата', callback_data: `pay_${ev.id}` });
-  if (ev.logistics?.prep) logi.push({ text: '🎒 Подготовка', callback_data: `prep_${ev.id}` });
+  logi.push({ text: '📊 Кто', callback_data: `stats_${ev.id}` });
+  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Лог', callback_data: `logi_${ev.id}` });
+  if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
   if (logi.length) rows.push(logi);
 
   // Голосования и задачи участников.
@@ -706,16 +683,11 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
     { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
   ]);
-  // Нижние кнопки: медиа, спрос/предложение, позвать; статус записи — в самый низ.
+  // Нижние кнопки: спрос/предложение + позвать
   rows.push([
-    { text: '📸 Фото', callback_data: `media_${ev.id}` },
     { text: '❓', callback_data: `ask_${ev.id}` },
     { text: '💡', callback_data: `idea_${ev.id}` },
     { text: '📤 Позвать', callback_data: `share_${ev.id}` },
-  ]);
-  rows.push([
-    { text: '✅ Ты записан', callback_data: `myreg_${ev.id}` },
-    { text: '❌ Отказаться', callback_data: `regcancel_${ev.id}` },
   ]);
   rows.push([openBtn]);
   return rows;
@@ -2002,76 +1974,6 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
-      // Точки дня: пересылаемые сообщения (venue при координатах) — любой участник.
-      if (data.startsWith('points_')) {
-        const evId = data.slice('points_'.length);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        const evP = await getEvent(evId);
-        if (!evP) return res.status(200).json({ ok: true });
-        const lgP: any = (evP as any).logistics || {};
-        const pts = [
-          { label: '🚩 Точка выезда — сбор колонны', val: lgP.assemblyPoint || '', extra: lgP.departureTime || '' },
-          { label: '🏁 Точка прибытия', val: lgP.arrivalPoint || (evP as any).location || '', extra: '' },
-        ];
-        let sent = 0;
-        for (const p of pts) {
-          if (!p.val) continue;
-          const c = pointCoords(p.val);
-          if (c) {
-            const [lat, lon] = c.split(',');
-            await tg('sendVenue', {
-              chat_id: chatId, latitude: Number(lat), longitude: Number(lon),
-              title: p.label.slice(0, 60),
-              address: `${p.val}${p.extra ? ` · ${p.extra}` : ''}`.slice(0, 120),
-            });
-          } else {
-            await tg('sendMessage', {
-              chat_id: chatId, parse_mode: 'HTML',
-              text: `${p.label}\n${esc(p.val)}${p.extra ? `\n⏰ ${esc(p.extra)}` : ''}`,
-              reply_markup: kb([[{ text: '🗺 Открыть карту', url: pointMapUrl(p.val) || 'https://yandex.ru/maps' }]]),
-            });
-          }
-          sent++;
-        }
-        await tg('sendMessage', { chat_id: chatId, text: sent ? 'Эти сообщения можно переслать в любой чат 📤' : 'Точки ещё не заданы — организатор добавит их в панели.' });
-        return res.status(200).json({ ok: true });
-      }
-      // Рассылка точки прибытия всем участникам (после ввода организатором).
-      if (data.startsWith('arrsend_')) {
-        if (!(await isCore(tgId))) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка' }); return res.status(200).json({ ok: true }); }
-        const evId = data.slice('arrsend_'.length);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
-        const evA = await getEvent(evId);
-        const pointA = (evA as any)?.logistics?.arrivalPoint || '';
-        if (!pointA) { await tg('sendMessage', { chat_id: chatId, text: 'Точка прибытия не задана.' }); return res.status(200).json({ ok: true }); }
-        const eligA = await pollEligible(evId);
-        const cA = pointCoords(pointA);
-        let okA = 0;
-        for (const id of eligA) {
-          try {
-            if (cA) {
-              const [lat, lon] = cA.split(',');
-              const rA = await tg('sendVenue', { chat_id: id, latitude: Number(lat), longitude: Number(lon), title: `🏁 Прибытие — «${String((evA as any).title).slice(0, 40)}»`, address: String(pointA).slice(0, 120) });
-              if (rA?.ok) okA++;
-            } else {
-              const rA = await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `🏁 <b>Точка прибытия — «${esc((evA as any).title)}»</b>\n${esc(pointA)}`, reply_markup: kb([[{ text: '🗺 Открыть карту', url: pointMapUrl(pointA) || 'https://yandex.ru/maps' }]]) });
-              if (rA?.ok) okA++;
-            }
-          } catch { /* no-op */ }
-        }
-        await tg('sendMessage', { chat_id: chatId, text: `🏁 Точка прибытия ушла ${okA} из ${eligA.length} участников.` });
-        return res.status(200).json({ ok: true });
-      }
-      // Участник подтверждает правила события.
-      if (data.startsWith('ruleok_')) {
-        const evId = data.slice('ruleok_'.length);
-        await supabase.from('safety_confirmations').upsert(
-          { event_id: evId, telegram_id: tgId, confirmed_at: new Date().toISOString() },
-          { onConflict: 'event_id,telegram_id' });
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Принято 🤝 Хорошего события!' });
-        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '✅ Правила приняты', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
-        return res.status(200).json({ ok: true });
-      }
       // Просмотр расходов — доступен любому участнику (не только админу).
       if (data.startsWith('expview_')) {
         const evId = data.slice('expview_'.length);
@@ -2395,7 +2297,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data === 'admhome' || data === 'admmeetgo' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admmeet_') || data.startsWith('admmeetman_') || data.startsWith('admarr_') || data.startsWith('admrules_') || data.startsWith('admrulesgo_')) {
+      if (data === 'admhome' || data === 'admmeetgo' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admmeet_') || data.startsWith('admmeetman_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
           return res.status(200).json({ ok: true });
@@ -2418,8 +2320,6 @@ export default async function handler(req: any, res: any) {
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
               [{ text: '🧭 Точка сбора колонны', callback_data: `admmeet_${evId}` }],
-              [{ text: '🏁 Точка прибытия', callback_data: `admarr_${evId}` }],
-              [{ text: '📜 Правила события (с подтверждением)', callback_data: `admrules_${evId}` }],
               [{ text: '📋 Перегенерить программу → всем', callback_data: `admprog_${evId}` }],
               [{ text: '🗳 Статистика голосований', callback_data: `admpolls_${evId}` }],
               [{ text: '📊 Реакции на рассылку', callback_data: `admreact_${evId}` }],
@@ -2625,83 +2525,6 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // 🏁 Точка прибытия: куда едем (вторая точка дня, попадает в карточку кнопкой).
-        if (data.startsWith('admarr_')) {
-          const evIdA = data.slice('admarr_'.length);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id });
-          await setSession(tgId, 'admarr_manual', { evId: evIdA });
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: '🏁 Куда прибываем? Напиши название места и координаты цифрами.\n<i>Например: «Голубые озёра, стоянка у воды, 52.7901, 27.9865»</i>',
-          });
-          return res.status(200).json({ ok: true });
-        }
-        // 📜 Правила события: ИИ формирует свод (поведение+знакомство+безопасность+эко),
-        // орг смотрит превью и рассылает с кнопкой подтверждения.
-        if (data.startsWith('admrulesgo_')) {
-          const evIdR = data.slice('admrulesgo_'.length);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
-          const { data: ruleRow } = await supabase
-            .from('event_safety_rules').select('rules').eq('event_id', evIdR)
-            .order('id', { ascending: false }).limit(1).maybeSingle();
-          const rulesList: any[] = Array.isArray((ruleRow as any)?.rules) ? (ruleRow as any).rules : [];
-          if (!rulesList.length) { await tg('sendMessage', { chat_id: chatId, text: 'Сначала сгенерируй правила (кнопка «📜 Правила события»).' }); return res.status(200).json({ ok: true }); }
-          const evR = await getEvent(evIdR);
-          const bodyR = rulesList.map((r: any, i: number) => `${r.critical ? '⚠️' : `${i + 1}.`} <b>${esc(r.title)}</b>${r.text ? ` — ${esc(r.text)}` : ''}`).join('\n');
-          const eligR = await pollEligible(evIdR);
-          let okR = 0;
-          for (const id of eligR) {
-            try {
-              const rr = await tg('sendMessage', {
-                chat_id: id, parse_mode: 'HTML',
-                text: `📜 <b>Правила события «${esc((evR as any)?.title || '')}»</b>\nПрочитай и подтверди — так мы бережём атмосферу и друг друга:\n\n${bodyR}`,
-                reply_markup: kb([[{ text: '✅ Прочитал(а) и принимаю', callback_data: `ruleok_${evIdR}` }]]),
-              });
-              if (rr?.ok) okR++;
-            } catch { /* заблокировал бота */ }
-          }
-          await tg('sendMessage', { chat_id: chatId, text: `📜 Правила ушли ${okR} из ${eligR.length} участников. Подтверждения фиксируются автоматически.` });
-          return res.status(200).json({ ok: true });
-        }
-        if (data.startsWith('admrules_')) {
-          const evIdR = data.slice('admrules_'.length);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Готовлю свод правил…' });
-          const evR = await getEvent(evIdR);
-          if (!evR) return res.status(200).json({ ok: true });
-          let rulesList: any[] = [];
-          try {
-            const parsed = await geminiJSON(
-              `Составь свод правил для события клуба живого общения.\n` +
-              `Событие: «${(evR as any).title}», ${(evR as any).date}, место: ${(evR as any).location || 'природа'}.\n` +
-              `Нужно 7-9 коротких пунктов: как себя вести, знакомство и открытость (обращаемся по имени, телефоны убираем), ` +
-              `взаимопомощь, безопасность на местности (вода/высота/огонь — по типу места), алкоголь в меру, экология (мусор с собой), ` +
-              `уважение к границам. Тон тёплый, без канцелярита.\n` +
-              `JSON: {"rules":[{"title":"кратко","text":"1 предложение","critical":true|false}]} — critical только про безопасность.`
-            );
-            if (parsed && Array.isArray(parsed.rules)) rulesList = parsed.rules.slice(0, 10);
-          } catch { /* ниже фолбэк */ }
-          if (!rulesList.length) {
-            rulesList = [
-              { title: 'Знакомимся и общаемся вживую', text: 'Обращаемся по имени, телефоны — по минимуму.', critical: false },
-              { title: 'Бережём друг друга', text: 'Уважаем границы, помогаем новичкам влиться.', critical: false },
-              { title: 'Безопасность у воды и на рельефе', text: 'Не купаемся в одиночку, следим друг за другом.', critical: true },
-              { title: 'Огонь — только в кострище', text: 'За костром всегда кто-то присматривает.', critical: true },
-              { title: 'Экология', text: 'Весь мусор увозим с собой, поляну оставляем чище.', critical: false },
-            ];
-          }
-          await supabase.from('event_safety_rules').insert({
-            event_id: evIdR,
-            location_type: /озер|вода|карьер|речк/i.test(String((evR as any).location || '')) ? 'lake' : 'forest',
-            rules: rulesList,
-          });
-          const bodyR = rulesList.map((r: any, i: number) => `${r.critical ? '⚠️' : `${i + 1}.`} <b>${esc(r.title)}</b>${r.text ? ` — ${esc(r.text)}` : ''}`).join('\n');
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: `📜 <b>Превью правил «${esc((evR as any).title)}»</b>:\n\n${bodyR}\n\nРазослать участникам с кнопкой подтверждения?`,
-            reply_markup: kb([[{ text: '📨 Разослать с подтверждением', callback_data: `admrulesgo_${evIdR}` }], [{ text: '🔄 Перегенерировать', callback_data: `admrules_${evIdR}` }]]),
-          });
-          return res.status(200).json({ ok: true });
-        }
         // admping_: доборщик вручную — пингуем только тех, у кого есть пробелы.
         const evId = data.slice('admping_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пингую…' });
@@ -4339,29 +4162,6 @@ export default async function handler(req: any, res: any) {
             tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: draft, reply_markup: mapBtn.length ? kb(mapBtn) : undefined })
           ));
           await tg('sendMessage', { chat_id: chatId, text: `✅ Разослал ${elig.length} участникам и сохранил в логистику.` });
-          return res.status(200).json({ ok: true });
-        }
-
-        // 🏁 Точка прибытия (ручной ввод организатором).
-        if (sess && sess.state === 'admarr_manual') {
-          const evId = sess.context?.evId;
-          await clearSession(msg.from.id);
-          const ev = await getEvent(evId);
-          const raw = String(text).trim().slice(0, 300);
-          if (!ev || raw.length < 3) { await tg('sendMessage', { chat_id: chatId, text: 'Слишком коротко — напиши название и координаты.' }); return res.status(200).json({ ok: true }); }
-          try {
-            const lg = (ev as any)?.logistics || {};
-            await supabase.from('events').update({ logistics: { ...lg, arrivalPoint: raw } }).eq('id', evId);
-          } catch { /* no-op */ }
-          const mapU = pointMapUrl(raw);
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: `🏁 Точка прибытия сохранена:\n<b>${esc(raw)}</b>\n\nОна появилась кнопкой в карточке события. Разослать участникам?`,
-            reply_markup: kb([
-              ...(mapU ? [[{ text: '🗺 Проверить на карте', url: mapU }]] : []),
-              [{ text: '📨 Разослать точку всем', callback_data: `arrsend_${evId}` }],
-            ]),
-          });
           return res.status(200).json({ ok: true });
         }
 
