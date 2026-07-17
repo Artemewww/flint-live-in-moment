@@ -484,9 +484,12 @@ function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
  * Старые тексты кнопок продолжаем понимать — клавиатура у людей кешируется.
  */
 function mainMenu() {
+  // UX: 2×2, высокочастотное сверху. «Мои события» (мои брони/логистика) —
+  // самое частое; «Все события» — обзор афиши; профиль/помощь — редкие.
+  // Отдельно живёт web-кнопка «Афиша» (mini-app) — тексты не дублируем.
   return {
     keyboard: [
-      [{ text: '🏠 Главная' }, { text: '🗓 Мои события' }],
+      [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
       [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
     ],
     resize_keyboard: true,
@@ -631,8 +634,11 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
   if (logi.length) rows.push(logi);
 
-  // Голосования участников (кино/поездка/еда — что угодно).
-  rows.push([{ text: '🗳 Голосования', callback_data: `polls_${ev.id}` }]);
+  // Голосования и задачи участников.
+  rows.push([
+    { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
+    { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
+  ]);
   // Нижние кнопки: спрос/предложение + позвать
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
@@ -1377,6 +1383,92 @@ export default async function handler(req: any, res: any) {
             [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${evId}:self` }],
           ]),
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Доска задач (tasks): поставил → всем прилетело → «Беру» → «Сделано» ──
+      if (data.startsWith('tasks_')) {
+        const evId = data.slice('tasks_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: tasks } = await supabase
+          .from('tasks').select('id,title,taken_by,done,created_by').eq('event_id', evId).order('id', { ascending: false }).limit(15);
+        const rows: any[] = [];
+        for (const t of tasks || []) {
+          const st = (t as any).done ? '✅' : (t as any).taken_by ? '🙋' : '🆕';
+          rows.push([{ text: `${st} ${(t as any).title}`.slice(0, 60), callback_data: `taskshow_${(t as any).id}` }]);
+        }
+        rows.push([{ text: '➕ Поставить задачу', callback_data: `tasknew_${evId}` }]);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: (tasks || []).length ? '📋 <b>Задачи события</b>\n🆕 свободна · 🙋 в работе · ✅ сделана' : '📋 <b>Задач пока нет</b>\nПоставь задачу (напр. «забрать проектор») — прилетит всем, кто-то возьмёт.',
+          reply_markup: kb(rows),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('tasknew_')) {
+        const evId = data.slice('tasknew_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const elig = await pollEligible(evId);
+        if (!elig.includes(tgId) && !(await isCore(tgId))) { await tg('sendMessage', { chat_id: chatId, text: 'Ставить задачи могут участники события.' }); return res.status(200).json({ ok: true }); }
+        await setSession(tgId, 'task_create', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📋 Опиши задачу одной строкой — что нужно сделать.\n<i>Например: «Забрать экран у Марины, ул. Сурганова 5, до пятницы» или «Арендовать колонку».</i>' });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('taskshow_')) {
+        const taskId = Number(data.slice('taskshow_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+        if (!t) return res.status(200).json({ ok: true });
+        const takenBy = (t as any).taken_by;
+        const rows: any[] = [];
+        if ((t as any).done) { /* закрыта */ }
+        else if (!takenBy) rows.push([{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]);
+        else if (Number(takenBy) === tgId) rows.push([{ text: '✅ Сделано', callback_data: `donetask_${taskId}` }]);
+        if (Number((t as any).created_by) === tgId && !(t as any).done) rows.push([{ text: '🗑 Снять задачу', callback_data: `taskdel_${taskId}` }]);
+        let who = '';
+        if (takenBy) { const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', takenBy).maybeSingle(); who = (m as any)?.first_name || (m as any)?.username || `id ${takenBy}`; }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `📋 <b>${esc((t as any).title)}</b>\n\nСтатус: ${(t as any).done ? '✅ сделана' : takenBy ? `🙋 в работе (${esc(who)})` : '🆕 свободна'}`,
+          reply_markup: rows.length ? kb(rows) : undefined,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('taketask_')) {
+        const taskId = Number(data.slice('taketask_'.length));
+        const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+        if (!t || (t as any).done) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Задача недоступна' }); return res.status(200).json({ ok: true }); }
+        if ((t as any).taken_by) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Уже взяли' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('tasks').update({ taken_by: tgId }).eq('id', taskId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Взял в работу ✅' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [[{ text: '✅ Сделано', callback_data: `donetask_${taskId}` }]] } }); } catch { /* no-op */ }
+        // Ставивший задачу — под контроль: узнаёт, кто взял.
+        if ((t as any).created_by && Number((t as any).created_by) !== tgId) {
+          try { await tg('sendMessage', { chat_id: (t as any).created_by, parse_mode: 'HTML', text: `🙋 <b>${esc(cq.from.first_name || 'Участник')}</b> взял задачу: «${esc((t as any).title)}». Отчитается, когда сделает.` }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('donetask_')) {
+        const taskId = Number(data.slice('donetask_'.length));
+        const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+        if (!t) { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        if (Number((t as any).taken_by) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отчитывается тот, кто взял' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('tasks').update({ done: true }).eq('id', taskId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отметил сделанным ✅' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if ((t as any).created_by && Number((t as any).created_by) !== tgId) {
+          try { await tg('sendMessage', { chat_id: (t as any).created_by, parse_mode: 'HTML', text: `✅ <b>${esc(cq.from.first_name || 'Участник')}</b> выполнил задачу: «${esc((t as any).title)}». Спасибо!` }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('taskdel_')) {
+        const taskId = Number(data.slice('taskdel_'.length));
+        const { data: t } = await supabase.from('tasks').select('created_by').eq('id', taskId).maybeSingle();
+        if (t && (Number((t as any).created_by) === tgId || await isCore(tgId))) {
+          await supabase.from('tasks').delete().eq('id', taskId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Задача снята' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        } else { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Снять может автор задачи' }); }
         return res.status(200).json({ ok: true });
       }
 
@@ -3299,6 +3391,32 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        // Постановка задачи: создаём и рассылаем участникам с кнопкой «Беру».
+        if (sess && sess.state === 'task_create') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const title = String(text).trim().slice(0, 200);
+          if (!title) { await tg('sendMessage', { chat_id: chatId, text: 'Пустая задача — опиши, что нужно сделать.' }); return res.status(200).json({ ok: true }); }
+          const ev = await getEvent(evId);
+          const { data: created } = await supabase
+            .from('tasks').insert({ event_id: evId, title, created_by: msg.from.id, done: false }).select('id').single();
+          if (!created) { await tg('sendMessage', { chat_id: chatId, text: 'Не удалось создать задачу.' }); return res.status(200).json({ ok: true }); }
+          const taskId = (created as any).id;
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Задача поставлена и разослана:\n<b>${esc(title)}</b>\nКто возьмёт — тебе придёт уведомление.` });
+          const eligible = await pollEligible(evId);
+          for (const id of eligible) {
+            if (id === msg.from.id) continue;
+            try {
+              await tg('sendMessage', {
+                chat_id: id, parse_mode: 'HTML',
+                text: `📋 <b>Новая задача — «${esc(ev?.title || 'событие')}»</b>\n\n${esc(title)}\n\nОт: ${esc(msg.from.first_name || 'участник')}. Можешь взять?`,
+                reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]),
+              });
+            } catch { /* no-op */ }
+          }
+          return res.status(200).json({ ok: true });
+        }
+
         // Добавление варианта в открытое голосование → оповещаем участников.
         if (sess && sess.state === 'poll_addopt') {
           const pollId = Number(sess.context?.pollId);
@@ -3504,7 +3622,7 @@ export default async function handler(req: any, res: any) {
           await sendMyEvents(chatId, msg.from.id, openBtn);
           return res.status(200).json({ ok: true });
         }
-        if (text === '📅 Ближайшие события') {
+        if (text === '📅 Все события' || text === '📅 Ближайшие события') {
           await sendEventsList(chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
