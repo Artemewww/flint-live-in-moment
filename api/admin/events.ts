@@ -9,6 +9,51 @@ const supabase = createClient(
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
+/** IP клиента за прокси Vercel (первый в x-forwarded-for). */
+function clientIp(req: any): string {
+  const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || String(req.headers?.['x-real-ip'] || '') || 'unknown';
+}
+
+/**
+ * Rate-limit на Supabase (переживает несколько инстансов Vercel, в отличие от
+ * in-memory). Бакет живёт в bot_sessions под отрицательным ключом-хешем — как
+ * presence, без лишнего DDL. Возвращает { allowed, retryAfter } (сек).
+ */
+async function rateLimit(scope: string, ident: string, max: number, windowMs: number): Promise<{ allowed: boolean; retryAfter: number }> {
+  try {
+    const raw = `rl:${scope}:${ident}`;
+    let h = 0;
+    for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+    const key = -Math.abs(h) - 100000; // отдельный диапазон от presence
+    const now = Date.now();
+    const { data } = await supabase.from('bot_sessions').select('context').eq('telegram_id', key).maybeSingle();
+    const ctx: any = (data as any)?.context || {};
+    const windowStart = Number(ctx.ws) || 0;
+    let count = Number(ctx.n) || 0;
+    if (now - windowStart > windowMs) {
+      // Новое окно.
+      await supabase.from('bot_sessions').upsert(
+        { telegram_id: key, state: 'ratelimit', context: { ws: now, n: 1 }, updated_at: new Date().toISOString() },
+        { onConflict: 'telegram_id' }
+      );
+      return { allowed: true, retryAfter: 0 };
+    }
+    if (count >= max) {
+      return { allowed: false, retryAfter: Math.ceil((windowStart + windowMs - now) / 1000) };
+    }
+    count += 1;
+    await supabase.from('bot_sessions').upsert(
+      { telegram_id: key, state: 'ratelimit', context: { ws: windowStart, n: count }, updated_at: new Date().toISOString() },
+      { onConflict: 'telegram_id' }
+    );
+    return { allowed: true, retryAfter: 0 };
+  } catch {
+    // При сбое стора не блокируем легитимных пользователей.
+    return { allowed: true, retryAfter: 0 };
+  }
+}
+
 function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -184,10 +229,22 @@ export default async function handler(req: any, res: any) {
   // Вход/выход админки. Пароль сверяется на сервере и обменивается на
   // подписанную httpOnly-куку — в браузер секрет не попадает.
   if (req.method === 'POST' && req.query?.action === 'login') {
+    // Анти-брутфорс: не больше 8 попыток за 15 минут с одного IP.
+    const rl = await rateLimit('login', clientIp(req), 8, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfter));
+      return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${Math.ceil(rl.retryAfter / 60)} мин.` });
+    }
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     if (!passwordMatches(body.password)) {
       return res.status(401).json({ error: 'Неверный пароль' });
     }
+    // Успех — сбрасываем счётчик попыток этого IP.
+    try {
+      const raw = `rl:login:${clientIp(req)}`;
+      let h = 0; for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+      await supabase.from('bot_sessions').delete().eq('telegram_id', -Math.abs(h) - 100000);
+    } catch { /* no-op */ }
     res.setHeader('Set-Cookie', sessionCookie());
     return res.status(200).json({ ok: true });
   }

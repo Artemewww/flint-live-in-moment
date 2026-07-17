@@ -76,6 +76,43 @@ const supabase = createClient(
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 
+/** IP клиента за прокси Vercel. Дублируется по файлам (импорт из _lib роняет функции). */
+function clientIp(req: any): string {
+  const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || String(req.headers?.['x-real-ip'] || '') || 'unknown';
+}
+
+/** Rate-limit на Supabase (кросс-инстанс). Бакет в bot_sessions под хеш-ключом. */
+async function rateLimit(scope: string, ident: string, max: number, windowMs: number): Promise<{ allowed: boolean; retryAfter: number }> {
+  try {
+    const raw = `rl:${scope}:${ident}`;
+    let h = 0;
+    for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+    const key = -Math.abs(h) - 100000;
+    const now = Date.now();
+    const { data } = await supabase.from('bot_sessions').select('context').eq('telegram_id', key).maybeSingle();
+    const ctx: any = (data as any)?.context || {};
+    const windowStart = Number(ctx.ws) || 0;
+    let count = Number(ctx.n) || 0;
+    if (now - windowStart > windowMs) {
+      await supabase.from('bot_sessions').upsert(
+        { telegram_id: key, state: 'ratelimit', context: { ws: now, n: 1 }, updated_at: new Date().toISOString() },
+        { onConflict: 'telegram_id' }
+      );
+      return { allowed: true, retryAfter: 0 };
+    }
+    if (count >= max) return { allowed: false, retryAfter: Math.ceil((windowStart + windowMs - now) / 1000) };
+    count += 1;
+    await supabase.from('bot_sessions').upsert(
+      { telegram_id: key, state: 'ratelimit', context: { ws: windowStart, n: count }, updated_at: new Date().toISOString() },
+      { onConflict: 'telegram_id' }
+    );
+    return { allowed: true, retryAfter: 0 };
+  } catch {
+    return { allowed: true, retryAfter: 0 };
+  }
+}
+
 // Колонки registrations, которые разрешено принимать из тела запроса.
 const REG_FIELDS = [
   'status', 'payment_status', 'payment_amount', 'donation_amount',
@@ -89,6 +126,13 @@ export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   if (req.method === 'OPTIONS') return res.status(204).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  // Анти-спам регистраций: не больше 15 с одного IP за 10 минут.
+  const rl = await rateLimit('register', clientIp(req), 15, 10 * 60 * 1000);
+  if (!rl.allowed) {
+    res.setHeader('Retry-After', String(rl.retryAfter));
+    return res.status(429).json({ error: 'Слишком много запросов, попробуй позже.' });
+  }
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
