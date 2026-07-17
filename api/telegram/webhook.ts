@@ -663,22 +663,16 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
-  // Точки выезда и прибытия (из logistics) — верхний ряд
+  // Точки выезда и прибытия (из logistics) — каждая отдельной кнопкой
   const lg = ev?.logistics || {};
-  const pointsRow: any[] = [];
   if (lg.assemblyPoint) {
-    const coords = lg.assemblyPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
-    pointsRow.push({ text: '🚩 Точка выезда', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.assemblyPoint)}` });
+    rows.push([{ text: '🚩 Точка выезда', callback_data: `showpoint_depart_${ev.id}` }]);
   }
   if (lg.arrivalPoint) {
-    const coords = lg.arrivalPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
-    pointsRow.push({ text: '🏁 Точка прибытия', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.arrivalPoint)}` });
+    rows.push([{ text: '🏁 Точка прибытия', callback_data: `showpoint_arrive_${ev.id}` }]);
   }
   if (lg.assemblyPoint || lg.arrivalPoint) {
-    pointsRow.push({ text: '📍 Переслать точки', callback_data: `sharepoints_${ev.id}` });
-    rows.push(pointsRow);
+    rows.push([{ text: '📍 Переслать точки', callback_data: `sharepoints_${ev.id}` }]);
   }
 
   // Чат события, маршрут, программа
@@ -2996,6 +2990,50 @@ export default async function handler(req: any, res: any) {
             ? '❓ Напиши свой вопрос по событию — передам организатору, ответ придёт сюда.'
             : '💡 Что можно улучшить в этом событии? Напиши — организатор увидит.',
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Показать точку выезда с деталями (состав, машины, карта)
+      if (data.startsWith('showpoint_depart_')) {
+        const evId = data.slice('showpoint_depart_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const ev = await getEvent(evId);
+        const lg = ev?.logistics || {};
+        const point = lg.assemblyPoint || '';
+        if (!point) { await tg('sendMessage', { chat_id: chatId, text: 'Точка выезда ещё не задана.' }); return res.status(200).json({ ok: true }); }
+        // Состав: люди + машины
+        const [{ data: regs }, { data: rides }] = await Promise.all([
+          supabase.from('registrations').select('guest_count').eq('event_id', evId).neq('status', 'cancelled'),
+          supabase.from('rides').select('driver_name,from_point,seats_total,seats_taken').eq('event_id', evId).eq('active', true).neq('kind', 'tent'),
+        ]);
+        const totalPeople = (regs || []).reduce((n: number, r: any) => n + 1 + (Number(r.guest_count) || 0), 0);
+        const carsList = (rides || []).map((c: any) => `🚗 ${esc(c.driver_name || 'Водитель')}${c.from_point ? ` (${esc(c.from_point)})` : ''} — ${Math.max(0, (c.seats_total || 0) - (c.seats_taken || 0))} мест`).join('\n');
+        const coords = point.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
+        const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
+        const timeStr = lg.departureTime ? `🕐 Сбор в <b>${esc(lg.departureTime)}</b>\n` : '';
+        const text = `🚩 <b>Точка выезда — «${esc(ev?.title || '')}»</b>\n\n📍 ${esc(point)}\n${timeStr}👥 Нас едет: <b>${totalPeople}</b>\n${carsList ? `\n${carsList}\n` : ''}\nВстречаемся, знакомимся — и стартуем колонной!`;
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть на карте', url: mapUrl }]]) : undefined });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Показать точку прибытия с деталями
+      if (data.startsWith('showpoint_arrive_')) {
+        const evId = data.slice('showpoint_arrive_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const ev = await getEvent(evId);
+        const lg = ev?.logistics || {};
+        const point = lg.arrivalPoint || '';
+        if (!point) { await tg('sendMessage', { chat_id: chatId, text: 'Точка прибытия ещё не задана.' }); return res.status(200).json({ ok: true }); }
+        const [{ data: regs }, { data: rides }] = await Promise.all([
+          supabase.from('registrations').select('guest_count').eq('event_id', evId).neq('status', 'cancelled'),
+          supabase.from('rides').select('driver_name,from_point,seats_total,seats_taken').eq('event_id', evId).eq('active', true).neq('kind', 'tent'),
+        ]);
+        const totalPeople = (regs || []).reduce((n: number, r: any) => n + 1 + (Number(r.guest_count) || 0), 0);
+        const carsList = (rides || []).map((c: any) => `🚗 ${esc(c.driver_name || 'Водитель')}${c.from_point ? ` (${esc(c.from_point)})` : ''} — ${Math.max(0, (c.seats_total || 0) - (c.seats_taken || 0))} мест`).join('\n');
+        const coords = point.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
+        const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
+        const text = `🏁 <b>Точка прибытия — «${esc(ev?.title || '')}»</b>\n\n📍 ${esc(point)}\n👥 Нас едет: <b>${totalPeople}</b>\n${carsList ? `\n${carsList}\n` : ''}\nДобираемся и встречаемся на месте!`;
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть на карте', url: mapUrl }]]) : undefined });
         return res.status(200).json({ ok: true });
       }
 
