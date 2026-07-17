@@ -1954,7 +1954,7 @@ export default async function handler(req: any, res: any) {
         if (!expenses.length) { await tg('sendMessage', { chat_id: chatId, text: '💸 Расходов пока нет. Добавь свой — «💸 Добавить расход».' }); return res.status(200).json({ ok: true }); }
         const total = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
         const lines = expenses.map((e: any) => `• ${esc(e.title)} — <b>${e.amount} BYN</b> (${esc(e.by_name || '')}${e.photo ? ', с чеком' : ''})`).join('\n');
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `📊 <b>Расходы — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines}\n\nИтого: <b>${Math.round(total * 100) / 100} BYN</b>\nПоделим по ртам при финальном сплите.` });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `📊 <b>Расходы — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines}\n\nИтого: <b>${Math.round(total * 100) / 100} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
         return res.status(200).json({ ok: true });
       }
       // Мои гости: логистика — выбрать водителя, чтобы забрать гостя по пути.
@@ -4284,13 +4284,24 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(title)}</b> — <b>${amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
             return res.status(200).json({ ok: true });
           }
-          // Fallback: пробуем ИИ-парсинг через Gemini
+          // Fallback: пробуем ИИ-парсинг через Gemini (поддерживает несколько покупок в одном сообщении)
           try {
             const { parseExpenseAI } = await import('./ai-helpers');
-            const parsed = await parseExpenseAI(String(text).trim());
-            if (parsed && parsed.title && parsed.amount > 0) {
-              await setSession(msg.from.id, 'exp_photo', { evId, title: parsed.title, amount: parsed.amount });
-              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(parsed.title)}</b> — <b>${parsed.amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
+            const items = await parseExpenseAI(String(text).trim());
+            if (items && items.length > 0) {
+              // Если одна покупка — обычный флоу с фото чека
+              if (items.length === 1) {
+                await setSession(msg.from.id, 'exp_photo', { evId, title: items[0].title, amount: items[0].amount });
+                await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(items[0].title)}</b> — <b>${items[0].amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
+                return res.status(200).json({ ok: true });
+              }
+              // Если несколько — сохраняем все сразу без фото
+              for (const item of items) {
+                await saveAndBroadcastExpense(evId, msg.from, item.title, item.amount, null);
+              }
+              const summary = items.map(i => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
+              const total = items.reduce((s: number, i: any) => s + i.amount, 0);
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} расхода сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
               return res.status(200).json({ ok: true });
             }
           } catch { /* ИИ недоступен — показываем ошибку */ }

@@ -105,13 +105,19 @@ export async function parseShoppingPrefs(text: string): Promise<{
   }
 }
 
-/** ИИ-парсинг расхода из свободного текста: «мясо 80 бел руб» → {title, amount} */
-export async function parseExpenseAI(text: string): Promise<{title: string; amount: number} | null> {
+/** ИИ-парсинг расхода из свободного текста: «Мясо 80 маршмелоу 18 и огурцы 1 кг — 5 BYN» → [{title, amount}] */
+export async function parseExpenseAI(text: string): Promise<Array<{title: string; amount: number}>> {
   const prompt =
-    `Извлеки из текста название покупки и сумму в BYN (белорусских рублях).\n` +
-    `Текст: "${text.slice(0, 300)}"\n` +
-    `Верни JSON: {"title":"название (до 50 символов)","amount":число}\n` +
-    `Если не можешь определить сумму — верни {"error":"не могу"}`;
+    `Текст участника о покупках для общего события. Извлеки КАЖДУЮ покупку с её суммой в BYN (белорусских рублях).\n` +
+    `Текст: "${text.slice(0, 400)}"\n` +
+    `Верни JSON: {"items":[{"title":"название покупки (до 50 символов)","amount":число}]}\n` +
+    `Правила:\n` +
+    `- Если одна позиция и одна сумма — верни её как один item.\n` +
+    `- Если несколько наименований с разными суммами — верни по items на каждую.\n` +
+    `- Если перечислено несколько товаров и одна общая сумма — верни один item с общей суммой, объединив названия.\n` +
+    `- Пример: «Мясо 80, маршмелоу 18» → [{"title":"Мясо","amount":80},{"title":"Маршмелоу","amount":18}]\n` +
+    `- Пример: «Мясо 80 маршмелоу 18 и огурцы 1 кг — 5 BYN» → [{"title":"Мясо","amount":80},{"title":"Маршмелоу","amount":18},{"title":"Огурцы 1 кг","amount":5}]\n` +
+    `- Если не можешь определить — верни {"items":[]}`;
 
   try {
     const resp = await ai?.models.generateContent({
@@ -119,17 +125,17 @@ export async function parseExpenseAI(text: string): Promise<{title: string; amou
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
-        maxOutputTokens: 64,
+        maxOutputTokens: 256,
         thinkingConfig: { thinkingBudget: 0 }
       }
     });
     const parsed = JSON.parse(resp?.text || '{}');
-    if (parsed && parsed.title && parsed.amount > 0) {
-      return { title: String(parsed.title).slice(0, 50), amount: Number(parsed.amount) };
-    }
-    return null;
+    const items = Array.isArray(parsed?.items) ? parsed.items : (Array.isArray(parsed) ? parsed : []);
+    return items
+      .map((i: any) => ({ title: String(i.title || '').slice(0, 50), amount: Number(i.amount) || 0 }))
+      .filter((i: any) => i.title && i.amount > 0);
   } catch {
-    return null;
+    return [];
   }
 }
 
