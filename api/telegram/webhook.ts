@@ -2069,8 +2069,53 @@ export default async function handler(req: any, res: any) {
       if (data.startsWith('expadd_')) {
         const evId = data.slice('expadd_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        await setSession(tgId, 'exp_add', { evId });
+        // Проверяем, есть ли у пользователя сохранённые платёжные предпочтения
+        const { data: memPrefs } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+        const paymentPrefs = (memPrefs as any)?.prefs?.payment;
+        if (paymentPrefs && paymentPrefs.method) {
+          // Уже есть — сразу переходим к вводу расхода
+          await setSession(tgId, 'exp_add', { evId, payment: paymentPrefs });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '💸 Что купил(а) и на какую сумму? Напиши одной строкой: название и сумма в BYN.\n<i>Например: «Мясо 45.50» или «Угли и розжиг 18»</i>' });
+        } else {
+          // Спрашиваем способ оплаты в первый раз
+          await setSession(tgId, 'exp_payment_method', { evId });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '💳 <b>Как тебе удобнее получать деньги?</b>\n\nВыбери способ — я запомню и буду предлагать его в следующих расходах. Потом можно изменить в /profile.',
+            reply_markup: kb([
+              [{ text: '💵 Наличные', callback_data: 'paymethod_cash' }],
+              [{ text: '💳 На карту', callback_data: 'paymethod_card' }],
+            ]),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Выбор способа оплаты: наличные
+      if (data === 'paymethod_cash') {
+        const sess = await getSession(tgId);
+        if (!sess || sess.state !== 'exp_payment_method') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+        const evId = sess.context?.evId;
+        // Сохраняем в prefs
+        await supabase.from('members').update({
+          prefs: { payment: { method: 'cash' } }
+        }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Запомнил: наличные' });
+        await setSession(tgId, 'exp_add', { evId, payment: { method: 'cash' } });
         await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '💸 Что купил(а) и на какую сумму? Напиши одной строкой: название и сумма в BYN.\n<i>Например: «Мясо 45.50» или «Угли и розжиг 18»</i>' });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Выбор способа оплаты: на карту → просим реквизиты
+      if (data === 'paymethod_card') {
+        const sess = await getSession(tgId);
+        if (!sess || sess.state !== 'exp_payment_method') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'paymethod_card_details', { evId: sess.context?.evId });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '💳 <b>Куда переводить?</b>\n\nНапиши реквизиты одной строкой:\n• <b>Номер телефона</b> (Альфа-Банк, например +375291234567)\n• Или <b>номер карты</b>\n• Или <b>лицевой счёт</b>\n\n<i>Пример: +375291234567 (Альфа-Банк)</i>',
+        });
         return res.status(200).json({ ok: true });
       }
 
