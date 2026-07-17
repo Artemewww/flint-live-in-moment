@@ -3966,23 +3966,13 @@ export default async function handler(req: any, res: any) {
           // ИИ парсит свободный текст в структурированный список с количеством.
           let items: Array<{item: string; quantity: number; category?: string}> = [];
           try {
-            const aiResp = await geminiText(
-              `Текст участника о снаряжении: "${rawText}"\n\n` +
-              `Извлеки список предметов в формат JSON.\n` +
-              `Каждый предмет: {"item":"название","quantity":число,"category":"палатка|посуда|инструмент|одежда|прочее"}\n` +
-              `Правила:\n` +
-              `- Если количество указано (2 стула) — возьми его\n` +
-              `- Если не указано — quantity:1\n` +
-              `- Название — в единственном числе (стул, не стулья)\n` +
-              `- category — угадай по смыслу предмета\n` +
-              `Ответ ТОЛЬКО массив JSON: [{"item":"...","quantity":1,"category":"..."},...]\n` +
-              `Никаких пояснений.`
+            // geminiJSON: гарантированный JSON (текстовый вариант отвечал прозой через раз).
+            const parsed = await geminiJSON(
+              `Текст участника о снаряжении (надиктовка, возможны ошибки): "${rawText}"\n\n` +
+              `Извлеки предметы. Верни JSON: {"items":[{"item":"название в ед. числе","quantity":число (указано «2 стула» → 2, иначе 1),"category":"палатка|посуда|инструмент|одежда|прочее"}]}`
             );
-            const match = aiResp.match(/\[.*\]/s);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              if (Array.isArray(parsed)) items = parsed.slice(0, 20); // лимит 20 позиций
-            }
+            const arr = Array.isArray(parsed) ? parsed : parsed?.items;
+            if (Array.isArray(arr)) items = arr.slice(0, 20);
           } catch { 
             // Фолбэк: простой парсинг запятыми
             items = rawText.split(/[,;\n]+/).slice(0, 20).map(s => {
