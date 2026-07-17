@@ -1697,7 +1697,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_')) {
+      if (data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
           return res.status(200).json({ ok: true });
@@ -1712,6 +1712,7 @@ export default async function handler(req: any, res: any) {
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
               [{ text: '🗳 Статистика голосований', callback_data: `admpolls_${evId}` }],
+              [{ text: '📊 Реакции на рассылку', callback_data: `admreact_${evId}` }],
               [{ text: '📋 Пингануть незаполнивших', callback_data: `admping_${evId}` }],
             ]),
           });
@@ -1747,6 +1748,48 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: lines.length ? `💸 <b>Долги — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines.join('\n')}` : 'Сплит ещё не рассылался — долгов нет.' });
           return res.status(200).json({ ok: true });
         }
+        // Реакции на рассылку: кто подтвердил (confirmed), кто молчит, кто недоступен.
+        if (data.startsWith('admreact_')) {
+          const evId = data.slice('admreact_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          const { data: regs } = await supabase
+            .from('registrations').select('telegram_id,name,status').eq('event_id', evId).neq('status', 'cancelled');
+          const real = (regs || []).filter((r: any) => Number(r.telegram_id) > 0);
+          const ids = real.map((r: any) => Number(r.telegram_id));
+          const { data: mem } = ids.length ? await supabase.from('members').select('telegram_id,bot_active').in('telegram_id', ids) : { data: [] as any[] };
+          const activeMap = new Map((mem || []).map((m: any) => [Number(m.telegram_id), m.bot_active !== false]));
+          const confirmed = real.filter((r: any) => r.status === 'confirmed');
+          const silent = real.filter((r: any) => r.status !== 'confirmed');
+          const blocked = real.filter((r: any) => activeMap.get(Number(r.telegram_id)) === false);
+          const silentList = silent.map((r: any) => `• ${esc(r.name || r.telegram_id)}${activeMap.get(Number(r.telegram_id)) === false ? ' 🚫(бот заблокирован)' : ''}`).join('\n');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📊 <b>Реакции на рассылку</b>\n\n✅ Подтвердили (нажали «Еду»): <b>${confirmed.length}</b>\n🔕 Молчат: <b>${silent.length}</b>\n🚫 Бот заблокирован: <b>${blocked.length}</b>\n\n${silent.length ? `<b>Молчат:</b>\n${silentList}` : 'Все отреагировали 🔥'}`,
+            reply_markup: silent.some((r: any) => activeMap.get(Number(r.telegram_id)) !== false) ? kb([[{ text: '🔔 Напомнить молчунам', callback_data: `admnudge_${evId}` }]]) : undefined,
+          });
+          return res.status(200).json({ ok: true });
+        }
+        // Повторный пинг молчунам (кто не подтвердил и бот не заблокирован).
+        if (data.startsWith('admnudge_')) {
+          const evId = data.slice('admnudge_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Напоминаю…' });
+          const { data: evRow } = await supabase.from('events').select('title').eq('id', evId).maybeSingle();
+          const { data: regs } = await supabase.from('registrations').select('telegram_id,status').eq('event_id', evId).neq('status', 'cancelled');
+          let n = 0;
+          for (const r of (regs || []).filter((x: any) => Number(x.telegram_id) > 0 && x.status !== 'confirmed')) {
+            try {
+              await tg('sendMessage', {
+                chat_id: Number(r.telegram_id), parse_mode: 'HTML',
+                text: `⏰ Напоминание по «<b>${esc((evRow as any)?.title || '')}</b>»: подтверди участие, чтобы мы на тебя рассчитывали.`,
+                reply_markup: kb([[{ text: '✅ Еду', callback_data: `rsvpy_${evId}` }, { text: '❌ Не смогу', callback_data: `rsvpn_${evId}` }]]),
+              });
+              n++;
+            } catch { /* заблокирован */ }
+          }
+          await tg('sendMessage', { chat_id: chatId, text: `✅ Напомнил ${n} участникам.` });
+          return res.status(200).json({ ok: true });
+        }
+
         // Статистика голосований события: явка и расклад по каждому опросу.
         if (data.startsWith('admpolls_')) {
           const evId = data.slice('admpolls_'.length);
@@ -2575,6 +2618,8 @@ export default async function handler(req: any, res: any) {
       if (data.startsWith('rsvpy_')) {
         const evId = data.slice('rsvpy_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Отлично, ждём тебя!' });
+        // Реакция на рассылку = подтверждение участия: админка видит confirmed.
+        try { await updateReg(evId, tgId, { status: 'confirmed' }); } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
         await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🔥 Супер, ты в деле! До встречи. Если что-то поменяется — открой событие и нажми «Отказаться».' });
         return res.status(200).json({ ok: true });
