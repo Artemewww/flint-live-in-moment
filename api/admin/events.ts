@@ -505,7 +505,9 @@ export default async function handler(req: any, res: any) {
 
         for (const ex of expenses) {
           const optout: number[] = Array.isArray(ex.optout) ? ex.optout.map(Number) : [];
-          const share = people.filter((p) => !optout.includes(p.id));
+          // share_ids: расход делится только на выбранных (напр. мороженое не для всех).
+          const shareIds: number[] = Array.isArray(ex.share_ids) ? ex.share_ids.map(Number) : [];
+          const share = people.filter((p) => !optout.includes(p.id) && (!shareIds.length || shareIds.includes(p.id) || p.id === Number(ex.by_id)));
           const mouths = share.reduce((s, p) => s + p.mouths, 0);
           if (!mouths) continue;
           for (const p of share) p.owed += (Number(ex.amount) || 0) * p.mouths / mouths;
