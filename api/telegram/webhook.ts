@@ -2074,7 +2074,87 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
-      // Расход: делим на всех / на выбранных (чекбоксы по зарегистрированным).
+      // Расход (несколько позиций): делим на всех / на выбранных
+      if (data === 'expallmulti' || data === 'exppickmulti') {
+        const sessM = await getSession(tgId);
+        if (!sessM || sessM.state !== 'exp_multi_split') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+        const ctxM: any = sessM.context || {};
+        const evId = ctxM.evId;
+        const items = ctxM.items || [];
+        if (data === 'expallmulti') {
+          // Запоминаем выбор "на всех" для этого пользователя на этом событии
+          try {
+            const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+            const shopping = (evRow as any)?.shopping || {};
+            const defaults = shopping.split_defaults || {};
+            defaults[String(tgId)] = 'all';
+            await supabase.from('events').update({ shopping: { ...shopping, split_defaults: defaults } }).eq('id', evId);
+          } catch { /* no-op */ }
+          await clearSession(tgId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
+          for (const item of items) {
+            await saveAndBroadcastExpense(evId, cq.from, item.title, item.amount, null);
+          }
+          const summary = items.map((i: any) => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
+          const total = items.reduce((s: number, i: any) => s + i.amount, 0);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} позиций сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+          return res.status(200).json({ ok: true });
+        }
+        if (data === 'exppickmulti') {
+          // Показываем чекбоксы для выбора людей
+          const { data: regsE } = await supabase
+            .from('registrations').select('telegram_id,name').eq('event_id', evId).neq('status', 'cancelled');
+          const rowsE: any[] = (regsE || [])
+            .filter((r: any) => Number(r.telegram_id) > 0)
+            .slice(0, 20)
+            .map((r: any) => [{ text: `⬜ ${r.name || r.telegram_id}`.slice(0, 40), callback_data: `exptgmulti_${r.telegram_id}` }]);
+          rowsE.push([{ text: `✅ Готово (0)`, callback_data: 'expdonemulti' }]);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: rowsE } }); }
+          catch {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '☑️ Отметь, кто скидывается:', reply_markup: { inline_keyboard: rowsE } });
+          }
+          return res.status(200).json({ ok: true });
+        }
+      }
+
+      // Выбор людей для нескольких расходов (чекбоксы)
+      if (data.startsWith('exptgmulti_') || data === 'expdonemulti') {
+        const sessM = await getSession(tgId);
+        if (!sessM || sessM.state !== 'exp_multi_split') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+        const ctxM: any = sessM.context || {};
+        const evId = ctxM.evId;
+        const items = ctxM.items || [];
+        let picked: number[] = (ctxM.picked || []).map(Number);
+        if (data.startsWith('exptgmulti_')) {
+          const id = Number(data.slice('exptgmulti_'.length));
+          picked = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+          await setSession(tgId, 'exp_multi_split', { ...ctxM, picked });
+          const { data: regsE } = await supabase
+            .from('registrations').select('telegram_id,name').eq('event_id', evId).neq('status', 'cancelled');
+          const rowsE: any[] = (regsE || [])
+            .filter((r: any) => Number(r.telegram_id) > 0)
+            .slice(0, 20)
+            .map((r: any) => [{ text: `${picked.includes(Number(r.telegram_id)) ? '☑️' : '⬜'} ${r.name || r.telegram_id}`.slice(0, 40), callback_data: `exptgmulti_${r.telegram_id}` }]);
+          rowsE.push([{ text: `✅ Готово (${picked.length})`, callback_data: 'expdonemulti' }]);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: rowsE } }); } catch { /* no-op */ }
+          return res.status(200).json({ ok: true });
+        }
+        if (data === 'expdonemulti') {
+          await clearSession(tgId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
+          for (const item of items) {
+            await saveAndBroadcastExpense(evId, cq.from, item.title, item.amount, null, picked.length ? picked : undefined);
+          }
+          const summary = items.map((i: any) => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
+          const total = items.reduce((s: number, i: any) => s + i.amount, 0);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} позиций сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+          return res.status(200).json({ ok: true });
+        }
+      }
+
+      // Расход (одна позиция): делим на всех / на выбранных (чекбоксы по зарегистрированным).
       if (data === 'expall' || data === 'exppick' || data === 'expdone' || data === 'expext' || data.startsWith('exptg_')) {
         const sessE = await getSession(tgId);
         if (!sessE || sessE.state !== 'exp_split_pick') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик расхода устарел' }); return res.status(200).json({ ok: true }); }
@@ -4347,13 +4427,32 @@ export default async function handler(req: any, res: any) {
               await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(items[0].title)}</b> — <b>${items[0].amount} BYN</b>.\n\nПришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
               return res.status(200).json({ ok: true });
             }
-            // Несколько позиций — сохраняем все сразу без фото
-            for (const item of items) {
-              await saveAndBroadcastExpense(evId, msg.from, item.title, item.amount, null);
-            }
+            // Несколько позиций — сначала спрашиваем "на кого делить"
             const summary = items.map(i => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
             const total = items.reduce((s: number, i: any) => s + i.amount, 0);
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} позиций сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+            // Проверяем, есть ли сохранённый выбор для этого пользователя на этом событии
+            const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+            const shopping = (evRow as any)?.shopping || {};
+            const defaults = shopping.split_defaults || {};
+            const savedChoice = defaults[String(msg.from.id)];
+            if (savedChoice === 'all') {
+              // Сохраняем все сразу на всех
+              for (const item of items) {
+                await saveAndBroadcastExpense(evId, msg.from, item.title, item.amount, null);
+              }
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} позиций сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+              return res.status(200).json({ ok: true });
+            }
+            // Спрашиваем — и запоминаем выбор
+            await setSession(msg.from.id, 'exp_multi_split', { evId, items, picked: [] });
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `💸 <b>${items.length} позиций на общую сумму ${total} BYN</b>\n\n${summary}\n\nНа кого делим?`,
+              reply_markup: kb([
+                [{ text: '👥 На всех участников', callback_data: 'expallmulti' }],
+                [{ text: '☑️ Выбрать людей', callback_data: 'exppickmulti' }],
+              ]),
+            });
             return res.status(200).json({ ok: true });
           }
           // Ничего не нашли — показываем примеры
