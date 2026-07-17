@@ -10,6 +10,28 @@ const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
 // gemini-2.0-flash* удалены из API (404); у -latest квота есть (см. geminiJSON в webhook.ts).
 const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
+/** Гарантированный JSON от Gemini (REST + фолбэк моделей, как geminiJSON в webhook). */
+export async function aiJSON(prompt: string, maxTokens = 512): Promise<any | null> {
+  if (!API_KEY) return null;
+  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash'].filter(Boolean) as string[];
+  for (const model of models) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${API_KEY}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: maxTokens, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
+        }),
+      });
+      const j: any = await r.json();
+      const txt = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('').trim();
+      if (!txt) continue;
+      try { return JSON.parse(txt); } catch { const m = txt.match(/\{[\s\S]*\}/); if (m) return JSON.parse(m[0]); }
+    } catch { /* следующая модель */ }
+  }
+  return null;
+}
+
 /** Быстрый текстовый ответ от ИИ (до 500 символов, экономим токены) */
 export async function quickAI(prompt: string): Promise<string> {
   if (!ai) return '';

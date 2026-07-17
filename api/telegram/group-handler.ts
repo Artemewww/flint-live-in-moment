@@ -1,10 +1,12 @@
 /**
- * Обработчик групповых чатов: ИИ учится на истории в моменте
- * Автозадачи, подсказки по логистике, закупки, SOS организатору
+ * ИИ-эксперт группового чата: молча копит историю, а отвечает только когда
+ * беседа затихла (дебаунс-пауза) — один вдумчивый ответ вместо реплик на
+ * каждое сообщение. Контекст: событие, участники, голосования, логистика,
+ * задачи, расходы.
  */
 
 import { createClient } from '@supabase/supabase-js';
-import { analyzeChat, quickAI } from './ai-helpers';
+import { aiJSON } from './ai-helpers';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
@@ -12,7 +14,12 @@ const supabase = createClient(
 );
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
-const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '';
+
+// Пауза тишины, после которой бот считает, что все высказались.
+// Больше нельзя: у функции maxDuration 60с, нужен запас на анализ и ответ.
+const PAUSE_MS = 40_000;
+// Не отвечать чаще, чем раз в полторы минуты — эксперт, а не тамада.
+const COOLDOWN_MS = 90_000;
 
 function tg(method: string, payload: unknown) {
   return fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
@@ -26,33 +33,38 @@ function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/** Сохранить сообщение в историю (скользящее окно) */
-async function saveMessage(chatId: number, msgId: number, from: any, text: string) {
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function saveMessage(chatId: number, msg: any, text: string) {
   await supabase.from('group_messages').upsert({
     chat_id: chatId,
-    message_id: msgId,
-    telegram_id: from.id,
-    username: from.username || null,
-    first_name: from.first_name || null,
+    message_id: msg.message_id,
+    telegram_id: msg.from.id,
+    username: msg.from.username || null,
+    first_name: msg.from.first_name || null,
     text: text.slice(0, 2000),
+    replied_to: msg.reply_to_message?.message_id || null,
     created_at: new Date().toISOString(),
   }, { onConflict: 'chat_id,message_id' });
 }
 
-/** Получить контекст чата (последние 20 сообщений) */
-async function getChatContext(chatId: number): Promise<Array<{text: string; from: string}>> {
-  const { data } = await supabase.rpc('get_chat_context', {
-    p_chat_id: chatId,
-    p_limit: 20,
-  });
-  
-  return (data || []).map((m: any) => ({
-    text: m.txt || '',
-    from: m.username || m.first_name || `id${m.tg_id}`,
-  })).reverse();
+/** Привязка чата: event_groups, а если пусто — автопривязка по единственному
+ *  открытому событию с настоящей инвайт-ссылкой группы (t.me/+…). */
+async function resolveEventId(chatId: number, chatTitle?: string): Promise<string | null> {
+  const { data: linked } = await supabase
+    .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+  if (linked) return (linked as any).event_id;
+  const { data: candidates } = await supabase
+    .from('events').select('id,telegram_bot_url')
+    .eq('status', 'open').ilike('telegram_bot_url', '%t.me/+%');
+  if ((candidates || []).length === 1) {
+    const evId = (candidates as any)[0].id;
+    await linkGroupToEvent(chatId, evId, chatTitle);
+    return evId;
+  }
+  return null;
 }
 
-/** Логировать действие бота */
 async function logAction(chatId: number, eventId: string, type: string, trigger: string, response: string, data?: any) {
   await supabase.from('bot_group_actions').insert({
     chat_id: chatId,
@@ -64,186 +76,139 @@ async function logAction(chatId: number, eventId: string, type: string, trigger:
   });
 }
 
-/** Обновить паттерн обучения (что сработало) */
-async function updatePattern(type: string, keywords: string[], success: boolean) {
-  const { data: existing } = await supabase
-    .from('ai_learning_patterns')
-    .select('*')
-    .eq('pattern_type', type)
-    .maybeSingle();
+/** Собрать весь контекст события для промпта эксперта. */
+async function buildContext(eventId: string, chatId: number) {
+  const [{ data: event }, { data: regs }, { data: polls }, { data: rides }, { data: tasks }, { data: hist }] = await Promise.all([
+    supabase.from('events').select('title,date,time,location,program,logistics,shopping').eq('id', eventId).maybeSingle(),
+    supabase.from('registrations').select('telegram_id,name,dietary,roles,guest_count,has_transport,status').eq('event_id', eventId).neq('status', 'cancelled'),
+    supabase.from('polls').select('id,question,options').eq('event_id', eventId).order('id', { ascending: false }).limit(5),
+    supabase.from('rides').select('kind,driver_name,from_point,seats_total,seats_taken,active').eq('event_id', eventId).eq('active', true),
+    supabase.from('tasks').select('title,taker_name,done').eq('event_id', eventId).order('id', { ascending: false }).limit(12),
+    supabase.from('group_messages').select('message_id,telegram_id,username,first_name,text').eq('chat_id', chatId).order('message_id', { ascending: false }).limit(30),
+  ]);
+  if (!event) return null;
 
-  if (existing) {
-    await supabase
-      .from('ai_learning_patterns')
-      .update({
-        success_count: existing.success_count + (success ? 1 : 0),
-        fail_count: existing.fail_count + (success ? 0 : 1),
-        last_used: new Date().toISOString(),
-      })
-      .eq('id', existing.id);
-  } else {
-    await supabase.from('ai_learning_patterns').insert({
-      pattern_type: type,
-      trigger_keywords: keywords,
-      action: type,
-      success_count: success ? 1 : 0,
-      fail_count: success ? 0 : 1,
-      last_used: new Date().toISOString(),
-    });
+  const lg: any = (event as any).logistics || {};
+  const evBlock =
+    `«${(event as any).title}» — ${(event as any).date}${(event as any).time ? ` ${(event as any).time}` : ''}, место: ${(event as any).location || '—'}.\n` +
+    (lg.assemblyPoint ? `Точка сбора: ${lg.assemblyPoint}\n` : '') +
+    `Программа:\n${(((event as any).program || []) as string[]).map((p) => `  ${p}`).join('\n') || '  —'}`;
+
+  const people = (regs || []).map((r: any) => {
+    const bits = [r.name || `id${r.telegram_id}`];
+    if (r.status === 'pending') bits.push('не подтвердил участие');
+    if (r.dietary) bits.push(`питание: ${r.dietary}`); else bits.push('питание не указано');
+    if (r.roles) bits.push(`роль: ${String(r.roles).slice(0, 40)}`);
+    if (r.guest_count) bits.push(`+${r.guest_count} гост.`);
+    if (r.has_transport) bits.push('на своей машине');
+    return `  • ${bits.join(', ')}`;
+  }).join('\n');
+
+  // Голосования с живыми цифрами — главное оружие против «неразберихи».
+  const pollBlocks: string[] = [];
+  for (const p of polls || []) {
+    const o: any = (p as any).options || {};
+    const list: string[] = o.list || [];
+    const { data: votes } = await supabase.from('poll_votes').select('choice').eq('poll_id', (p as any).id);
+    const counts = new Array(list.length).fill(0);
+    for (const v of votes || []) { const c = Number((v as any).choice); if (c >= 0 && c < list.length) counts[c]++; }
+    const st = o.status === 'decided' ? `РЕШЕНО: «${list[o.winner] || '—'}»` : o.status === 'expired' ? 'закрыто по времени' : 'ИДЁТ СЕЙЧАС';
+    pollBlocks.push(`  • «${(p as any).question}» [${st}] ${list.map((opt, i) => `${opt}: ${counts[i]}`).join(' | ')}`);
   }
+
+  const cars = (rides || []).filter((r: any) => r.kind !== 'tent');
+  const tents = (rides || []).filter((r: any) => r.kind === 'tent');
+  const rideBlock =
+    cars.map((r: any) => `  🚗 ${r.driver_name || 'водитель'} из ${r.from_point || '—'}: свободно ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} из ${r.seats_total || 0}`).join('\n') +
+    (tents.length ? '\n' + tents.map((r: any) => `  ⛺ ${r.driver_name || ''}: мест ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} из ${r.seats_total || 0}`).join('\n') : '');
+
+  const taskBlock = (tasks || []).map((t: any) => `  ${t.done ? '✅' : '⬜'} ${t.title}${t.taker_name ? ` — ${t.taker_name}` : ''}`).join('\n');
+  const expenses = Array.isArray((event as any).shopping?.expenses) ? (event as any).shopping.expenses : [];
+  const expTotal = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+
+  const history = (hist || []).reverse()
+    .map((m: any) => `${m.first_name || m.username || `id${m.telegram_id}`}: ${m.text}`).join('\n');
+
+  return { evBlock, people, pollBlock: pollBlocks.join('\n') || '  — нет', rideBlock: rideBlock || '  — нет', taskBlock: taskBlock || '  — нет', expTotal, history, regs: regs || [] };
 }
 
-/** Обработать сообщение в групповом чате */
+/** Обработать сообщение группы: сохранить, дождаться паузы, ответить экспертно. */
 export async function handleGroupMessage(msg: any, chatId: number) {
-  if (!msg.text || msg.text.startsWith('/')) return; // команды пропускаем
-  
-  const text = msg.text.trim();
-  if (text.length < 5) return; // слишком короткое
+  if (!msg?.text || msg.text.startsWith('/') || !msg.from?.id) return;
+  const text = String(msg.text).trim();
+  if (text.length < 2) return;
 
-  // Сохранить в историю
-  await saveMessage(chatId, msg.message_id, msg.from, text);
+  await saveMessage(chatId, msg, text);
+  const eventId = await resolveEventId(chatId, msg.chat?.title);
+  if (!eventId) return;
 
-  // Найти событие для этой группы
-  const { data: eventGroup } = await supabase
-    .from('event_groups')
-    .select('event_id')
-    .eq('chat_id', chatId)
-    .eq('active', true)
-    .maybeSingle();
+  // Дебаунс: ждём тишины. Если за паузу пришло новое сообщение — молчим,
+  // ответит инвокация последнего сообщения (у неё будет полный контекст).
+  await sleep(PAUSE_MS);
+  const { data: newer } = await supabase
+    .from('group_messages').select('message_id')
+    .eq('chat_id', chatId).gt('message_id', msg.message_id).limit(1);
+  if (newer && newer.length) return;
 
-  if (!eventGroup) return; // группа не привязана к событию
+  // Кулдаун: недавно отвечали — не частим.
+  const since = new Date(Date.now() - COOLDOWN_MS).toISOString();
+  const { data: recentReply } = await supabase
+    .from('bot_group_actions').select('id')
+    .eq('chat_id', chatId).eq('action_type', 'expert_reply').gt('created_at', since).limit(1);
+  if (recentReply && recentReply.length) return;
 
-  const eventId = eventGroup.event_id;
-  
-  // Получить контекст события
-  const { data: event } = await supabase
-    .from('events')
-    .select('*')
-    .eq('id', eventId)
-    .maybeSingle();
+  const ctx = await buildContext(eventId, chatId);
+  if (!ctx) return;
 
-  if (!event) return;
+  const prompt =
+    `Ты — Флинт, ИИ-эксперт клуба живого общения в групповом чате события. ` +
+    `Ты независимый модератор: читаешь беседу и вмешиваешься ТОЛЬКО когда это реально полезно. Сейчас в чате пауза — все высказались.\n\n` +
+    `СОБЫТИЕ:\n${ctx.evBlock}\n\n` +
+    `УЧАСТНИКИ (${ctx.regs.length}):\n${ctx.people}\n\n` +
+    `ГОЛОСОВАНИЯ (точные живые цифры — опирайся ТОЛЬКО на них):\n${ctx.pollBlock}\n\n` +
+    `ЛОГИСТИКА:\n${ctx.rideBlock}\n\n` +
+    `ЗАДАЧИ:\n${ctx.taskBlock}\n\n` +
+    `РАСХОДЫ: итого ${Math.round(ctx.expTotal * 100) / 100} BYN\n\n` +
+    `ПОСЛЕДНИЕ СООБЩЕНИЯ ЧАТА:\n${ctx.history}\n\n` +
+    `Говори, если: есть вопрос без ответа; путаница или спор о фактах (особенно про голосования — разложи точные цифры и статус); ` +
+    `людям не хватает данных, которые у тебя есть; кто-то вызвался что-то сделать (зафиксируй задачу); просят помощи. ` +
+    `Если не хватает данных об участнике (питание, роль, подтверждение) и это уместно — задай ОДИН короткий вопрос.\n` +
+    `Молчи, если: обычная болтовня; вопрос уже закрыт людьми; добавить нечего.\n\n` +
+    `Верни ТОЛЬКО JSON:\n` +
+    `{"speak": true|false, "reason": "почему", "reply": "ответ до 600 символов: дружелюбно, по делу, только факты из данных выше, без выдумок", ` +
+    `"task": {"title": "что сделать", "assignee": "имя из чата"} или null}`;
 
-  const eventCtx = `${event.title}, ${event.date}${event.time ? ` ${event.time}` : ''}, ${event.location || '—'}`;
+  const verdict = await aiJSON(prompt, 900);
+  if (!verdict || typeof verdict !== 'object') return;
 
-  // Получить историю чата
-  const history = await getChatContext(chatId);
-  
-  // Анализ ИИ: что делать?
-  const analysis = await analyzeChat(history, eventCtx);
+  if (verdict.task && verdict.task.title) {
+    // Взявшегося ищем по имени среди авторов последних сообщений.
+    const assignee = String(verdict.task.assignee || '').toLowerCase();
+    const { data: authors } = await supabase
+      .from('group_messages').select('telegram_id,first_name,username')
+      .eq('chat_id', chatId).order('message_id', { ascending: false }).limit(30);
+    const match = (authors || []).find((a: any) =>
+      assignee && ((a.first_name || '').toLowerCase().includes(assignee) || (a.username || '').toLowerCase() === assignee));
+    await supabase.from('tasks').insert({
+      event_id: eventId,
+      title: String(verdict.task.title).slice(0, 150),
+      taken_by: match ? (match as any).telegram_id : msg.from.id,
+      taker_name: match ? ((match as any).first_name || (match as any).username || '') : (msg.from.first_name || ''),
+      done: false,
+    });
+    await logAction(chatId, eventId, 'task_created', text, String(verdict.task.title), null);
+  }
 
-  switch (analysis.action) {
-    case 'create_task': {
-      // Кто-то вызвался сделать задачу
-      const taskTitle = analysis.data?.task_title || text.slice(0, 100);
-      const { data: task } = await supabase
-        .from('tasks')
-        .insert({
-          event_id: eventId,
-          title: taskTitle,
-          taken_by: msg.from.id,
-          taker_name: msg.from.first_name || msg.from.username || '',
-          done: false,
-        })
-        .select('id')
-        .single();
-
-      if (task) {
-        await tg('sendMessage', {
-          chat_id: chatId,
-          parse_mode: 'HTML',
-          text: `✅ Отлично! Записал задачу:\n<b>${esc(taskTitle)}</b>\n\nБерёт: ${esc(msg.from.first_name || msg.from.username || 'участник')}`,
-        });
-
-        await logAction(chatId, eventId, 'task_created', text, taskTitle, { task_id: task.id });
-        await updatePattern('task_auto', ['возьму', 'заберу', 'сделаю', 'я'], true);
-      }
-      break;
-    }
-
-    case 'suggest_ride': {
-      // Кто-то ищет место или предлагает подвезти
-      const { data: rides } = await supabase
-        .from('rides')
-        .select('driver_name,from_point,seats_total,seats_taken')
-        .eq('event_id', eventId)
-        .eq('active', true);
-
-      const freeSeats = (rides || []).reduce((sum, r) => sum + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
-      
-      if (freeSeats > 0) {
-        const list = (rides || [])
-          .filter((r: any) => (r.seats_total || 0) > (r.seats_taken || 0))
-          .map((r: any) => `• ${r.driver_name} из ${r.from_point} — ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} мест`)
-          .join('\n');
-
-        await tg('sendMessage', {
-          chat_id: chatId,
-          parse_mode: 'HTML',
-          text: `🚗 Есть свободные места:\n\n${list}\n\nПосмотри в боте: Логистика → Машины`,
-        });
-
-        await logAction(chatId, eventId, 'ride_suggested', text, list);
-        await updatePattern('ride_suggest', ['машина', 'подвезти', 'место'], true);
-      }
-      break;
-    }
-
-    case 'group_shopping': {
-      // Предложение закупки
-      const title = analysis.data?.shopping_title || 'Закупка';
-      await tg('sendMessage', {
-        chat_id: chatId,
-        parse_mode: 'HTML',
-        text: `🛒 <b>${esc(title)}</b>\n\nЗапустить коллективную закупку? Участники выберут категории, я сформирую список, назначим закупщика.\n\nОрганизатор, напиши боту /start_shopping`,
-      });
-
-      await logAction(chatId, eventId, 'shopping_proposed', text, title);
-      break;
-    }
-
-    case 'answer_info': {
-      // Вопрос о событии — ИИ отвечает из данных
-      const { data: regs } = await supabase
-        .from('registrations')
-        .select('name,guest_count')
-        .eq('event_id', eventId)
-        .neq('status', 'cancelled');
-
-      const people = (regs || []).length;
-      const guests = (regs || []).reduce((s, r) => s + (r.guest_count || 0), 0);
-
-      const infoCtx =
-        `Событие: ${eventCtx}\n` +
-        `Участников: ${people} (+${guests} гостей)\n` +
-        `Программа: ${((event.program || []) as string[]).slice(0, 5).join(', ') || '—'}`;
-
-      const answer = await quickAI(
-        `Вопрос участника: "${text}"\n\nДанные:\n${infoCtx}\n\nОтветь кратко (до 300 символов)`
-      );
-
-      if (answer) {
-        await tg('sendMessage', {
-          chat_id: chatId,
-          parse_mode: 'HTML',
-          text: `⚡ ${esc(answer)}`,
-        });
-
-        await logAction(chatId, eventId, 'info_reply', text, answer);
-        await updatePattern('answer_info', ['когда', 'где', 'сколько', 'кто'], true);
-      }
-      break;
-    }
-
-    case 'silent':
-    default:
-      // Обычная беседа, бот молчит
-      await logAction(chatId, eventId, 'silent', text.slice(0, 100), '', { reason: analysis.reason });
-      break;
+  if (verdict.speak && verdict.reply) {
+    const reply = String(verdict.reply).slice(0, 900);
+    await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🤖 ${esc(reply)}` });
+    await logAction(chatId, eventId, 'expert_reply', text, reply, { msg_id: msg.message_id, reason: verdict.reason || '' });
+  } else {
+    await logAction(chatId, eventId, 'silent', text.slice(0, 100), '', { reason: verdict.reason || '' });
   }
 }
 
-/** Добавить группу к событию */
+/** Привязать группу к событию (использует /link в webhook). */
 export async function linkGroupToEvent(chatId: number, eventId: string, chatTitle?: string) {
   await supabase.from('event_groups').upsert({
     event_id: eventId,
