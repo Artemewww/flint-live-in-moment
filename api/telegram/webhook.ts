@@ -1541,6 +1541,57 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Просмотр расходов — доступен любому участнику (не только админу).
+      if (data.startsWith('expview_')) {
+        const evId = data.slice('expview_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: evRow } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+        const expenses = Array.isArray((evRow as any)?.shopping?.expenses) ? (evRow as any).shopping.expenses : [];
+        if (!expenses.length) { await tg('sendMessage', { chat_id: chatId, text: '💸 Расходов пока нет. Добавь свой — «💸 Добавить расход».' }); return res.status(200).json({ ok: true }); }
+        const total = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+        const lines = expenses.map((e: any) => `• ${esc(e.title)} — <b>${e.amount} BYN</b> (${esc(e.by_name || '')}${e.photo ? ', с чеком' : ''})`).join('\n');
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `📊 <b>Расходы — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines}\n\nИтого: <b>${Math.round(total * 100) / 100} BYN</b>\nПоделим по ртам при финальном сплите.` });
+        return res.status(200).json({ ok: true });
+      }
+      // Мои гости: логистика — выбрать водителя, чтобы забрать гостя по пути.
+      if (data.startsWith('gpick_')) {
+        const evId = data.slice('gpick_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: cars } = await supabase
+          .from('rides').select('id,driver_name,from_point,depart_text,seats_total,seats_taken')
+          .eq('event_id', evId).eq('active', true).neq('kind', 'tent');
+        const rows: any[] = (cars || []).map((c: any) => [{ text: `🚗 ${c.driver_name || 'Водитель'} · ${c.from_point || '—'} · ${c.depart_text || ''}`.slice(0, 60), callback_data: `gpickr_${c.id}` }]);
+        if (!rows.length) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🚗 Пока никто не заявил машину. Как появятся — вернись сюда, попросишь забрать гостя. За гостей отвечаешь ты: рассади их и договорись по посадке.' });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 <b>Забрать твоего гостя</b>\nВыбери водителя — попрошу его подхватить гостя по пути. За гостя отвечаешь ты.', reply_markup: kb(rows) });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('gpickr_')) {
+        const rideId = Number(data.slice('gpickr_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'guest_pickup', { rideId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 Напиши одной строкой: <b>имя гостя, откуда забрать (адрес или координаты), во сколько</b>.\n<i>Например: «Гость Дима, ул. Притыцкого 101, 08:30» или пришли геопозицию отдельным сообщением после.</i>' });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('gpyes_') || data.startsWith('gpno_')) {
+        const yes = data.startsWith('gpyes_');
+        const rest = data.slice(yes ? 6 : 5);
+        const us = rest.indexOf('_');
+        const respId = Number(rest.slice(0, us));
+        const rideId = Number(rest.slice(us + 1));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: yes ? 'Передал ответственному ✅' : 'Передал ответственному' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        const { data: ride } = await supabase.from('rides').select('driver_name,from_point,depart_text').eq('id', rideId).maybeSingle();
+        try {
+          await tg('sendMessage', { chat_id: respId, parse_mode: 'HTML', text: yes
+            ? `✅ <b>${esc((ride as any)?.driver_name || 'Водитель')} заберёт твоего гостя!</b> Скинь гостю контакт водителя и точное время. Ответственность за посадку — на тебе.`
+            : `😔 ${esc((ride as any)?.driver_name || 'Водитель')} не сможет забрать гостя. Выбери другого водителя в «👥 Мои гости» или организуй иначе.` });
+        } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
       // Добавить общий расход (чек): «Мясо 45.50» → фото чека → рассылка всем.
       if (data.startsWith('expadd_')) {
         const evId = data.slice('expadd_'.length);
@@ -2228,7 +2279,15 @@ export default async function handler(req: any, res: any) {
         }
         // Общие расходы: любой участник фиксирует покупку с чеком — видно всем,
         // делится на всех по ртам (участник + его гости) при финальном сплите.
-        rows.push([{ text: '💸 Добавить расход (чек)', callback_data: `expadd_${evId}` }]);
+        rows.push([
+          { text: '💸 Добавить расход', callback_data: `expadd_${evId}` },
+          { text: '📊 Расходы', callback_data: `expview_${evId}` },
+        ]);
+        // Если у участника записаны гости — даём рассадить/забрать их.
+        {
+          const { data: myReg } = await supabase.from('registrations').select('guest_count').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+          if (Number((myReg as any)?.guest_count) > 0) rows.push([{ text: '👥 Мои гости — логистика', callback_data: `gpick_${evId}` }]);
+        }
         if (!rows.length) {
           await tg('sendMessage', { chat_id: chatId, text: 'Для этого события логистика не нужна — организатор всё продумал.' });
           return res.status(200).json({ ok: true });
@@ -2763,6 +2822,29 @@ export default async function handler(req: any, res: any) {
         await tg('sendMessage', { chat_id: msg.chat.id, text: ok ? '✅ Передал водителю твою точку — он ответит, сможет ли заехать.' : 'Не получилось передать водителю, напиши ему напрямую.' });
         return res.status(200).json({ ok: true });
       }
+      // Геопозиция гостя (ответственный прислал точку, где забрать гостя).
+      if (sessL?.state === 'guest_pickup' && sessL.context?.rideId) {
+        await clearSession(msg.from.id);
+        const { latitude, longitude } = msg.location;
+        const rideId = Number(sessL.context.rideId);
+        const { data: ride } = await supabase.from('rides').select('driver_id,driver_name').eq('id', rideId).maybeSingle();
+        let ok = false;
+        if (ride) {
+          try {
+            await tg('sendMessage', {
+              chat_id: (ride as any).driver_id, parse_mode: 'HTML',
+              text: `👥 <b>${esc(msg.from.first_name || 'Участник')} просит забрать своего гостя</b> по этой точке. За гостя отвечает он${msg.from.username ? ` @${esc(msg.from.username)}` : ''}. Сможешь подхватить?`,
+              reply_markup: kb([
+                [{ text: '🧭 Точка на карте', url: `https://yandex.ru/maps/?text=${latitude},${longitude}&z=16` }],
+                [{ text: '✅ Заеду за гостем', callback_data: `gpyes_${msg.from.id}_${rideId}` }, { text: '❌ Не смогу', callback_data: `gpno_${msg.from.id}_${rideId}` }],
+              ]),
+            });
+            ok = true;
+          } catch { /* no-op */ }
+        }
+        await tg('sendMessage', { chat_id: msg.chat.id, text: ok ? '✅ Отправил точку водителю. Как ответит — сообщу.' : 'Не получилось связаться с водителем.' });
+        return res.status(200).json({ ok: true });
+      }
     }
 
     if (msg?.from?.id && (msg.photo || msg.video) && msg.chat?.type === 'private') {
@@ -3047,6 +3129,31 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `👥 <b>Убавил гостей</b>\n${esc(ev?.title || evId)}\nКто: ${who}\nБыло +${from} → стало <b>+${to}</b>\nПричина: <i>${reason}</i>` });
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Спасибо, учли! Места освободились для других.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Ответственный описал гостя и точку → шлём запрос выбранному водителю.
+        if (sess && sess.state === 'guest_pickup') {
+          const rideId = Number(sess.context?.rideId);
+          await clearSession(msg.from.id);
+          const info = String(text).trim().slice(0, 300);
+          const { data: ride } = await supabase.from('rides').select('driver_id,driver_name,from_point,depart_text').eq('id', rideId).maybeSingle();
+          if (!ride) { await tg('sendMessage', { chat_id: chatId, text: 'Машина не найдена, выбери заново в «👥 Мои гости».' }); return res.status(200).json({ ok: true }); }
+          const m = info.match(/(-?\d+[.,]\d+)[,;\s]+(-?\d+[.,]\d+)/);
+          const mapUrl = m ? `https://yandex.ru/maps/?text=${m[1].replace(',', '.')},${m[2].replace(',', '.')}&z=16` : `https://yandex.ru/maps/?text=${encodeURIComponent(info)}`;
+          let ok = false;
+          try {
+            await tg('sendMessage', {
+              chat_id: (ride as any).driver_id, parse_mode: 'HTML',
+              text: `👥 <b>${esc(msg.from.first_name || 'Участник')} просит забрать своего гостя по пути</b>\n\n${esc(info)}\n\nЗа гостя отвечает ${esc(msg.from.first_name || 'участник')}${msg.from.username ? ` @${esc(msg.from.username)}` : ''}. Сможешь подхватить?`,
+              reply_markup: kb([
+                [{ text: '🧭 Точка на карте', url: mapUrl }],
+                [{ text: '✅ Заеду за гостем', callback_data: `gpyes_${msg.from.id}_${rideId}` }, { text: '❌ Не смогу', callback_data: `gpno_${msg.from.id}_${rideId}` }],
+              ]),
+            });
+            ok = true;
+          } catch { /* водитель мог не открыть бота */ }
+          await tg('sendMessage', { chat_id: chatId, text: ok ? '✅ Отправил запрос водителю. Как ответит — сообщу. Гостю передай, что за посадку отвечаешь ты.' : 'Не получилось связаться с водителем, напиши ему напрямую.' });
           return res.status(200).json({ ok: true });
         }
 
