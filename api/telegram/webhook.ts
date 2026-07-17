@@ -659,11 +659,11 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     rows.push([openBtn]);
     return rows;
   }
-  const rows: any[] = [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]];
+  const rows: any[] = [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]];
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
-  // Точки выезда и прибытия (из logistics) — верхний ряд
+  // Точки выезда и прибытия (из logistics)
   const lg = ev?.logistics || {};
   const pointsRow: any[] = [];
   if (lg.assemblyPoint) {
@@ -682,6 +682,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   }
 
   // Чат события, маршрут, программа
+  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
   const nav: any[] = [];
   const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
@@ -701,7 +702,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
     { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
   ]);
-  // Нижние кнопки: спрос/предложение + позвать
+  // Нижние кнопки: спрос/предложение + позвать + отказаться
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
     { text: '💡', callback_data: `idea_${ev.id}` },
@@ -2336,8 +2337,7 @@ export default async function handler(req: any, res: any) {
             reply_markup: kb([
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
-              [{ text: '🚩 Точка выезда', callback_data: `admmeet_${evId}` }],
-              [{ text: '🏁 Точка прибытия', callback_data: `admarrival_${evId}` }],
+              [{ text: '🧭 Точка сбора колонны', callback_data: `admmeet_${evId}` }],
               [{ text: '📋 Перегенерить программу → всем', callback_data: `admprog_${evId}` }],
               [{ text: '🗳 Статистика голосований', callback_data: `admpolls_${evId}` }],
               [{ text: '📊 Реакции на рассылку', callback_data: `admreact_${evId}` }],
@@ -2514,15 +2514,6 @@ export default async function handler(req: any, res: any) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id });
           await setSession(tgId, 'admmeet_manual', { evId });
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✏️ Напиши одной строкой: место, координаты, ДАТА и ВРЕМЯ сбора.\n<i>Например: «Сбор колонны, 53.823241, 27.531874, 18 июля в 10:00»</i>' });
-          return res.status(200).json({ ok: true });
-        }
-
-        // Точка прибытия: организатор задаёт текстом → сохраняем в logistics.arrivalPoint
-        if (data.startsWith('admarrival_')) {
-          const evId = data.slice('admarrival_'.length);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id });
-          await setSession(tgId, 'admarrival_manual', { evId });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🏁 <b>Точка прибытия</b>\n\nНапиши одной строкой: место и координаты.\n<i>Например: «Голубые озёра, стоянка у воды, 52.123456, 27.123456»</i>\n\nКоординаты можно взять в Яндекс.Картах: зажми точку → скопируй.' });
           return res.status(200).json({ ok: true });
         }
 
@@ -2996,37 +2987,6 @@ export default async function handler(req: any, res: any) {
             ? '❓ Напиши свой вопрос по событию — передам организатору, ответ придёт сюда.'
             : '💡 Что можно улучшить в этом событии? Напиши — организатор увидит.',
         });
-        return res.status(200).json({ ok: true });
-      }
-
-      // «Переслать точки»: отправляем точки выезда и прибытия отдельными venue-сообщениями
-      if (data.startsWith('sharepoints_')) {
-        const evId = data.slice('sharepoints_'.length);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        const ev = await getEvent(evId);
-        const lg = ev?.logistics || {};
-        let sent = 0;
-        if (lg.assemblyPoint) {
-          const coords = lg.assemblyPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-          if (coords) {
-            await tg('sendVenue', { chat_id: chatId, latitude: parseFloat(coords[1].replace(',', '.')), longitude: parseFloat(coords[2].replace(',', '.')), title: '🚩 Точка выезда', address: lg.assemblyPoint });
-            sent++;
-          } else {
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🚩 <b>Точка выезда</b>\n${esc(lg.assemblyPoint)}` });
-            sent++;
-          }
-        }
-        if (lg.arrivalPoint) {
-          const coords = lg.arrivalPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-          if (coords) {
-            await tg('sendVenue', { chat_id: chatId, latitude: parseFloat(coords[1].replace(',', '.')), longitude: parseFloat(coords[2].replace(',', '.')), title: '🏁 Точка прибытия', address: lg.arrivalPoint });
-            sent++;
-          } else {
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🏁 <b>Точка прибытия</b>\n${esc(lg.arrivalPoint)}` });
-            sent++;
-          }
-        }
-        if (!sent) await tg('sendMessage', { chat_id: chatId, text: 'Точки ещё не заданы. Организатор может задать их в панели.' });
         return res.status(200).json({ ok: true });
       }
 
@@ -4344,24 +4304,6 @@ export default async function handler(req: any, res: any) {
           const rawText = String(text).trim().slice(0, 800);
           if (!rawText) { await tg('sendMessage', { chat_id: chatId, text: 'Пустая задача — опиши, что нужно сделать.' }); return res.status(200).json({ ok: true }); }
           await createTaskFlow(evId, msg.from, chatId, rawText, true);
-          return res.status(200).json({ ok: true });
-        }
-
-        // Организатор задал точку прибытия вручную → сохраняем в logistics.arrivalPoint
-        if (sess && sess.state === 'admarrival_manual') {
-          const evId = sess.context?.evId;
-          await clearSession(msg.from.id);
-          const ev = await getEvent(evId);
-          const raw = String(text).trim().slice(0, 300);
-          try {
-            const lg = (ev as any)?.logistics || {};
-            await supabase.from('events').update({ logistics: { ...lg, arrivalPoint: raw } }).eq('id', evId);
-          } catch { /* no-op */ }
-          const elig = await pollEligible(evId);
-          const coords = raw.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-          const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
-          const msgText = `🏁 <b>Точка прибытия задана</b>\n\n${esc(raw)}\n\nТочка появилась в карточке события. Участники увидят её при следующем открытии.`;
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: msgText, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть на карте', url: mapUrl }]]) : undefined });
           return res.status(200).json({ ok: true });
         }
 
