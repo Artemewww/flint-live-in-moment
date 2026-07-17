@@ -88,6 +88,17 @@ async function notifyEventChanges(eventId: string, before: any, after: any): Pro
   if ((before.location || '') !== (after.location || '')) {
     changes.push(`📍 Место: <b>${esc(after.location)}</b>`);
   }
+  // Координаты назначения: изменились → всем кликабельная ссылка на карту.
+  if (String(before.coordinates_lat || '') !== String(after.coordinates_lat || '') || String(before.coordinates_lng || '') !== String(after.coordinates_lng || '')) {
+    if (after.coordinates_lat && after.coordinates_lng) {
+      changes.push(`🗺 Новые координаты: <a href="https://yandex.ru/maps/?text=${after.coordinates_lat},${after.coordinates_lng}">${esc(`${after.coordinates_lat}, ${after.coordinates_lng}`)}</a> (нажми — откроется карта)`);
+    }
+  }
+  // Точка сбора колонны из логистики.
+  const beforeAsm = String(before.logistics?.assemblyPoint || ''), afterAsm = String(after.logistics?.assemblyPoint || '');
+  if (beforeAsm !== afterAsm && afterAsm) {
+    changes.push(`🧭 Точка сбора: <b>${esc(afterAsm)}</b>${after.logistics?.departureTime ? ` · ${esc(after.logistics.departureTime)}` : ''}`);
+  }
   if (itinerarySig(before.logistics) !== itinerarySig(after.logistics)) {
     changes.push('🧭 Обновлён маршрут дня — загляни в карточку события');
   }

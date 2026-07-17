@@ -2097,7 +2097,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data === 'admhome' || data === 'admmeetgo' || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admmeet_')) {
+      if (data === 'admhome' || data === 'admmeetgo' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admmeet_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
           return res.status(200).json({ ok: true });
@@ -2120,6 +2120,7 @@ export default async function handler(req: any, res: any) {
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
               [{ text: '🧭 Точка сбора колонны', callback_data: `admmeet_${evId}` }],
+              [{ text: '📋 Перегенерить программу → всем', callback_data: `admprog_${evId}` }],
               [{ text: '🗳 Статистика голосований', callback_data: `admpolls_${evId}` }],
               [{ text: '📊 Реакции на рассылку', callback_data: `admreact_${evId}` }],
               [{ text: '📋 Пингануть незаполнивших', callback_data: `admping_${evId}` }],
@@ -2199,6 +2200,50 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        // Перегенерация программы (итог дня: голосования/изменения) → превью → всем.
+        if (data.startsWith('admprog_')) {
+          const evId = data.slice('admprog_'.length);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Генерирую…' });
+          const ev = await getEvent(evId);
+          // Решённые голосования дня — вписываем в программу.
+          const { data: polls } = await supabase.from('polls').select('question,options').eq('event_id', evId);
+          const decided = (polls || []).filter((p: any) => p.options?.status === 'decided' && p.options?.winner != null)
+            .map((p: any) => `«${p.question}» → ${p.options.list?.[p.options.winner]}`).join('; ');
+          const lg = (ev as any)?.logistics || {};
+          const parsed = await geminiJSON(
+            `Обнови программу события «${(ev as any)?.title}» (${(ev as any)?.date_label || (ev as any)?.date}${(ev as any)?.date_end ? ` — ${(ev as any)?.date_end}` : ''}, старт ${(ev as any)?.time || ''}).\n` +
+            `ТЕКУЩАЯ ПРОГРАММА:\n${(((ev as any)?.program || []) as string[]).map((p: string, i: number) => `${i + 1}. ${p}`).join('\n')}\n` +
+            (decided ? `РЕШЕНИЯ ГОЛОСОВАНИЙ (обязательно впиши): ${decided}\n` : '') +
+            (lg.assemblyPoint ? `ТОЧКА СБОРА КОЛОННЫ (впиши первым пунктом с координатами): ${lg.assemblyPoint}${lg.departureTime ? `, сбор ${lg.departureTime}` : ''}\n` : '') +
+            `Формат каждого пункта: «ДД месяц, ЧЧ:ММ — что делаем — отв. Имя (если был назначен, сохрани)». Сохрани существующие пункты и ответственных, впиши новое.\n` +
+            `Верни JSON: {"program":["пункт", ...]}`
+          );
+          const prog: string[] = Array.isArray(parsed?.program) ? parsed.program.slice(0, 40).map((x: any) => String(x).slice(0, 300)) : [];
+          if (!prog.length) { await tg('sendMessage', { chat_id: chatId, text: 'Не получилось сгенерировать — поправь в админке.' }); return res.status(200).json({ ok: true }); }
+          await setSession(tgId, 'admprog_draft', { evId, prog });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📋 <b>Новая программа:</b>\n\n${prog.map((p) => `• ${esc(p)}`).join('\n')}\n\n<i>Сохранить и разослать всем участникам?</i>`,
+            reply_markup: kb([[{ text: '✅ Сохранить и разослать', callback_data: 'admproggo' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (data === 'admproggo') {
+          const sessP = await getSession(tgId);
+          if (!sessP || sessP.state !== 'admprog_draft') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
+          const { evId, prog } = sessP.context || {};
+          await clearSession(tgId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
+          await supabase.from('events').update({ program: prog }).eq('id', evId);
+          const ev3 = await getEvent(evId);
+          const elig = await pollEligible(evId);
+          await Promise.allSettled(elig.map((id) =>
+            tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `📋 <b>Обновлённая программа — «${esc((ev3 as any)?.title)}»</b>\n\n${(prog as string[]).map((p) => `• ${esc(p)}`).join('\n')}` })
+          ));
+          await tg('sendMessage', { chat_id: chatId, text: `✅ Программа сохранена (и на сайте) и разослана ${elig.length} участникам.` });
+          return res.status(200).json({ ok: true });
+        }
+
         // Точка сбора колонны: ИИ предлагает место+время → орг одобряет → всем.
         if (data.startsWith('admmeet_')) {
           const evId = data.slice('admmeet_'.length);
@@ -2210,7 +2255,14 @@ export default async function handler(req: any, res: any) {
             `Предложи ОДНО удобное место сбора колонны на выезде из Минска по этому направлению (АЗС/парковка у МКАД, где встанут 5+ машин) и время сбора (чтобы успеть к старту, дорога ~1.5-2ч, +15 мин на знакомство).\n` +
             `Верни JSON: {"point":"название места коротко","coords":"lat, lng","when":"время сбора, напр. 08:00","note":"одна строка почему тут удобно"}`
           );
-          if (!parsed?.point) { await tg('sendMessage', { chat_id: chatId, text: 'Не получилось предложить точку — задай вручную в админке (Логистика).' }); return res.status(200).json({ ok: true }); }
+          if (!parsed?.point) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '🤖 Не смог предложить точку сам. Задай свою — я разошлю всем с кликабельной картой.',
+              reply_markup: kb([[{ text: '✏️ Задать точку (текстом)', callback_data: `admmeetman_${evId}` }]]),
+            });
+            return res.status(200).json({ ok: true });
+          }
           const draft = `🧭 <b>Сбор колонны — «${esc((ev as any)?.title)}»</b>\n\n📍 ${esc(parsed.point)}\n🗺 <code>${esc(parsed.coords || '')}</code>\n🕐 Сбор в <b>${esc(parsed.when || '')}</b>\n${parsed.note ? `<i>${esc(parsed.note)}</i>\n` : ''}\nВстречаемся, знакомимся — и стартуем колонной!`;
           await setSession(tgId, 'admmeet_draft', { evId, draft, point: parsed.point, coords: parsed.coords, when: parsed.when });
           await tg('sendMessage', {
