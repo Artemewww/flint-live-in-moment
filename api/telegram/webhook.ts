@@ -42,6 +42,57 @@ async function getEvent(id: string) {
   return data;
 }
 
+// ─── Голосования (polls/poll_votes) ──────────────────────────────────────
+// Состояние храним в polls.options как объект { list, status, winner, topic,
+// summary } — без миграции (колонка jsonb уже есть). poll_votes.choice = индекс.
+
+/** Кто имеет право голосовать = зарегистрированные на событие с реальным TG id. */
+async function pollEligible(evId: string): Promise<number[]> {
+  const { data } = await supabase
+    .from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
+  return Array.from(new Set((data || [])
+    .map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0)));
+}
+
+/** Подсчёт голосов по вариантам + список проголосовавших. */
+async function pollTally(pollId: number, optCount: number): Promise<{ counts: number[]; voters: number }> {
+  const { data } = await supabase.from('poll_votes').select('choice,telegram_id').eq('poll_id', pollId);
+  const counts = new Array(optCount).fill(0);
+  const voters = new Set<number>();
+  for (const v of data || []) {
+    const c = Number((v as any).choice);
+    if (c >= 0 && c < optCount) counts[c]++;
+    voters.add(Number((v as any).telegram_id));
+  }
+  return { counts, voters: voters.size };
+}
+
+/** Клавиатура голосования: вариант + счётчик; кнопки закрытия для создателя. */
+function pollKeyboard(pollId: number, list: string[], counts: number[], closed: boolean): any {
+  const rows: any[] = list.map((opt, i) => [{
+    text: `${closed ? '' : '🗳 '}${opt} — ${counts[i] || 0}`.slice(0, 60),
+    callback_data: closed ? `pnoop_${pollId}` : `pv_${pollId}_${i}`,
+  }]);
+  if (!closed) rows.push([{ text: '🔒 Закрыть и подвести итог', callback_data: `pclose_${pollId}` }]);
+  return { inline_keyboard: rows };
+}
+
+/** Разослать голосование всем, кто имеет право голоса. */
+async function broadcastPoll(pollId: number, poll: any, evTitle: string) {
+  const opts = poll.options || {};
+  const list: string[] = opts.list || [];
+  const eligible = await pollEligible(poll.event_id);
+  const { counts } = await pollTally(pollId, list.length);
+  const text =
+    `🗳 <b>Голосование — «${esc(evTitle)}»</b>\n\n` +
+    `<b>${esc(poll.question)}</b>\n` +
+    (opts.summary ? `<i>${esc(opts.summary)}</i>\n` : '') +
+    `\nГолосуют участники события (${eligible.length} чел). Решение — когда «за» наберёт больше половины.`;
+  for (const id of eligible) {
+    try { await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text, reply_markup: pollKeyboard(pollId, list, counts, false) }); } catch { /* заблокировал бота */ }
+  }
+}
+
 /** «Заезжай за мной»: передаёт водителю точку пассажира с кнопками решения. */
 async function sendPickupRequest(rideId: number, from: any, locText: string, lat?: number, lng?: number) {
   const { data: ride } = await supabase.from('rides').select('driver_id,driver_name,event_id').eq('id', rideId).maybeSingle();
@@ -572,6 +623,8 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
   if (logi.length) rows.push(logi);
 
+  // Голосования участников (кино/поездка/еда — что угодно).
+  rows.push([{ text: '🗳 Голосования', callback_data: `polls_${ev.id}` }]);
   // Нижние кнопки: спрос/предложение + позвать
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
@@ -1316,6 +1369,114 @@ export default async function handler(req: any, res: any) {
             [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${evId}:self` }],
           ]),
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Список голосований события + кнопка предложить своё.
+      if (data.startsWith('polls_')) {
+        const evId = data.slice('polls_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: polls } = await supabase
+          .from('polls').select('id,question,options').eq('event_id', evId).order('id', { ascending: false }).limit(10);
+        const rows: any[] = [];
+        for (const p of polls || []) {
+          const opts = (p as any).options || {};
+          const st = opts.status === 'decided' ? '✅' : opts.status === 'expired' ? '⌛' : '🗳';
+          rows.push([{ text: `${st} ${(p as any).question}`.slice(0, 60), callback_data: `pshow_${(p as any).id}` }]);
+        }
+        rows.push([{ text: '➕ Предложить голосование', callback_data: `pollnew_${evId}` }]);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: rows.length > 1 ? '🗳 <b>Голосования события</b>\nВыбери, чтобы посмотреть, или предложи своё:' : '🗳 <b>Голосований пока нет</b>\nПредложи первое — я сам оформлю его в вопрос с вариантами.',
+          reply_markup: kb(rows),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Предложить голосование: свободный текст → ИИ оформит.
+      if (data.startsWith('pollnew_')) {
+        const evId = data.slice('pollnew_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Право предлагать — у зарегистрированных на событие.
+        const elig = await pollEligible(evId);
+        if (!elig.includes(tgId) && !(await isCore(tgId))) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Предлагать голосование могут участники события. Сначала запишись 🙌' });
+          return res.status(200).json({ ok: true });
+        }
+        await setSession(tgId, 'poll_create', { evId });
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🗳 Напиши свободно, что предлагаешь и по поводу чего голосуем.\n<i>Например: «Предлагаю кино ночью у костра — у меня есть проектор и экран. Смотрим?»</i>' });
+        return res.status(200).json({ ok: true });
+      }
+      // Показать голосование (свежие цифры).
+      if (data.startsWith('pshow_')) {
+        const pollId = Number(data.slice('pshow_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: poll } = await supabase.from('polls').select('*').eq('id', pollId).maybeSingle();
+        if (!poll) return res.status(200).json({ ok: true });
+        const opts = (poll as any).options || {};
+        const list: string[] = opts.list || [];
+        const { counts } = await pollTally(pollId, list.length);
+        const closed = opts.status === 'decided' || opts.status === 'expired';
+        const ev = await getEvent((poll as any).event_id);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `🗳 <b>${esc((poll as any).question)}</b>\n${opts.summary ? `<i>${esc(opts.summary)}</i>\n` : ''}${closed && opts.winner != null ? `\n✅ Решено: <b>${esc(list[opts.winner] || '')}</b>` : ''}`,
+          reply_markup: pollKeyboard(pollId, list, counts, closed),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('pnoop_')) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование завершено' }); return res.status(200).json({ ok: true }); }
+      // Голос за вариант.
+      if (data.startsWith('pv_')) {
+        const rest = data.slice('pv_'.length);
+        const us = rest.lastIndexOf('_');
+        const pollId = Number(rest.slice(0, us));
+        const choice = Number(rest.slice(us + 1));
+        const { data: poll } = await supabase.from('polls').select('*').eq('id', pollId).maybeSingle();
+        if (!poll) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование не найдено' }); return res.status(200).json({ ok: true }); }
+        const opts = (poll as any).options || {};
+        const list: string[] = opts.list || [];
+        if (opts.status === 'decided' || opts.status === 'expired') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование уже завершено' }); return res.status(200).json({ ok: true }); }
+        const eligible = await pollEligible((poll as any).event_id);
+        if (!eligible.includes(tgId)) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосуют только участники события' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('poll_votes').upsert({ poll_id: pollId, telegram_id: tgId, choice }, { onConflict: 'poll_id,telegram_id' });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Голос за «${list[choice] || ''}» учтён ✅` });
+        const { counts } = await pollTally(pollId, list.length);
+        // Автопринятие: вариант набрал больше половины имеющих право голоса.
+        const winIdx = counts.findIndex((c) => c > eligible.length / 2);
+        if (winIdx >= 0) {
+          await supabase.from('polls').update({ options: { ...opts, status: 'decided', winner: winIdx } }).eq('id', pollId);
+          const ev = await getEvent((poll as any).event_id);
+          for (const id of eligible) {
+            try {
+              await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `✅ <b>Решено!</b> «${esc((poll as any).question)}»\n\nПобедил вариант: <b>${esc(list[winIdx])}</b> (${counts[winIdx]} из ${eligible.length}).` });
+            } catch { /* no-op */ }
+          }
+          if (ADMIN_CHAT_ID) await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🗳 Голосование закрыто по кворуму: «${esc((poll as any).question)}» → <b>${esc(list[winIdx])}</b>. Если нужно — обнови программу события.` });
+        } else {
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: pollKeyboard(pollId, list, counts, false) }); } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+      // Закрыть голосование вручную (создатель или костяк) — побеждает лидер.
+      if (data.startsWith('pclose_')) {
+        const pollId = Number(data.slice('pclose_'.length));
+        const { data: poll } = await supabase.from('polls').select('*').eq('id', pollId).maybeSingle();
+        if (!poll) { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        if (Number((poll as any).created_by) !== tgId && !(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Закрыть может автор голосования или костяк' });
+          return res.status(200).json({ ok: true });
+        }
+        const opts = (poll as any).options || {};
+        const list: string[] = opts.list || [];
+        const { counts } = await pollTally(pollId, list.length);
+        let winIdx = 0;
+        for (let i = 1; i < counts.length; i++) if (counts[i] > counts[winIdx]) winIdx = i;
+        await supabase.from('polls').update({ options: { ...opts, status: 'decided', winner: winIdx } }).eq('id', pollId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование закрыто' });
+        const eligible = await pollEligible((poll as any).event_id);
+        for (const id of eligible) {
+          try { await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `✅ <b>Итог голосования</b> «${esc((poll as any).question)}»\n\nПобедил: <b>${esc(list[winIdx] || '—')}</b> (${counts[winIdx] || 0} из ${eligible.length}).` }); } catch { /* no-op */ }
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -2817,6 +2978,39 @@ export default async function handler(req: any, res: any) {
             m ? parseFloat(m[1].replace(',', '.')) : undefined,
             m ? parseFloat(m[2].replace(',', '.')) : undefined);
           await tg('sendMessage', { chat_id: chatId, text: ok ? '✅ Передал водителю твою точку — он ответит, сможет ли заехать.' : 'Не получилось передать водителю, напиши ему напрямую.' });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Предложение голосования: свободный текст → ИИ оформляет → рассылка.
+        if (sess && sess.state === 'poll_create') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const ev = await getEvent(evId);
+          await tg('sendMessage', { chat_id: chatId, text: '🤖 Оформляю голосование…' });
+          let poll: any = null;
+          try {
+            const r = await fetch(`${site}/api/ai`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.ADMIN_TOKEN || ''}` },
+              body: JSON.stringify({ task: 'poll', event: ev, text }),
+            });
+            poll = await r.json();
+          } catch { /* сеть */ }
+          if (!poll || poll.error || !Array.isArray(poll.options)) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Не получилось оформить голосование, попробуй сформулировать иначе.' });
+            return res.status(200).json({ ok: true });
+          }
+          const optionsObj = { list: poll.options, status: 'open', winner: null, topic: poll.topic || '', summary: poll.summary || '' };
+          const deadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+          const { data: created, error } = await supabase
+            .from('polls').insert({ event_id: evId, question: poll.question, options: optionsObj, deadline, created_by: msg.from.id })
+            .select('id').single();
+          if (error || !created) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Не удалось сохранить голосование.' });
+            return res.status(200).json({ ok: true });
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Голосование создано и разослано участникам:\n\n<b>${esc(poll.question)}</b>\n${(poll.options as string[]).map((o) => `• ${esc(o)}`).join('\n')}` });
+          await broadcastPoll((created as any).id, { event_id: evId, question: poll.question, options: optionsObj }, ev?.title || 'событие');
           return res.status(200).json({ ok: true });
         }
 

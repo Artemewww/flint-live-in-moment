@@ -171,6 +171,41 @@ export default async function handler(req: any, res: any) {
     const typeRu = TYPE_RU[ev.type] || 'встреча сообщества';
     const days = ev.dateEnd && ev.dateEnd !== ev.date ? `многодневное (${ev.date} — ${ev.dateEnd})` : 'однодневное';
 
+    // Свободный текст участника → готовое голосование (вопрос + варианты).
+    // Пример: «предлагаю кино ночью, у меня проектор» → «Смотрим кино ночью?» [Да/Нет].
+    if (task === 'poll') {
+      const freeText = String(body.text || '').slice(0, 800);
+      const prompt =
+        `Ты — помощник сообщества «Живи в моменте». Участник предлагает что-то на голосование ` +
+        `на событии «${ev.title || 'событие'}» (${typeRu}).\n\n` +
+        `Его сообщение (свободный текст): «${freeText}»\n\n` +
+        `Сформулируй ЧЁТКОЕ голосование:\n` +
+        `- question: короткий вопрос (напр. «Смотрим кино ночью у костра?»).\n` +
+        `- options: 2–5 конкретных вариантов ответа. Если это «да/нет» — верни [«Да, за», «Нет»]. ` +
+        `Если предложены конкретные альтернативы (фильмы, места) — сделай их вариантами.\n` +
+        `- topic: одно-два слова темы (кино, поездка, еда, программа…).\n` +
+        `- summary: одна строка пояснения для участников (что именно предлагают и детали: инвентарь, цена, время).\n\n` +
+        `Пиши по-русски, дружелюбно. Верни JSON: { question, options: [строки], topic, summary }.`;
+      const parsed = await genJSON(ai, prompt, {
+        type: Type.OBJECT,
+        properties: {
+          question: { type: Type.STRING },
+          options: { type: Type.ARRAY, items: { type: Type.STRING } },
+          topic: { type: Type.STRING },
+          summary: { type: Type.STRING },
+        },
+        required: ['question', 'options'],
+      });
+      const options = (parsed.options || []).map((s: any) => String(s).slice(0, 100)).filter(Boolean).slice(0, 5);
+      return res.status(200).json({
+        question: String(parsed.question || 'Голосование').slice(0, 200),
+        options: options.length >= 2 ? options : ['Да, за', 'Нет'],
+        topic: String(parsed.topic || '').slice(0, 40),
+        summary: String(parsed.summary || '').slice(0, 300),
+        model: usedModel,
+      });
+    }
+
     if (task === 'autofill') {
       const prompt =
         `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +
