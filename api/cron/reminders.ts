@@ -104,9 +104,41 @@ export default async function handler(req: any, res: any) {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
-  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, errors: [] as string[] };
+  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, errors: [] as string[] };
 
   try {
+    // ── 0. Авто-закрытие голосований с истёкшим дедлайном ─────────────────
+    // Кворум закрывает опрос сразу (в вебхуке); это страховка от «висящих»
+    // опросов без кворума — побеждает текущий лидер.
+    try {
+      const nowIso = new Date().toISOString();
+      const { data: openPolls } = await supabase
+        .from('polls').select('id,event_id,question,options,deadline').lt('deadline', nowIso).limit(50);
+      for (const p of openPolls || []) {
+        const opts: any = (p as any).options || {};
+        if (opts.status && opts.status !== 'open') continue; // уже закрыт
+        const list: string[] = opts.list || [];
+        if (!list.length) continue;
+        const { data: votes } = await supabase.from('poll_votes').select('choice').eq('poll_id', (p as any).id);
+        const counts = new Array(list.length).fill(0);
+        for (const v of votes || []) { const c = Number((v as any).choice); if (c >= 0 && c < list.length) counts[c]++; }
+        let winIdx = 0;
+        for (let i = 1; i < counts.length; i++) if (counts[i] > counts[winIdx]) winIdx = i;
+        const hasVotes = counts.some((c) => c > 0);
+        await supabase.from('polls').update({ options: { ...opts, status: 'expired', winner: hasVotes ? winIdx : null } }).eq('id', (p as any).id);
+        // Оповещаем зарегистрированных на событие.
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id').eq('event_id', (p as any).event_id).neq('status', 'cancelled');
+        for (const r of realIds(regs || [])) {
+          await send(Number(r.telegram_id),
+            hasVotes
+              ? `⌛ <b>Голосование завершено по времени</b>\n«${esc((p as any).question)}»\n\nЛидер: <b>${esc(list[winIdx])}</b> (${counts[winIdx]} голос(ов)).`
+              : `⌛ Голосование «${esc((p as any).question)}» закрыто по времени — голосов не было.`);
+        }
+        report.pollsClosed++;
+      }
+    } catch (e) { report.errors.push(`polls: ${(e as Error).message}`); }
+
     // ── 1+2. Предстоящие события: 7 / 3 / 1 день ──────────────────────────
     const horizon = [
       { days: 7, flag: 'reminder7d', label: 'через неделю' },
