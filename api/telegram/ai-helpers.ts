@@ -7,13 +7,15 @@ import { GoogleGenAI } from '@google/genai';
 
 const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
 const ai = API_KEY ? new GoogleGenAI({ apiKey: API_KEY }) : null;
+// gemini-2.0-flash* удалены из API (404); у -latest квота есть (см. geminiJSON в webhook.ts).
+const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 /** Быстрый текстовый ответ от ИИ (до 500 символов, экономим токены) */
 export async function quickAI(prompt: string): Promise<string> {
   if (!ai) return '';
   try {
     const resp = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: { 
         maxOutputTokens: 256,
@@ -41,7 +43,7 @@ export async function parseTask(text: string): Promise<{
   
   try {
     const resp = await ai?.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: { 
         responseMimeType: 'application/json',
@@ -64,7 +66,7 @@ export async function parseEquipment(text: string): Promise<Array<{item: string;
   
   try {
     const resp = await ai?.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: { 
         responseMimeType: 'application/json',
@@ -91,7 +93,7 @@ export async function parseShoppingPrefs(text: string): Promise<{
   
   try {
     const resp = await ai?.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: { 
         responseMimeType: 'application/json',
@@ -120,7 +122,7 @@ export async function parseExpenseAI(text: string): Promise<Array<{title: string
 
   try {
     const resp = await ai?.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: {
         responseMimeType: 'application/json',
@@ -179,7 +181,7 @@ export async function analyzeChat(messages: Array<{text: string; from: string}>,
   
   try {
     const resp = await ai?.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
+      model: MODEL,
       contents: prompt,
       config: { 
         responseMimeType: 'application/json',
