@@ -29,6 +29,19 @@ function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+async function tg(method: string, payload: unknown) {
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    return await r.json();
+  } catch {
+    return { ok: false };
+  }
+}
+
 async function send(chatId: number, text: string, replyMarkup?: unknown): Promise<boolean> {
   try {
     const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
@@ -104,7 +117,128 @@ export default async function handler(req: any, res: any) {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
-  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, errors: [] as string[] };
+  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, autoRemindersSent: 0, errors: [] as string[] };
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // БЛОК A: Автонапоминания (каждые 15 мин, не ждём суточного крона)
+  // ══════════════════════════════════════════════════════════════════════════
+  try {
+    const nowIso = new Date().toISOString();
+    
+    // 1. Отправить запланированные напоминания
+    const { data: autoReminders } = await supabase
+      .from('auto_reminders')
+      .select('*')
+      .lte('remind_at', nowIso)
+      .eq('sent', false)
+      .lt('attempts', 3)
+      .limit(50);
+
+    for (const r of autoReminders || []) {
+      try {
+        await tg('sendMessage', {
+          chat_id: r.telegram_id,
+          parse_mode: 'HTML',
+          text: r.message,
+        });
+        
+        await supabase
+          .from('auto_reminders')
+          .update({ sent: true, attempts: r.attempts + 1 })
+          .eq('id', r.id);
+        
+        report.autoRemindersSent++;
+      } catch {
+        await supabase
+          .from('auto_reminders')
+          .update({ attempts: r.attempts + 1 })
+          .eq('id', r.id);
+      }
+    }
+
+    // 2. Создать напоминания для неподтверждённых пунктов (за 24ч до события)
+    const tomorrow = new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10);
+    const { data: upcomingEvents } = await supabase
+      .from('events')
+      .select('id,title,date')
+      .eq('status', 'open')
+      .eq('date', tomorrow);
+
+    for (const ev of upcomingEvents || []) {
+      // Техника безопасности
+      try {
+        const { data: unconfirmedSafety } = await supabase.rpc('get_unconfirmed_safety', {
+          p_event_id: ev.id,
+        });
+
+        for (const u of unconfirmedSafety || []) {
+          const exists = await supabase
+            .from('auto_reminders')
+            .select('id')
+            .eq('event_id', ev.id)
+            .eq('telegram_id', u.telegram_id)
+            .eq('reminder_type', 'safety_confirm')
+            .eq('sent', false)
+            .maybeSingle();
+
+          if (!exists.data) {
+            await supabase.rpc('create_reminder', {
+              p_event_id: ev.id,
+              p_telegram_id: u.telegram_id,
+              p_type: 'safety_confirm',
+              p_message: `⚠️ <b>${esc(ev.title)}</b> — завтра!\n\nПодтверди, что ознакомился с <b>техникой безопасности</b>. Это важно для всех.\n\n/start → выбери событие → «✅ Правила безопасности»`,
+              p_remind_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            });
+          }
+        }
+      } catch (e) { report.errors.push(`safety: ${(e as Error).message}`); }
+
+      // Гости (кто указал guest_count > 0, но не детализировал)
+      try {
+        const { data: unclearGuests } = await supabase
+          .from('registrations')
+          .select('telegram_id,name,guest_count')
+          .eq('event_id', ev.id)
+          .eq('status', 'approved')
+          .gt('guest_count', 0);
+
+        for (const g of unclearGuests || []) {
+          if (!g.telegram_id) continue;
+          const { data: details } = await supabase
+            .from('registrations')
+            .select('guest_details')
+            .eq('event_id', ev.id)
+            .eq('telegram_id', g.telegram_id)
+            .maybeSingle();
+
+          if (!details?.guest_details || !details.guest_details.count) {
+            const exists = await supabase
+              .from('auto_reminders')
+              .select('id')
+              .eq('event_id', ev.id)
+              .eq('telegram_id', g.telegram_id)
+              .eq('reminder_type', 'guest_update')
+              .eq('sent', false)
+              .maybeSingle();
+
+            if (!exists.data) {
+              await supabase.rpc('create_reminder', {
+                p_event_id: ev.id,
+                p_telegram_id: g.telegram_id,
+                p_type: 'guest_update',
+                p_message: `👥 <b>${esc(ev.title)}</b> — завтра!\n\nТы указал гостей: <b>${g.guest_count} чел</b>. Уточни, сколько точно едет и как их зовут — это нужно для логистики.\n\n/start → событие → «Обновить гостей»`,
+                p_remind_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+              });
+            }
+          }
+        }
+      } catch (e) { report.errors.push(`guests: ${(e as Error).message}`); }
+    }
+  } catch (e) { report.errors.push(`auto-reminders: ${(e as Error).message}`); }
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // БЛОК B: Суточные напоминания (события, оплата, отзывы)
+  // ══════════════════════════════════════════════════════════════════════════
 
   try {
     // ── 0. Авто-закрытие голосований с истёкшим дедлайном ─────────────────
@@ -551,6 +685,6 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).json({ ok: true, ...report });
   } catch (err) {
-    return res.status(200).json({ ok: false, ...report, error: (err as Error).message });
+    return res.status(500).json({ ok: false, ...report, error: (err as Error).message });
   }
 }
