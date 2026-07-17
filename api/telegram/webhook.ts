@@ -495,7 +495,7 @@ function mainMenu() {
 }
 
 /** Приветствие + афиша открытых событий — /start и кнопка «Главная». */
-async function sendWelcome(chatId: number, openBtn: any) {
+async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
   const { data: evs } = await supabase
     .from('events')
     .select('id,title,status,date')
@@ -505,6 +505,8 @@ async function sendWelcome(chatId: number, openBtn: any) {
   const rows = (evs || []).map((e: any) => [
     { text: `✅ ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` },
   ]);
+  // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
+  if (isCoreUser) rows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
   rows.push([openBtn as any]);
   await tg('sendMessage', {
     chat_id: chatId,
@@ -1697,9 +1699,17 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_')) {
+      if (data === 'admhome' || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
+          return res.status(200).json({ ok: true });
+        }
+        // Вход в панель с Главной: показываем список событий (как /admin).
+        if (data === 'admhome') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          const { data: evs } = await supabase.from('events').select('id,title,date').eq('status', 'open').order('date').limit(8);
+          if (!evs?.length) { await tg('sendMessage', { chat_id: chatId, text: 'Открытых событий нет.' }); return res.status(200).json({ ok: true }); }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⚙️ <b>Панель организатора</b>\nВыбери событие:', reply_markup: kb(evs.map((e: any) => [{ text: `${e.title} · ${e.date}`, callback_data: `adm_${e.id}` }])) });
           return res.status(200).json({ ok: true });
         }
         if (data.startsWith('adm_')) {
@@ -3487,7 +3497,7 @@ export default async function handler(req: any, res: any) {
         // Постоянное меню внизу чата (новая структура по UX-аудиту).
         // Старые тексты кнопок тоже понимаем — клавиатура у людей кешируется.
         if (text === '🏠 Главная') {
-          await sendWelcome(chatId, openBtn);
+          await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
           return res.status(200).json({ ok: true });
         }
         if (text === '🗓 Мои события') {
@@ -3606,7 +3616,7 @@ export default async function handler(req: any, res: any) {
           }
         }
         // Приветствие + открытые события кнопками (со сроком до старта).
-        await sendWelcome(chatId, openBtn);
+        await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
         return res.status(200).json({ ok: true });
       }
