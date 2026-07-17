@@ -342,7 +342,11 @@ function eventCard(ev: any): string {
     (ev.price_label ? `💳 ${esc(ev.price_label)}\n` : '') +
     (ev.entry_threshold ? `🎫 ${esc(ev.entry_threshold)}\n` : '') +
     `${aud}\n` +
-    itineraryBlock(ev) +
+    // Программа — источник правды (обновляется голосованиями/правками);
+    // старый «маршрут дня» показываем, только если программы нет.
+    (((ev.program || []).length)
+      ? `\n📋 <b>Программа</b>\n` + (ev.program as string[]).slice(0, 14).map((p: string) => `• ${esc(p)}`).join('\n') + '\n'
+      : itineraryBlock(ev)) +
     (ev.description ? `\n${esc(String(ev.description).slice(0, 600))}` : '')
   );
 }
@@ -697,6 +701,21 @@ async function createTaskFlow(evId: string, from: any, chatId: number, rawText: 
     return;
   }
 
+  // Предпросмотр: ИИ мог оформить неидеально — создатель подтверждает или правит.
+  await setSession(from.id, 'task_preview', { evId, raw: rawText, title: cleanTitle, needsCar, targetTime });
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: `👀 <b>Так разошлю задачу:</b>\n\n${esc(cleanTitle)}${targetTime ? `\n⏰ ${esc(targetTime)}` : ''}${needsCar ? '\n🚗 нужен автомобиль → уйдёт водителям' : ''}\n\n<i>Контакты/адреса из твоего текста получит только исполнитель.</i>`,
+    reply_markup: kb([[
+      { text: '✅ Отправить', callback_data: 'tprev_go' },
+      { text: '✏️ Переписать', callback_data: 'tprev_redo' },
+      { text: '❌ Отмена', callback_data: 'tprev_no' },
+    ]]),
+  });
+}
+
+/** Фактическое создание и рассылка задачи (после подтверждения предпросмотра). */
+async function taskCommit(evId: string, from: any, chatId: number, rawText: string, cleanTitle: string, needsCar: boolean, targetTime: string) {
   const ev = await getEvent(evId);
   const { data: created } = await supabase
     .from('tasks').insert({ event_id: evId, title: cleanTitle, created_by: from.id, done: false }).select('id').single();
@@ -1574,6 +1593,24 @@ export default async function handler(req: any, res: any) {
         });
         return res.status(200).json({ ok: true });
       }
+      // Предпросмотр задачи: отправить / переписать / отмена (черновик в сессии).
+      if (data === 'tprev_go' || data === 'tprev_redo' || data === 'tprev_no') {
+        const sessP = await getSession(tgId);
+        if (!sessP || sessP.state !== 'task_preview') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел — создай задачу заново' }); return res.status(200).json({ ok: true }); }
+        const { evId, raw, title, needsCar, targetTime } = sessP.context || {};
+        await clearSession(tgId);
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if (data === 'tprev_no') { await tg('sendMessage', { chat_id: chatId, text: 'Ок, задачу не отправляю.' }); return res.status(200).json({ ok: true }); }
+        if (data === 'tprev_redo') {
+          await setSession(tgId, 'task_create', { evId });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✏️ Напиши задачу заново (можно подробнее — я переоформлю).' });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отправляю…' });
+        await taskCommit(evId, cq.from, chatId, String(raw || ''), String(title || ''), !!needsCar, String(targetTime || ''));
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('taketask_')) {
         const taskId = Number(data.slice('taketask_'.length));
         const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
@@ -1637,11 +1674,54 @@ export default async function handler(req: any, res: any) {
         const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
         if (!t) { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
         if (Number((t as any).taken_by) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отчитывается тот, кто взял' }); return res.status(200).json({ ok: true }); }
-        await supabase.from('tasks').update({ done: true }).eq('id', taskId);
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отметил сделанным ✅' });
+        // Не закрываем сразу: работу принимает тот, кто ставил задачу.
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отправил на приёмку ✅' });
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
         if ((t as any).created_by && Number((t as any).created_by) !== tgId) {
-          try { await tg('sendMessage', { chat_id: (t as any).created_by, parse_mode: 'HTML', text: `✅ <b>${esc(cq.from.first_name || 'Участник')}</b> выполнил задачу: «${esc((t as any).title)}». Спасибо!` }); } catch { /* no-op */ }
+          await tg('sendMessage', { chat_id: chatId, text: '📨 Отправил постановщику на приёмку — он подтвердит или попросит доделать.' });
+          try {
+            await tg('sendMessage', {
+              chat_id: (t as any).created_by, parse_mode: 'HTML',
+              text: `📥 <b>${esc(cq.from.first_name || 'Исполнитель')}</b> отчитался по задаче: «${esc((t as any).title)}». Принять работу?`,
+              reply_markup: kb([[
+                { text: '✅ Принять', callback_data: `tacc_${taskId}` },
+                { text: '🔁 Доделать', callback_data: `tfix_${taskId}` },
+              ], [
+                { text: '↩️ Вернуть в поиск', callback_data: `tfree_${taskId}` },
+              ]]),
+            });
+          } catch { /* no-op */ }
+        } else {
+          // Свою же задачу закрываем сразу.
+          await supabase.from('tasks').update({ done: true }).eq('id', taskId);
+          await tg('sendMessage', { chat_id: chatId, text: '✅ Задача закрыта.' });
+        }
+        return res.status(200).json({ ok: true });
+      }
+      // Приёмка работ: только постановщик.
+      if (data.startsWith('tacc_') || data.startsWith('tfix_') || data.startsWith('tfree_')) {
+        const taskId = Number(data.slice(5));
+        const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+        if (!t) { await tg('answerCallbackQuery', { callback_query_id: cq.id }); return res.status(200).json({ ok: true }); }
+        if (Number((t as any).created_by) !== tgId && !(await isCore(tgId))) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Принимает постановщик задачи' }); return res.status(200).json({ ok: true }); }
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        const worker = Number((t as any).taken_by);
+        if (data.startsWith('tacc_')) {
+          await supabase.from('tasks').update({ done: true }).eq('id', taskId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Принято ✅' });
+          if (worker) { try { await tg('sendMessage', { chat_id: worker, parse_mode: 'HTML', text: `🎉 Работа принята: «${esc((t as any).title)}». Спасибо!` }); } catch { /* no-op */ } }
+        } else if (data.startsWith('tfix_')) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await setSession(tgId, 'task_fix', { taskId });
+          await tg('sendMessage', { chat_id: chatId, text: '🔁 Напиши, что именно доделать — передам исполнителю.' });
+        } else {
+          await supabase.from('tasks').update({ taken_by: null }).eq('id', taskId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Вернул в поиск' });
+          if (worker) { try { await tg('sendMessage', { chat_id: worker, parse_mode: 'HTML', text: `↩️ Постановщик вернул задачу «${esc((t as any).title)}» в общий поиск.` }); } catch { /* no-op */ } }
+          const eligF = await pollEligible((t as any).event_id);
+          await Promise.allSettled(eligF.filter((id) => id !== tgId).map((id) =>
+            tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `📋 <b>Задача снова свободна</b>: «${esc((t as any).title)}»\nСтатус: не доделана предыдущим исполнителем — постановщик уточнит детали. Возьмёшь?`, reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]) })
+          ));
         }
         return res.status(200).json({ ok: true });
       }
@@ -3795,6 +3875,27 @@ export default async function handler(req: any, res: any) {
           const rawText = String(text).trim().slice(0, 800);
           if (!rawText) { await tg('sendMessage', { chat_id: chatId, text: 'Пустая задача — опиши, что нужно сделать.' }); return res.status(200).json({ ok: true }); }
           await createTaskFlow(evId, msg.from, chatId, rawText, true);
+          return res.status(200).json({ ok: true });
+        }
+
+        // Постановщик описал, что доделать → передаём исполнителю.
+        if (sess && sess.state === 'task_fix') {
+          const taskId = Number(sess.context?.taskId);
+          await clearSession(msg.from.id);
+          const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+          const worker = Number((t as any)?.taken_by);
+          if (t && worker) {
+            try {
+              await tg('sendMessage', {
+                chat_id: worker, parse_mode: 'HTML',
+                text: `🔁 <b>Нужно доделать</b> по задаче «${esc((t as any).title)}»:\n${esc(String(text).slice(0, 500))}\n\nКак закончишь — жми «Сделано».`,
+                reply_markup: kb([[{ text: '✅ Сделано', callback_data: `donetask_${taskId}` }, { text: '↩️ Не смогу', callback_data: `droptask_${taskId}` }]]),
+              });
+            } catch { /* no-op */ }
+            await tg('sendMessage', { chat_id: chatId, text: '📨 Передал исполнителю.' });
+          } else {
+            await tg('sendMessage', { chat_id: chatId, text: 'Исполнителя нет — задача уже в поиске.' });
+          }
           return res.status(200).json({ ok: true });
         }
 
