@@ -3986,9 +3986,26 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
-      // Пошаговый ввод (заявка поездки) — если активна сессия и это не команда.
+        // Пошаговый ввод (заявка поездки) — если активна сессия и это не команда.
       if (!text.startsWith('/')) {
         const sess = await getSession(msg.from.id);
+        // Ввод реквизитов карты
+        if (sess && sess.state === 'paymethod_card_details') {
+          const evId = sess.context?.evId;
+          const details = String(text).trim().slice(0, 200);
+          if (!details || details.length < 5) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Слишком коротко. Напиши номер телефона, карты или счёта.\n<i>Например: +375291234567 (Альфа-Банк)</i>' });
+            return res.status(200).json({ ok: true });
+          }
+          // Сохраняем в prefs
+          await supabase.from('members').update({
+            prefs: { payment: { method: 'card', details } }
+          }).eq('telegram_id', msg.from.id);
+          await clearSession(msg.from.id);
+          await setSession(msg.from.id, 'exp_add', { evId, payment: { method: 'card', details } });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💳 Запомнил реквизиты: <b>${esc(details)}</b>\n\n💸 Что купил(а) и на какую сумму? Напиши одной строкой: название и сумма в BYN.\n<i>Например: «Мясо 45.50» или «Угли и розжиг 18»</i>` });
+          return res.status(200).json({ ok: true });
+        }
         if (sess && sess.state === 'ride_point') {
           await setSession(msg.from.id, 'ride_depart', { ...sess.context, from: text.slice(0, 120) });
           // Подставляем дату события — чтобы не лезть в календарь.
