@@ -179,6 +179,33 @@ export default async function handler(req: any, res: any) {
 
     // Достоверная личность из Telegram (если заявка из Mini App).
     const verified = initData ? verifyInitData(initData, BOT_TOKEN) : null;
+
+    // 🔒 ЖЕЛЕЗОБЕТОННЫЙ ГЕЙТ: на события клуба пускаем только
+    //  (а) подтверждённого участника (verified initData → status approved/is_core), либо
+    //  (б) новичка с ВАЛИДНЫМ реф-кодом действующего участника (фиксируем, кто привёл).
+    // Свободный текст «имя друга» доступ НЕ даёт. Выключатель: GATE_ENABLED=0.
+    if (process.env.GATE_ENABLED !== '0') {
+      const refCode = String(body.refCode || body.ref || '').trim();
+      let inviterId: number | null = null;
+      if (refCode) {
+        const { data: inv } = await supabase
+          .from('members').select('telegram_id,status,is_core').eq('ref_code', refCode).maybeSingle();
+        if (inv && ((inv as any).status === 'approved' || (inv as any).is_core)) inviterId = Number((inv as any).telegram_id);
+      }
+      let isMember = false;
+      if (verified?.id) {
+        const { data: me } = await supabase
+          .from('members').select('status,is_core').eq('telegram_id', verified.id).maybeSingle();
+        isMember = !!(me && ((me as any).status === 'approved' || (me as any).is_core));
+      }
+      if (!isMember && !inviterId) {
+        return res.status(403).json({
+          error: 'Клуб закрытый: записаться на событие можно только участнику клуба или по личной ссылке-приглашению действующего участника. Открой афишу через бота по реф-ссылке.',
+          code: 'not_member', delivered: false,
+        });
+      }
+    }
+
     const handle = String(telegram).replace(/^@/, '').trim();
     const telegramId = verified?.id
       ? verified.id
