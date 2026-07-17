@@ -1912,7 +1912,7 @@ export default async function handler(req: any, res: any) {
               await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `✅ <b>Решено!</b> «${esc((poll as any).question)}»\n\nПобедил вариант: <b>${esc(list[winIdx])}</b> (${counts[winIdx]} из ${eligible.length}).` });
             } catch { /* no-op */ }
           }
-          if (ADMIN_CHAT_ID) await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🗳 Голосование закрыто по кворуму: «${esc((poll as any).question)}» → <b>${esc(list[winIdx])}</b>.`, reply_markup: kb([[{ text: '🔄 Обновить программу под решение', callback_data: `pprog_${pollId}` }]]) });
+          if (ADMIN_CHAT_ID) await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🗳 Голосование закрыто по кворуму: «${esc((poll as any).question)}» → <b>${esc(list[winIdx])}</b>.`, reply_markup: kb([[{ text: '🔄 Обновить программу под решение', callback_data: `pprog_${pollId}` }], [{ text: '↩️ Возобновить голосование', callback_data: `preopen_${pollId}` }]]) });
         } else {
           try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: pollKeyboard(pollId, list, counts, false) }); } catch { /* no-op */ }
         }
@@ -1938,10 +1938,37 @@ export default async function handler(req: any, res: any) {
         for (const id of eligible) {
           try { await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `✅ <b>Итог голосования</b> «${esc((poll as any).question)}»\n\nПобедил: <b>${esc(list[winIdx] || '—')}</b> (${counts[winIdx] || 0} из ${eligible.length}).` }); } catch { /* no-op */ }
         }
-        // Костяку — одним тапом обновить программу под решение.
+        // Костяку — одним тапом обновить программу под решение (или переоткрыть,
+        // если закрыли поспешно и итог не тот).
         if (ADMIN_CHAT_ID && counts[winIdx] > 0) {
-          try { await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🗳 Итог: «${esc((poll as any).question)}» → <b>${esc(list[winIdx])}</b>.`, reply_markup: kb([[{ text: '🔄 Обновить программу под решение', callback_data: `pprog_${pollId}` }]]) }); } catch { /* no-op */ }
+          try { await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🗳 Итог: «${esc((poll as any).question)}» → <b>${esc(list[winIdx])}</b>.`, reply_markup: kb([[{ text: '🔄 Обновить программу под решение', callback_data: `pprog_${pollId}` }], [{ text: '↩️ Возобновить голосование', callback_data: `preopen_${pollId}` }]]) }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+      // Возобновить закрытое голосование: сброс итога и голосов, свежая рассылка.
+      // Спасает, когда закрыли поспешно или решение изменилось.
+      if (data.startsWith('preopen_')) {
+        const pollId = Number(data.slice('preopen_'.length));
+        const { data: poll } = await supabase.from('polls').select('*').eq('id', pollId).maybeSingle();
+        if (!poll) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование не найдено' }); return res.status(200).json({ ok: true }); }
+        if (Number((poll as any).created_by) !== tgId && !(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Возобновить может автор голосования или костяк' });
+          return res.status(200).json({ ok: true });
+        }
+        const opts = (poll as any).options || {};
+        if (!opts.status || opts.status === 'open') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование и так открыто' }); return res.status(200).json({ ok: true }); }
+        // Голоса чистим: переоткрытие = переголосование с чистого листа.
+        await supabase.from('poll_votes').delete().eq('poll_id', pollId);
+        const deadline = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+        await supabase.from('polls').update({ options: { ...opts, status: 'open', winner: null }, deadline }).eq('id', pollId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Голосование возобновлено' });
+        const ev = await getEvent((poll as any).event_id);
+        const eligible = await pollEligible((poll as any).event_id);
+        for (const id of eligible) {
+          try { await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `↩️ <b>Голосование возобновлено</b> — прежний итог отменён, голосуем заново:` }); } catch { /* no-op */ }
+        }
+        await broadcastPoll(pollId, { event_id: (poll as any).event_id, question: (poll as any).question, options: { ...opts, status: 'open', winner: null } }, ev?.title || 'событие');
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `↩️ Голосование «${esc((poll as any).question)}» возобновлено: голоса сброшены, участники получили свежую рассылку. Дедлайн — через 24 часа.` });
         return res.status(200).json({ ok: true });
       }
 
@@ -2479,6 +2506,7 @@ export default async function handler(req: any, res: any) {
             .from('polls').select('id,question,options').eq('event_id', evId).order('id', { ascending: false }).limit(20);
           if (!polls?.length) { await tg('sendMessage', { chat_id: chatId, text: 'Голосований по этому событию ещё нет.' }); return res.status(200).json({ ok: true }); }
           const blocks: string[] = [];
+          const reopenRows: any[][] = [];
           for (const p of polls) {
             const o: any = (p as any).options || {};
             const list: string[] = o.list || [];
@@ -2486,8 +2514,12 @@ export default async function handler(req: any, res: any) {
             const st = o.status === 'decided' ? '✅ решено' : o.status === 'expired' ? '⌛ по времени' : '🗳 идёт';
             const lead = list.length ? list.map((opt, i) => `   ${o.winner === i ? '🏆' : '•'} ${esc(opt)}: ${counts[i] || 0}`).join('\n') : '';
             blocks.push(`<b>${esc((p as any).question)}</b> — ${st}\n   Явка: ${voters}/${eligible.length}\n${lead}`);
+            // Закрытые можно переоткрыть одним тапом (если итог закрыли поспешно).
+            if (o.status === 'decided' || o.status === 'expired') {
+              reopenRows.push([{ text: `↩️ Возобновить: ${(p as any).question}`.slice(0, 62), callback_data: `preopen_${(p as any).id}` }]);
+            }
           }
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🗳 <b>Голосования события</b> (право голоса: ${eligible.length} чел)\n\n${blocks.join('\n\n')}` });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🗳 <b>Голосования события</b> (право голоса: ${eligible.length} чел)\n\n${blocks.join('\n\n')}`, ...(reopenRows.length ? { reply_markup: kb(reopenRows.slice(0, 6)) } : {}) });
           return res.status(200).json({ ok: true });
         }
 
