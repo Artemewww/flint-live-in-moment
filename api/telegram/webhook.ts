@@ -1565,7 +1565,76 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🚗 Пока никто не заявил машину. Как появятся — вернись сюда, попросишь забрать гостя. За гостей отвечаешь ты: рассади их и договорись по посадке.' });
           return res.status(200).json({ ok: true });
         }
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 <b>Забрать твоего гостя</b>\nВыбери водителя — попрошу его подхватить гостя по пути. За гостя отвечаешь ты.', reply_markup: kb(rows) });
+        rows.unshift([{ text: '🚗 Посадить гостя в машину', callback_data: `gseat_${evId}` }]);
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👥 <b>Логистика гостей</b>\nПосади гостя в машину (займёт место) или попроси водителя забрать его по пути. За гостей отвечаешь ты.', reply_markup: kb(rows) });
+        return res.status(200).json({ ok: true });
+      }
+      // Рассадка гостей: показать машины со свободными местами + уже посаженных.
+      if (data.startsWith('gseat_')) {
+        const evId = data.slice('gseat_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: myReg } = await supabase.from('registrations').select('guest_count').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        const gc = Number((myReg as any)?.guest_count) || 0;
+        if (!gc) { await tg('sendMessage', { chat_id: chatId, text: 'У тебя нет записанных гостей.' }); return res.status(200).json({ ok: true }); }
+        const { data: cars } = await supabase.from('rides').select('id,driver_name,from_point,depart_text,seats_total,seats_taken').eq('event_id', evId).eq('active', true).neq('kind', 'tent');
+        const carIds = (cars || []).map((c: any) => c.id);
+        // Мои гости: синтетические id -(tgId*1000 + k), k=1..gc.
+        const lo = -(tgId * 1000 + gc), hi = -(tgId * 1000 + 1);
+        const { data: mine } = carIds.length
+          ? await supabase.from('ride_bookings').select('ride_id,passenger_id,passenger_name').in('ride_id', carIds).gte('passenger_id', lo).lte('passenger_id', hi)
+          : { data: [] as any[] };
+        const seatedK = new Set((mine || []).map((b: any) => -Number(b.passenger_id) - tgId * 1000));
+        const lines: string[] = (mine || []).map((b: any) => {
+          const car = (cars || []).find((c: any) => c.id === b.ride_id);
+          return `• ${esc(b.passenger_name || 'Гость')} → 🚗 ${esc(car?.driver_name || '')}`;
+        });
+        const rows: any[] = (cars || []).filter((c: any) => (c.seats_total || 0) > (c.seats_taken || 0))
+          .map((c: any) => [{ text: `🚗 ${c.driver_name || 'Водитель'} — ${Math.max(0, (c.seats_total || 0) - (c.seats_taken || 0))} мест`.slice(0, 60), callback_data: `gseatr_${c.id}` }]);
+        // Кнопки снять гостя с места.
+        for (const b of mine || []) rows.push([{ text: `❌ Снять ${(b.passenger_name || 'гостя')}`.slice(0, 55), callback_data: `gunseat_${b.ride_id}_${-Number(b.passenger_id) - tgId * 1000}` }]);
+        const remain = gc - seatedK.size;
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `🚗 <b>Рассадка гостей</b> (${seatedK.size}/${gc} посажено)\n${lines.length ? lines.join('\n') + '\n' : ''}${remain > 0 ? `\nОсталось рассадить: <b>${remain}</b>. Выбери машину:` : '\n✅ Все гости рассажены.'}`,
+          reply_markup: rows.length ? kb(rows) : undefined,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Посадить следующего нерассаженного гостя в выбранную машину.
+      if (data.startsWith('gseatr_')) {
+        const rideId = Number(data.slice('gseatr_'.length));
+        const { data: ride } = await supabase.from('rides').select('event_id,driver_id,driver_name').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Машина не найдена' }); return res.status(200).json({ ok: true }); }
+        const evId = (ride as any).event_id;
+        const { data: myReg } = await supabase.from('registrations').select('guest_count').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        const gc = Number((myReg as any)?.guest_count) || 0;
+        const { data: cars } = await supabase.from('rides').select('id').eq('event_id', evId);
+        const carIds = (cars || []).map((c: any) => c.id);
+        const lo = -(tgId * 1000 + gc), hi = -(tgId * 1000 + 1);
+        const { data: mine } = await supabase.from('ride_bookings').select('passenger_id').in('ride_id', carIds).gte('passenger_id', lo).lte('passenger_id', hi);
+        const seatedK = new Set((mine || []).map((b: any) => -Number(b.passenger_id) - tgId * 1000));
+        let k = 0; for (let i = 1; i <= gc; i++) if (!seatedK.has(i)) { k = i; break; }
+        if (!k) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Все гости уже рассажены' }); return res.status(200).json({ ok: true }); }
+        const guestPid = -(tgId * 1000 + k);
+        const name = `Гость ${k} (${cq.from.first_name || 'отв.'})`;
+        const { data: outcome } = await supabase.rpc('book_ride_seat', { p_ride_id: rideId, p_passenger: guestPid, p_name: name });
+        if (outcome !== 'ok') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: outcome === 'full' ? 'Мест нет' : 'Не вышло' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Гость посажен к ${(ride as any).driver_name || 'водителю'} ✅` });
+        try { await tg('sendMessage', { chat_id: (ride as any).driver_id, parse_mode: 'HTML', text: `👥 ${esc(cq.from.first_name || 'Участник')} посадил своего гостя в твою машину (${esc(name)}). За гостя отвечает он${cq.from.username ? ` @${esc(cq.from.username)}` : ''}.` }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Посадил <b>${esc(name)}</b> к ${esc((ride as any).driver_name || 'водителю')}. Открой «🚗 Посадить гостя» ещё раз для следующего.` });
+        return res.status(200).json({ ok: true });
+      }
+      // Снять гостя с места.
+      if (data.startsWith('gunseat_')) {
+        const rest = data.slice('gunseat_'.length);
+        const us = rest.indexOf('_');
+        const rideId = Number(rest.slice(0, us));
+        const k = Number(rest.slice(us + 1));
+        const guestPid = -(tgId * 1000 + k);
+        const { data: outcome } = await supabase.rpc('cancel_ride_seat', { p_ride_id: rideId, p_passenger: guestPid });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: outcome === 'ok' ? 'Гость снят с места' : 'Не найдено' });
+        const { data: ride } = await supabase.from('rides').select('driver_id').eq('id', rideId).maybeSingle();
+        if (ride && outcome === 'ok') { try { await tg('sendMessage', { chat_id: (ride as any).driver_id, text: `👥 ${cq.from.first_name || 'Участник'} снял своего гостя с места в твоей машине.` }); } catch { /* no-op */ } }
         return res.status(200).json({ ok: true });
       }
       if (data.startsWith('gpickr_')) {
