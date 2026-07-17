@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { handleGroupMessage, linkGroupToEvent } from './group-handler';
+import { handleGroupMessage } from './group-handler';
 import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
 
 /**
@@ -1278,8 +1278,6 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await supabase.from('events').update({ telegram_bot_url: link }).eq('id', evId);
-        // Жёсткая привязка chat_id → событие: по ней ИИ-эксперт группы находит контекст.
-        await linkGroupToEvent(chatId, evId, (cq.message?.chat as any)?.title);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Чат привязан' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
@@ -3853,17 +3851,170 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // ИИ-эксперт группы: копим историю, отвечаем ПОСЛЕ паузы в беседе
-        // (дебаунс и весь анализ — в group-handler). Telegram получает 200
-        // мгновенно, работа продолжается в фоне через waitUntil — иначе
-        // 40-секундная пауза ловила бы ретраи Telegram.
-        const bg = handleGroupMessage(msg, chatId).catch(() => { /* фон не роняет вебхук */ });
-        try {
-          const { waitUntil } = await import('@vercel/functions');
-          waitUntil(bg);
-        } catch {
-          await bg; // вне Vercel-контекста фон умер бы вместе с ответом
+        // ИИ-менеджер: анализ переписки → автоматические действия
+        // Определяем событие по чату (берём из events.telegram_bot_url)
+        const chatLink = `https://t.me/${(msg.chat as any).username || ''}`;
+        const { data: linkedEvent } = chatLink
+          ? await supabase.from('events').select('id,title,date').ilike('telegram_bot_url', `%${chatLink}%`).maybeSingle()
+          : { data: null };
+        
+        // Сохраняем историю сообщений для обучения (только участники события)
+        if (linkedEvent && msg.from?.id) {
+          const { data: isParticipant } = await supabase
+            .from('registrations')
+            .select('id')
+            .eq('event_id', (linkedEvent as any).id)
+            .eq('telegram_id', msg.from.id)
+            .neq('status', 'cancelled')
+            .maybeSingle();
+          
+          if (isParticipant) {
+            try {
+              await supabase.from('group_chat_history').insert({
+                event_id: (linkedEvent as any).id,
+                chat_id: String(chatId),
+                telegram_id: msg.from.id,
+                username: msg.from.username || null,
+                first_name: msg.from.first_name || null,
+                message_text: text.slice(0, 2000),
+                message_id: msg.message_id,
+              });
+            } catch { /* дубли по message_id — норм */ }
+          }
         }
+
+        // Триггеры для автоматических действий ИИ
+        // 1. Кто-то предлагает что-то взять/привезти → задача
+        const offerPattern = /\b(я\s+(возьму|привезу|могу\s+взять|беру)|у\s+меня\s+есть)\b/i;
+        if (linkedEvent && offerPattern.test(text) && text.length > 15) {
+          // Извлекаем предмет через ИИ
+          try {
+            const aiResp = await geminiText(
+              `Сообщение участника: "${text}"\n\nОн предлагает что-то взять/привезти. Извлеки ПРЕДМЕТ (что именно) и верни ТОЛЬКО его название (до 100 символов), без пояснений.\nЕсли не понял — верни пустую строку.`
+            );
+            const item = aiResp.trim().slice(0, 100);
+            if (item && item.length > 3) {
+              // Создаём задачу автоматом и сразу берём на участника
+              const { data: created } = await supabase
+                .from('tasks')
+                .insert({
+                  event_id: (linkedEvent as any).id,
+                  title: `${item} (${msg.from.first_name || 'участник'})`,
+                  created_by: msg.from.id,
+                  taken_by: msg.from.id,
+                  done: false,
+                })
+                .select('id')
+                .single();
+              
+              if (created) {
+                await tg('sendMessage', {
+                  chat_id: chatId,
+                  parse_mode: 'HTML',
+                  text: `✅ Отлично! Записал задачу: <b>${esc(item)}</b> — ${esc(msg.from.first_name || 'участник')} берёт.`,
+                });
+              }
+            }
+          } catch { /* ИИ недоступен — пропускаем */ }
+        }
+
+        // 2. Вопрос про логистику (машина, места, доехать) → подсказка с кнопкой
+        const logisticsPattern = /\b(машин|мест|доехать|довезти|подвезти|попутка|как\s+добраться)\b/i;
+        if (linkedEvent && logisticsPattern.test(text)) {
+          const { data: rides } = await supabase
+            .from('rides')
+            .select('driver_name,from_point,seats_total,seats_taken')
+            .eq('event_id', (linkedEvent as any).id)
+            .eq('active', true)
+            .neq('kind', 'tent');
+          
+          const freeSeats = (rides || []).reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
+          
+          if (freeSeats > 0) {
+            await tg('sendMessage', {
+              chat_id: chatId,
+              parse_mode: 'HTML',
+              text: `🚗 Есть ${freeSeats} своб. ${freeSeats === 1 ? 'место' : 'мест'} в машинах. Открой бота → Логистика и бронируй 👇`,
+              reply_markup: kb([[{ text: '🚗 Логистика и брони', callback_data: `logi_${(linkedEvent as any).id}` }]]),
+            });
+          }
+        }
+
+        // 3. Обсуждение времени/места сбора → предложение голосования
+        const votingPattern = /\b(когда\s+(выезжаем|собираемся|встречаемся)|во\s+сколько|где\s+сбор|какое\s+время)\b/i;
+        if (linkedEvent && votingPattern.test(text) && text.includes('?')) {
+          // Только если нет активных голосований по этой теме
+          const { count } = await supabase
+            .from('polls')
+            .select('id', { count: 'exact', head: true })
+            .eq('event_id', (linkedEvent as any).id)
+            .or('options->>status.eq.open,options->>status.is.null');
+          
+          if ((count || 0) === 0) {
+            await tg('sendMessage', {
+              chat_id: chatId,
+              parse_mode: 'HTML',
+              text: `🗳 Вижу вопрос про время/место. Хотите запустить голосование? Откройте бота → событие → 🗳 Голосования → Предложить своё.`,
+            });
+          }
+        }
+
+        // 4. Жалоба на проблему/нехватку чего-то → SOS организатору
+        const problemPattern = /\b(проблема|беда|не\s+хватает|забыли|потеряли|сломалось)\b/i;
+        if (linkedEvent && problemPattern.test(text)) {
+          const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', (linkedEvent as any).id).maybeSingle();
+          const orgId = (ev as any)?.deputy_id || 377551019;
+          
+          try {
+            await tg('sendMessage', {
+              chat_id: orgId,
+              parse_mode: 'HTML',
+              text: `⚠️ <b>Возможная проблема в чате</b>\n${esc((linkedEvent as any).title)}\n\n${esc(msg.from.first_name || 'Участник')}: "${esc(text.slice(0, 200))}"\n\nСтоит заглянуть в чат.`,
+            });
+          } catch { /* no-op */ }
+        }
+
+        // 5. Обучение: сохраняем паттерны решений для будущих событий
+        if (linkedEvent && text.length > 20) {
+          // ИИ извлекает действие + результат из переписки
+          const { data: recent } = await supabase
+            .from('group_chat_history')
+            .select('message_text,first_name')
+            .eq('event_id', (linkedEvent as any).id)
+            .order('created_at', { ascending: false })
+            .limit(10);
+          
+          const context = (recent || [])
+            .reverse()
+            .map((m: any) => `${m.first_name}: ${m.message_text}`)
+            .join('\n');
+          
+          // Каждые N сообщений анализируем контекст и сохраняем паттерн
+          if (recent && recent.length >= 8 && Math.random() < 0.1) {
+            try {
+              const pattern = await geminiText(
+                `Контекст переписки группы:\n${context}\n\nИзвлеки ПАТТЕРН РЕШЕНИЯ проблемы/организации (если есть):\n` +
+                `{"problem":"проблема","solution":"решение","category":"логистика|закупка|снаряжение|программа"}\n` +
+                `Если паттерна нет — верни пустую строку. Только JSON, без пояснений.`
+              );
+              
+              const match = pattern.match(/\{.*\}/s);
+              if (match) {
+                const parsed = JSON.parse(match[0]);
+                if (parsed.problem && parsed.solution) {
+                  await supabase.from('learned_patterns').insert({
+                    event_id: (linkedEvent as any).id,
+                    category: parsed.category || 'other',
+                    problem: String(parsed.problem).slice(0, 300),
+                    solution: String(parsed.solution).slice(0, 500),
+                    context_snippet: context.slice(0, 1000),
+                  });
+                }
+              }
+            } catch { /* обучение best-effort */ }
+          }
+        }
+
         return res.status(200).json({ ok: true });
       }
 
