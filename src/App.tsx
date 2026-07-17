@@ -687,6 +687,7 @@ export default function App() {
       {registeringEvent && (
         <RegistrationModal
           event={registeringEvent}
+          isMember={gatePassed}
           onClose={() => setRegisteringEvent(null)}
           onSuccess={handleRegistrationSuccess}
         />

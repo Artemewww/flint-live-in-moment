@@ -323,6 +323,27 @@ export default async function handler(req: any, res: any) {
       }
     } catch { /* синхронизация rides не критична для заявки */ }
 
+    // 2b) Регистрация из mini app (verified) → бот сразу присылает анкету:
+    // транспорт-кнопки stateless (rt:), дальше цепочка сама ведёт
+    // (места → марка/цвет → еда → гости). Единый флоу с бот-регистрацией.
+    if (BOT_TOKEN && verified?.id) {
+      try {
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: verified.id, parse_mode: 'HTML',
+            text: `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nПара быстрых уточнений для организаторов — 🚗 как добираешься?`,
+            reply_markup: { inline_keyboard: [
+              [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${eventId}:car` }],
+              [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${eventId}:carfull` }],
+              [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${eventId}:seek` }],
+              [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${eventId}:self` }],
+            ] },
+          }),
+        });
+      } catch { /* анкета догонится кроном-доборщиком */ }
+    }
+
     // 3) Уведомление организатору (best-effort, не роняет заявку).
     let delivered = false;
     if (BOT_TOKEN && ADMIN_CHAT_ID) {

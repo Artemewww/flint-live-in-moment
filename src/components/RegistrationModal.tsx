@@ -7,13 +7,15 @@ import { submitRegistration } from '../api';
 
 interface RegistrationModalProps {
   event: CommunityEvent;
+  /** Пользователь уже прошёл шлюз клуба (участник) — инвайт не спрашиваем. */
+  isMember?: boolean;
   onClose: () => void;
   onSuccess: (registration: Registration) => void;
 }
 
 const insideTg = isInsideTelegram();
 
-export default function RegistrationModal({ event, onClose, onSuccess }: RegistrationModalProps) {
+export default function RegistrationModal({ event, isMember = false, onClose, onSuccess }: RegistrationModalProps) {
   // Внутри Telegram личность известна сразу → сразу 'detected'.
   // В обычном браузере честно показываем ручную форму.
   const [sessionState, setSessionState] = useState<'scanning' | 'detected' | 'manual'>(
@@ -131,7 +133,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
   };
 
   const handleApplyAutoMatch = () => {
-    if (!inviter.trim()) {
+    if (!isMember && !inviter.trim()) {
       setError('Сообщество закрытое. Обязательно укажите, кто вас пригласил (Имя / никнейм друга или инвайт-код)');
       haptic('error');
       return;
@@ -149,7 +151,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
     setError('');
     if (!fullName.trim()) return setError('Пожалуйста, введите Ваше имя');
     if (!phone.trim()) return setError('Пожалуйста, укажите телефон для связи');
-    if (!inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
+    if (!isMember && !inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
     if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
     if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
@@ -249,7 +251,8 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                       <h4 className="font-display font-black text-white text-base uppercase">@{tgUsername}</h4>
                     </div>
 
-                    {/* REFERRAL INPUT FIELD */}
+                    {/* REFERRAL INPUT FIELD — участнику клуба не показываем: система его уже знает */}
+                    {!isMember && (
                     <div className="text-left bg-black/40 p-4 rounded-2xl border border-white/10 space-y-3">
                       <div>
                         <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5 flex items-center justify-between">
@@ -269,6 +272,7 @@ export default function RegistrationModal({ event, onClose, onSuccess }: Registr
                         </span>
                       </div>
                     </div>
+                    )}
 
                     {isClosedEvent && (
                       <div className="text-left bg-black/40 p-4 rounded-2xl border border-[#E6FD3A]/20 space-y-2">

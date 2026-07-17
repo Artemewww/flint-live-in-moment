@@ -2143,6 +2143,30 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         const labels = eventDays(ev).filter((d) => sel.includes(d.date)).map((d) => d.label).join(', ');
         await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `📅 Дни участия: <b>${esc(labels)}</b>` });
+        // Ночёвка: важна для палаток и подсчёта спальных мест («Яна и Саша без ночёвки»).
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🌙 Ночуешь в лагере?',
+          reply_markup: kb([
+            [{ text: '⛺ Да, с ночёвкой', callback_data: `ovny_${evId}` }],
+            [{ text: '🚗 Без ночёвки (уеду вечером)', callback_data: `ovnn_${evId}` }],
+          ]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Ответ про ночёвку → дальше обычная цепочка (транспорт…).
+      if (data.startsWith('ovny_') || data.startsWith('ovnn_')) {
+        const overnight = data.startsWith('ovny_');
+        const evId = data.slice(5);
+        const ev = await getEvent(evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Маркер в notes: без миграции; крон сна и админка читают его.
+        try {
+          const { data: rr } = await supabase.from('registrations').select('notes').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+          const base = String((rr as any)?.notes || '').replace(/\s*\[без ночёвки\]/g, '').trim();
+          await updateReg(evId, tgId, { notes: overnight ? (base || null) : `${base ? base + ' ' : ''}[без ночёвки]` });
+        } catch { /* no-op */ }
+        try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: overnight ? '⛺ Ночуешь в лагере — учтём в местах для сна.' : '🚗 Без ночёвки — спальное место не считаем.' }); } catch { /* no-op */ }
         await askTransport(ev);
         return res.status(200).json({ ok: true });
       }

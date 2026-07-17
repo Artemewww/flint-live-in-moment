@@ -160,7 +160,7 @@ export default async function handler(req: any, res: any) {
 
         const { data: regs } = await supabase
           .from('registrations')
-          .select('telegram_id,payment_status,dietary,equipment,roles,has_transport,guest_count')
+          .select('telegram_id,payment_status,dietary,equipment,roles,has_transport,guest_count,notes')
           .eq('event_id', (ev as any).id)
           .neq('status', 'cancelled');
 
@@ -322,7 +322,9 @@ export default async function handler(req: any, res: any) {
             .from('rides').select('seats_total')
             .eq('event_id', (ev as any).id).eq('active', true).eq('kind', 'tent');
           const beds = (tents || []).reduce((s: number, t: any) => s + (Number(t.seats_total) || 0), 0);
-          const sleepers = (regs || []).reduce((s: number, r: any) => s + 1 + (Number(r.guest_count) || 0), 0);
+          // «[без ночёвки]» в notes — не считаем спальное место (уезжают вечером).
+          const sleepers = (regs || []).reduce((s: number, r: any) =>
+            String(r.notes || '').includes('[без ночёвки]') ? s : s + 1 + (Number(r.guest_count) || 0), 0);
           if (sleepers > beds) {
             const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
             await send(Number(adminChat),
