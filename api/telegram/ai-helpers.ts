@@ -18,7 +18,7 @@ export async function quickAI(prompt: string): Promise<string> {
       config: { 
         maxOutputTokens: 256,
         temperature: 0.7,
-        thinkingConfig: { thinkingBudget: 0 } // без CoT для скорости
+        thinkingConfig: { thinkingBudget: 0 }
       }
     });
     return (resp.text || '').trim().slice(0, 500);
@@ -105,9 +105,36 @@ export async function parseShoppingPrefs(text: string): Promise<{
   }
 }
 
+/** ИИ-парсинг расхода из свободного текста: «мясо 80 бел руб» → {title, amount} */
+export async function parseExpenseAI(text: string): Promise<{title: string; amount: number} | null> {
+  const prompt =
+    `Извлеки из текста название покупки и сумму в BYN (белорусских рублях).\n` +
+    `Текст: "${text.slice(0, 300)}"\n` +
+    `Верни JSON: {"title":"название (до 50 символов)","amount":число}\n` +
+    `Если не можешь определить сумму — верни {"error":"не могу"}`;
+
+  try {
+    const resp = await ai?.models.generateContent({
+      model: 'gemini-2.0-flash-exp',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+        maxOutputTokens: 64,
+        thinkingConfig: { thinkingBudget: 0 }
+      }
+    });
+    const parsed = JSON.parse(resp?.text || '{}');
+    if (parsed && parsed.title && parsed.amount > 0) {
+      return { title: String(parsed.title).slice(0, 50), amount: Number(parsed.amount) };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /** Извлечь координаты из текста (только цифры!) */
 export function parseCoordinates(text: string): { lat?: number; lon?: number } {
-  // 53.9045, 27.5615 или 53.9045 27.5615
   const m = text.match(/(\d{1,2}\.\d{4,7})[,\s]+(\d{1,2}\.\d{4,7})/);
   if (m) return { lat: parseFloat(m[1]), lon: parseFloat(m[2]) };
   return {};
@@ -115,13 +142,11 @@ export function parseCoordinates(text: string): { lat?: number; lon?: number } {
 
 /** Извлечь время из текста */
 export function parseTime(text: string): string | null {
-  // "завтра в 9:00", "15.07 14:30", "через час"
   const patterns = [
-    /(\d{1,2}):(\d{2})/,  // 9:00
-    /(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})/, // 15.07 14:30
+    /(\d{1,2}):(\d{2})/,
+    /(\d{1,2})\.(\d{1,2})\s+(\d{1,2}):(\d{2})/,
     /(завтра|сегодня|послезавтра)/i
   ];
-  
   for (const p of patterns) {
     const m = text.match(p);
     if (m) return m[0];

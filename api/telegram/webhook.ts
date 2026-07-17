@@ -4275,15 +4275,26 @@ export default async function handler(req: any, res: any) {
         // Общий расход, шаг 1: «Мясо 45.50» → название + сумма → просим чек.
         if (sess && sess.state === 'exp_add') {
           const evId = sess.context?.evId;
-          const m = String(text).trim().match(/^(.*?)[\s—-]+(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn|руб\.?|р\.?)?$/i);
-          if (!m || !m[1].trim()) {
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Не разобрал 🙈 Напиши название и сумму одной строкой, например: <i>«Мясо 45.50»</i>' });
+          // Расширенный regexp: принимает любые форматы BYN/BYN/бел.руб/белорусских рублей/р/руб и просто число
+          const m = String(text).trim().match(/^(.*?)[\s—-]+(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn?|byr?|бел(?:орусских)?\s*руб(?:лей)?|руб\.?|р\.?)?$/i);
+          if (m && m[1].trim()) {
+            const title = m[1].trim();
+            const amount = parseFloat(m[2].replace(',', '.'));
+            await setSession(msg.from.id, 'exp_photo', { evId, title, amount });
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(title)}</b> — <b>${amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
             return res.status(200).json({ ok: true });
           }
-          const title = m[1].trim();
-          const amount = parseFloat(m[2].replace(',', '.'));
-          await setSession(msg.from.id, 'exp_photo', { evId, title, amount });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(title)}</b> — <b>${amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
+          // Fallback: пробуем ИИ-парсинг через Gemini
+          try {
+            const { parseExpenseAI } = await import('./ai-helpers');
+            const parsed = await parseExpenseAI(String(text).trim());
+            if (parsed && parsed.title && parsed.amount > 0) {
+              await setSession(msg.from.id, 'exp_photo', { evId, title: parsed.title, amount: parsed.amount });
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(parsed.title)}</b> — <b>${parsed.amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
+              return res.status(200).json({ ok: true });
+            }
+          } catch { /* ИИ недоступен — показываем ошибку */ }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Не разобрал 🙈 Напиши название и сумму одной строкой, например: <i>«Мясо 45.50»</i> или <i>«Мясо 80 бел руб»</i>' });
           return res.status(200).json({ ok: true });
         }
 
