@@ -7,6 +7,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+/** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
+function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
+  const line: any = { t: new Date().toISOString(), level, scope: 'admin/registrations', msg };
+  if (err !== undefined) line.err = err?.message || String(err);
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+}
+
 /** Начисление баллов участнику (read+update, без RPC). Best-effort. */
 async function bumpPoints(tgId: number, n: number) {
   try {
@@ -168,7 +175,7 @@ export default async function handler(req: any, res: any) {
         .order('registered_at', { ascending: false });
 
       if (error) {
-        console.error('Registrations error:', error);
+        slog('error', 'Registrations error', error);
         return res.status(500).json({ error: 'Failed to fetch registrations' });
       }
 
@@ -258,7 +265,7 @@ export default async function handler(req: any, res: any) {
         voteTally,
       });
     } catch (error) {
-      console.error('Error:', error);
+      slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
@@ -338,7 +345,7 @@ export default async function handler(req: any, res: any) {
         .single();
 
       if (fetchError || !reg) {
-        console.error('Registration not found:', fetchError);
+        slog('error', 'Registration not found', fetchError);
         return res.status(404).json({ error: 'Registration not found' });
       }
 
@@ -349,7 +356,7 @@ export default async function handler(req: any, res: any) {
         .eq('id', registrationId);
 
       if (error) {
-        console.error('Registration delete error:', error);
+        slog('error', 'Registration delete error', error);
         return res.status(500).json({ error: 'Failed to delete registration' });
       }
 
@@ -358,7 +365,7 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({ success: true });
     } catch (error) {
-      console.error('Error:', error);
+      slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
@@ -400,7 +407,7 @@ export default async function handler(req: any, res: any) {
         .single();
 
       if (error) {
-        console.error('Registration update error:', error);
+        slog('error', 'Registration update error', error);
         return res.status(500).json({ error: 'Failed to update registration' });
       }
 
@@ -430,7 +437,7 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({ success: true, registration });
     } catch (error) {
-      console.error('Error:', error);
+      slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

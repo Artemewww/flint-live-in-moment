@@ -46,6 +46,13 @@ const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 
+/** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
+function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
+  const line: any = { t: new Date().toISOString(), level, scope: 'events', msg };
+  if (err !== undefined) line.err = err?.message || String(err);
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+}
+
 /** IP клиента за прокси Vercel. Дублируется по файлам (импорт из _lib роняет функции). */
 function clientIp(req: any): string {
   const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -606,7 +613,7 @@ export default async function handler(req: any, res: any) {
         .order('date', { ascending: true });
 
       if (error) {
-        console.error('Events error:', error);
+        slog('error', 'Events error', error);
         return res.status(500).json({ error: 'Failed to fetch events' });
       }
 
@@ -621,7 +628,7 @@ export default async function handler(req: any, res: any) {
 
       return res.status(200).json({ events: withCounts.map(mapEventToCamelCase) });
     } catch (error) {
-      console.error('Error:', error);
+      slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }
@@ -739,13 +746,13 @@ export default async function handler(req: any, res: any) {
         .single();
 
       if (error) {
-        console.error('Event save error:', error);
+        slog('error', 'Event save error', error);
         return res.status(500).json({ error: 'Failed to save event', details: error.message });
       }
 
       return res.status(200).json({ success: true, event: mapEventToCamelCase(event) });
     } catch (error) {
-      console.error('Error:', error);
+      slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });
     }
   }

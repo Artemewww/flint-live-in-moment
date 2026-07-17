@@ -76,6 +76,13 @@ const supabase = createClient(
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 
+/** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
+function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
+  const line: any = { t: new Date().toISOString(), level, scope: 'register', msg };
+  if (err !== undefined) line.err = err?.message || String(err);
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+}
+
 /** IP клиента за прокси Vercel. Дублируется по файлам (импорт из _lib роняет функции). */
 function clientIp(req: any): string {
   const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -198,7 +205,7 @@ export default async function handler(req: any, res: any) {
       .single();
 
     if (memberError) {
-      console.error('Member error:', memberError);
+      slog('error', 'Member error', memberError);
       return res.status(500).json({ error: 'Failed to create member', details: memberError.message, delivered: false });
     }
 
@@ -218,7 +225,7 @@ export default async function handler(req: any, res: any) {
           await supabase.from('referrals').insert({ ref_code: body.refCode, inviter_id: inv.telegram_id, invited_id: member.telegram_id, event_id: eventId });
         }
       }
-    } catch (e) { console.error('referral bind skipped:', e); }
+    } catch (e) { slog('error', 'referral bind skipped', e); }
 
     // 2) Анти-дубль: одна активная заявка на событие от одного человека.
     const { data: existingReg } = await supabase
@@ -257,7 +264,7 @@ export default async function handler(req: any, res: any) {
       .single();
 
     if (regError) {
-      console.error('Registration error:', regError);
+      slog('error', 'Registration error', regError);
       return res.status(500).json({ error: 'Failed to create registration', details: regError.message, delivered: false });
     }
 
@@ -308,13 +315,13 @@ export default async function handler(req: any, res: any) {
         });
         delivered = (await tg.json()).ok === true;
       } catch (e) {
-        console.error('Telegram notify failed:', e);
+        slog('error', 'Telegram notify failed', e);
       }
     }
 
     return res.status(200).json({ success: true, ok: true, delivered, registration: created });
   } catch (error) {
-    console.error('Error:', error);
+    slog('error', 'Error', error);
     return res.status(500).json({ error: 'Internal server error', delivered: false });
   }
 }

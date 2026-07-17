@@ -24,6 +24,13 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+/** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
+function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
+  const line: any = { t: new Date().toISOString(), level, scope: 'profile', msg };
+  if (err !== undefined) line.err = err?.message || String(err);
+  (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+}
+
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 
@@ -1058,7 +1065,7 @@ export default async function handler(req: any, res: any) {
           });
         }
       } catch (weatherError) {
-        console.error('Weather API error:', weatherError);
+        slog('error', 'Weather API error', weatherError);
       }
 
       return res.status(200).json({
