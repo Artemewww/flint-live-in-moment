@@ -663,32 +663,52 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
-  // Мультиточечный маршрут дня приоритетнее одиночной точки.
-  const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
+  // Точки выезда и прибытия (из logistics)
+  const lg = ev?.logistics || {};
+  const pointsRow: any[] = [];
+  if (lg.assemblyPoint) {
+    const coords = lg.assemblyPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
+    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
+    pointsRow.push({ text: '🚩 Точка выезда', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.assemblyPoint)}` });
+  }
+  if (lg.arrivalPoint) {
+    const coords = lg.arrivalPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
+    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
+    pointsRow.push({ text: '🏁 Точка прибытия', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.arrivalPoint)}` });
+  }
+  if (lg.assemblyPoint || lg.arrivalPoint) {
+    pointsRow.push({ text: '📍 Переслать точки', callback_data: `sharepoints_${ev.id}` });
+    rows.push(pointsRow);
+  }
+
+  // Чат события, маршрут, программа
+  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
   const nav: any[] = [];
+  const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
   if (ev.logistics?.prep) nav.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
   if (nav.length) rows.push(nav);
 
-  // Компактная строка: статистика + логистика + оплата
+  // Статистика + логистика + оплата
   const logi: any[] = [];
   logi.push({ text: '📊 Кто', callback_data: `stats_${ev.id}` });
   if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Лог', callback_data: `logi_${ev.id}` });
   if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
   if (logi.length) rows.push(logi);
 
-  // Голосования и задачи участников.
+  // Голосования и задачи
   rows.push([
     { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
     { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
   ]);
-  // Нижние кнопки: спрос/предложение + позвать
+  // Нижние кнопки: спрос/предложение + позвать + отказаться
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
     { text: '💡', callback_data: `idea_${ev.id}` },
     { text: '📤 Позвать', callback_data: `share_${ev.id}` },
   ]);
+  rows.push([{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]);
   rows.push([openBtn]);
   return rows;
 }
