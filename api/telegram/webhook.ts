@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
+import { handleGroupMessage } from './group-handler';
+import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
 
 /**
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
