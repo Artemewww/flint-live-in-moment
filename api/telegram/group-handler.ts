@@ -252,3 +252,8 @@ export async function linkGroupToEvent(chatId: number, eventId: string, chatTitl
     active: true,
   }, { onConflict: 'chat_id' });
 }
+
+// Библиотечный модуль: прямой HTTP-вызов не предусмотрен (без этого Vercel 500-ил).
+export default async function handler(_req: any, res: any) {
+  return res.status(404).json({ error: 'Not an endpoint' });
+}

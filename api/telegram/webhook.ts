@@ -614,10 +614,19 @@ async function sendPreferencesPrompt(chatId: number) {
  * событию без координат — маршрут.
  */
 function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
-  // Уже записанному не предлагаем записаться ещё раз — показываем статус и отказ.
-  const rows: any[] = registered
-    ? [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]]
-    : [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
+  // Незаписанному — только запись и базовая информация. Рабочие инструменты
+  // (логистика/задачи/голосования/чат) открываются после регистрации.
+  if (!registered) {
+    const rows: any[] = [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
+    const nav0: any[] = [];
+    if ((ev.program || []).length) nav0.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
+    if (ev.logistics?.prep) nav0.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
+    if (nav0.length) rows.push(nav0);
+    rows.push([{ text: '📤 Позвать', callback_data: `share_${ev.id}` }]);
+    rows.push([openBtn]);
+    return rows;
+  }
+  const rows: any[] = [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]];
   // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
@@ -649,6 +658,52 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   ]);
   rows.push([openBtn]);
   return rows;
+}
+
+/**
+ * Догоняющий дайджест при /start: человек вернулся (мог блокировать бота) —
+ * добиваем всё, на что он не отреагировал: пробелы анкеты, свободные задачи,
+ * открытые голосования, где он не голосовал. Без спама: одно сообщение.
+ */
+async function sendCatchup(chatId: number, tgId: number) {
+  try {
+    const { data: regs } = await supabase
+      .from('registrations')
+      .select('event_id,dietary,equipment,roles,has_transport,status')
+      .eq('telegram_id', tgId).neq('status', 'cancelled');
+    if (!regs?.length) return;
+    const { data: evs } = await supabase
+      .from('events').select('id,title,date').eq('status', 'open')
+      .in('id', regs.map((r: any) => r.event_id)).order('date').limit(3);
+    for (const ev of evs || []) {
+      const r: any = regs.find((x: any) => x.event_id === (ev as any).id);
+      const gaps: string[] = [];
+      if (r && (r.has_transport === null || r.has_transport === undefined)) gaps.push('🚗 транспорт');
+      if (r && !r.dietary) gaps.push('🍽 питание');
+      if (r && !r.equipment) gaps.push('🎒 снаряжение');
+      const { data: freeTasks } = await supabase
+        .from('tasks').select('id,title').eq('event_id', (ev as any).id).is('taken_by', null).eq('done', false).limit(5);
+      const { data: pollsOpen } = await supabase
+        .from('polls').select('id,question,options').eq('event_id', (ev as any).id).limit(5);
+      const myVotes = new Set<number>();
+      if (pollsOpen?.length) {
+        const { data: pv } = await supabase.from('poll_votes').select('poll_id').eq('telegram_id', tgId).in('poll_id', pollsOpen.map((p: any) => p.id));
+        for (const v of pv || []) myVotes.add(Number((v as any).poll_id));
+      }
+      const openUnvoted = (pollsOpen || []).filter((p: any) => (!p.options?.status || p.options.status === 'open') && !myVotes.has(Number(p.id)));
+      if (!gaps.length && !(freeTasks || []).length && !openUnvoted.length) continue;
+      const lines: string[] = [`⚡ <b>Пока тебя не было — «${esc((ev as any).title)}»</b>`];
+      if (gaps.length) lines.push(`\n📋 Дозаполни анкету: ${gaps.join(', ')}`);
+      if ((freeTasks || []).length) lines.push(`\n🆓 Свободные задачи:\n${(freeTasks || []).map((t: any) => `• ${esc(t.title)}`).join('\n')}`);
+      if (openUnvoted.length) lines.push(`\n🗳 Ты ещё не голосовал:\n${openUnvoted.map((p: any) => `• ${esc(p.question)}`).join('\n')}`);
+      const btns: any[][] = [];
+      if (gaps.includes('🚗 транспорт')) btns.push([{ text: '🚗 Указать транспорт', callback_data: `trask_${(ev as any).id}` }]);
+      if (gaps.length) btns.push([{ text: '📋 Заполнить анкету', callback_data: `org_${(ev as any).id}` }]);
+      if ((freeTasks || []).length) btns.push([{ text: '📋 Открыть задачи', callback_data: `tasks_${(ev as any).id}` }]);
+      if (openUnvoted.length) btns.push([{ text: '🗳 Голосования', callback_data: `polls_${(ev as any).id}` }]);
+      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: lines.join('\n'), reply_markup: btns.length ? kb(btns) : undefined });
+    }
+  } catch { /* дайджест — best-effort */ }
 }
 
 // --- Закрытый клуб ---
@@ -1394,11 +1449,22 @@ export default async function handler(req: any, res: any) {
       if (data.startsWith('tasks_')) {
         const evId = data.slice('tasks_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Гейт: задачи — только для записанных на событие (и костяка).
+        const eligT = await pollEligible(evId);
+        const coreT = await isCore(tgId);
+        if (!eligT.includes(tgId) && !coreT) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📋 Задачи доступны участникам события. Сначала запишись 👇', reply_markup: kb([[{ text: '✅ Записаться', callback_data: `reg_${evId}` }]]) });
+          return res.status(200).json({ ok: true });
+        }
         const { data: tasks } = await supabase
           .from('tasks').select('id,title,taken_by,done,created_by').eq('event_id', evId).order('id', { ascending: false }).limit(15);
         const rows: any[] = [];
         for (const t of tasks || []) {
-          const st = (t as any).done ? '✅' : (t as any).taken_by ? '🙋' : '🆕';
+          const takenT = (t as any).taken_by;
+          // Видимость: свободные — всем; в работе — взявшему/автору/костяку; сделанные — костяку.
+          if ((t as any).done && !coreT) continue;
+          if (takenT && !(Number(takenT) === tgId || Number((t as any).created_by) === tgId || coreT)) continue;
+          const st = (t as any).done ? '✅' : takenT ? '🙋' : '🆕';
           rows.push([{ text: `${st} ${(t as any).title}`.slice(0, 60), callback_data: `taskshow_${(t as any).id}` }]);
         }
         rows.push([{ text: '➕ Поставить задачу', callback_data: `tasknew_${evId}` }]);
@@ -1463,10 +1529,36 @@ export default async function handler(req: any, res: any) {
           }); 
         } catch { /* no-op */ }
         
+        // Взявшему — полные детали (контакты/адрес из сырого текста): до взятия они скрыты.
+        try {
+          const { data: evT } = await supabase.from('events').select('logistics').eq('id', (t as any).event_id).maybeSingle();
+          const raw = (evT as any)?.logistics?.task_raw?.[String(taskId)];
+          if (raw && String(raw).trim() !== String((t as any).title).trim()) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `📇 <b>Детали задачи (контакты/адрес)</b>:\n${esc(String(raw))}\n\nНе сможешь — жми «↩️ Не смогу», найдём другого.`, reply_markup: kb([[{ text: '↩️ Не смогу', callback_data: `droptask_${taskId}` }]]) });
+          }
+        } catch { /* no-op */ }
         // Ставивший задачу — под контроль: узнаёт, кто взял.
         if ((t as any).created_by && Number((t as any).created_by) !== tgId) {
           try { await tg('sendMessage', { chat_id: (t as any).created_by, parse_mode: 'HTML', text: `🙋 <b>${esc(cq.from.first_name || 'Участник')}</b> взял задачу: «${esc((t as any).title)}». Отчитается, когда сделает.` }); } catch { /* no-op */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+      // Отказ взявшего: задача снова свободна → мгновенная перерассылка всем.
+      if (data.startsWith('droptask_')) {
+        const taskId = Number(data.slice('droptask_'.length));
+        const { data: t } = await supabase.from('tasks').select('*').eq('id', taskId).maybeSingle();
+        if (!t || (t as any).done) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Задача недоступна' }); return res.status(200).json({ ok: true }); }
+        if (Number((t as any).taken_by) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отказаться может тот, кто взял' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('tasks').update({ taken_by: null }).eq('id', taskId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ок, задача снова в поиске' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if ((t as any).created_by && Number((t as any).created_by) !== tgId) {
+          try { await tg('sendMessage', { chat_id: (t as any).created_by, parse_mode: 'HTML', text: `↩️ ${esc(cq.from.first_name || 'Участник')} не сможет выполнить «${esc((t as any).title)}» — ищу нового исполнителя.` }); } catch { /* no-op */ }
+        }
+        const eligD = await pollEligible((t as any).event_id);
+        await Promise.allSettled(eligD.filter((id) => id !== tgId).map((id) =>
+          tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: `📋 <b>Задача снова свободна</b>: «${esc((t as any).title)}»\nИсполнитель отпал — выручай, если можешь!`, reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]) })
+        ));
         return res.status(200).json({ ok: true });
       }
       if (data.startsWith('donetask_')) {
@@ -3684,17 +3776,24 @@ export default async function handler(req: any, res: any) {
             text: `✅ Задача поставлена${needsCar ? ' (нужен авто → разослана водителям)' : ' и разослана'}:\n<b>${esc(cleanTitle)}</b>${timeHint}\nКто возьмёт — придёт уведомление.`,
           });
 
-          for (const id of targeted) {
-            if (id === msg.from.id) continue;
-            try {
-              await tg('sendMessage', {
-                chat_id: id,
-                parse_mode: 'HTML',
-                text: `📋${carHint} <b>Задача — «${esc(ev?.title || 'событие')}»</b>\n\n${esc(cleanTitle)}${timeHint}\n\nОт: ${esc(msg.from.first_name || 'участник')}. Можешь взять?`,
-                reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]),
-              });
-            } catch { /* no-op */ }
-          }
+          // Детали (контакты/адреса из сырого текста) — только взявшему задачу.
+          // Храним в logistics.task_raw без миграции (jsonb уже есть).
+          try {
+            const logi = (ev as any)?.logistics || {};
+            const taskRaw = { ...(logi.task_raw || {}), [String(taskId)]: rawText };
+            await supabase.from('events').update({ logistics: { ...logi, task_raw: taskRaw } }).eq('id', evId);
+          } catch { /* best-effort */ }
+
+          // ПАРАЛЛЕЛЬНАЯ рассылка: последовательный цикл упирался в таймаут
+          // функции — создатель получал «поставлена», а до людей не доходило.
+          await Promise.allSettled(targeted.filter((id) => id !== msg.from.id).map((id) =>
+            tg('sendMessage', {
+              chat_id: id,
+              parse_mode: 'HTML',
+              text: `📋${carHint} <b>Задача — «${esc(ev?.title || 'событие')}»</b>\n\n${esc(cleanTitle)}${timeHint}\n\nОт: ${esc(msg.from.first_name || 'участник')}. Можешь взять?`,
+              reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]),
+            })
+          ));
           return res.status(200).json({ ok: true });
         }
 
@@ -4091,6 +4190,8 @@ export default async function handler(req: any, res: any) {
         // Приветствие + открытые события кнопками (со сроком до старта).
         await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
+        // Догоняем вернувшегося: анкета/задачи/голосования, где нет его реакции.
+        await sendCatchup(chatId, msg.from.id);
         return res.status(200).json({ ok: true });
       }
 
