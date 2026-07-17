@@ -485,15 +485,17 @@ function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
  * нагрузки, логистика переехала внутрь карточки события (кнопка там есть).
  * Старые тексты кнопок продолжаем понимать — клавиатура у людей кешируется.
  */
-function mainMenu() {
+function mainMenu(admin = false) {
   // UX: 2×2, высокочастотное сверху. «Мои события» (мои брони/логистика) —
   // самое частое; «Все события» — обзор афиши; профиль/помощь — редкие.
-  // Отдельно живёт web-кнопка «Афиша» (mini-app) — тексты не дублируем.
+  // Костяку — третий ряд с быстрым входом в панель организатора.
+  const rows: any[] = [
+    [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
+    [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
+  ];
+  if (admin) rows.push([{ text: '⚙️ Панель организатора' }]);
   return {
-    keyboard: [
-      [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
-      [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
-    ],
+    keyboard: rows,
     resize_keyboard: true,
     is_persistent: true,
   };
@@ -658,6 +660,74 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   ]);
   rows.push([openBtn]);
   return rows;
+}
+
+/**
+ * Создание задачи из свободного текста (надиктовка с ошибками — ок):
+ * ИИ даёт публичную формулировку БЕЗ контактов/адресов (их получит только
+ * взявший), теги (авто/время) и при нехватке данных — один уточняющий вопрос.
+ */
+async function createTaskFlow(evId: string, from: any, chatId: number, rawText: string, allowClarify: boolean) {
+  let cleanTitle = rawText.slice(0, 200);
+  let needsCar = false;
+  let targetTime = '';
+  let clarify = '';
+  try {
+    const aiResp = await geminiText(
+      `Участник клуба надиктовал задачу (возможны ошибки распознавания): "${rawText}"\n\n` +
+      `Верни СТРОГО JSON без пояснений:\n` +
+      `{"title":"публичная формулировка задачи: грамотно, кратко (до 140 симв.), БЕЗ телефонов, БЕЗ точных адресов и имён контактов — их увидит только исполнитель",` +
+      `"needs_car":true/false (нужен автомобиль: забрать/отвезти/привезти),` +
+      `"time":"когда нужно, если указано, иначе пустая строка",` +
+      `"clarify":"ОДИН уточняющий вопрос, только если критично не хватает данных для исполнителя (откуда забрать / куда привезти / когда), иначе пустая строка"}`
+    );
+    const match = aiResp.match(/\{[\s\S]*\}/);
+    if (match) {
+      const parsed = JSON.parse(match[0]);
+      if (parsed.title) cleanTitle = String(parsed.title).slice(0, 200);
+      needsCar = !!parsed.needs_car;
+      targetTime = String(parsed.time || '').slice(0, 80);
+      clarify = String(parsed.clarify || '').slice(0, 200);
+    }
+  } catch { /* fallback: сырой текст */ }
+
+  if (allowClarify && clarify) {
+    await setSession(from.id, 'task_clarify', { evId, raw: rawText });
+    await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🤔 Уточни, чтобы исполнитель сразу всё понял:\n<b>${esc(clarify)}</b>\n\n<i>Ответь одним сообщением (или напиши «-», чтобы пропустить).</i>` });
+    return;
+  }
+
+  const ev = await getEvent(evId);
+  const { data: created } = await supabase
+    .from('tasks').insert({ event_id: evId, title: cleanTitle, created_by: from.id, done: false }).select('id').single();
+  if (!created) { await tg('sendMessage', { chat_id: chatId, text: 'Не удалось создать задачу.' }); return; }
+  const taskId = (created as any).id;
+  try {
+    const logi = (ev as any)?.logistics || {};
+    const taskRaw = { ...(logi.task_raw || {}), [String(taskId)]: rawText };
+    await supabase.from('events').update({ logistics: { ...logi, task_raw: taskRaw } }).eq('id', evId);
+  } catch { /* best-effort */ }
+  const eligible = await pollEligible(evId);
+  let targeted: number[] = eligible;
+  if (needsCar) {
+    const { data: regs } = await supabase
+      .from('registrations').select('telegram_id').eq('event_id', evId).eq('has_transport', true).neq('status', 'cancelled');
+    const drivers = new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter(Boolean));
+    if (drivers.size > 0) targeted = eligible.filter((id) => drivers.has(id));
+  }
+  const timeHint = targetTime ? `\n⏰ ${esc(targetTime)}` : '';
+  const carHint = needsCar ? ' 🚗' : '';
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: `✅ Задача поставлена${needsCar ? ' (нужен авто → разослана водителям)' : ' и разослана'}:\n<b>${esc(cleanTitle)}</b>${timeHint}\nКто возьмёт — придёт уведомление, детали и контакты получит только исполнитель.`,
+  });
+  await Promise.allSettled(targeted.filter((id) => id !== from.id).map((id) =>
+    tg('sendMessage', {
+      chat_id: id, parse_mode: 'HTML',
+      text: `📋${carHint} <b>Задача — «${esc(ev?.title || 'событие')}»</b>\n\n${esc(cleanTitle)}${timeHint}\n\nОт: ${esc(from.first_name || 'участник')}. Можешь взять?`,
+      reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]),
+    })
+  ));
 }
 
 /**
@@ -1523,7 +1593,8 @@ export default async function handler(req: any, res: any) {
             reply_markup: { 
               inline_keyboard: [
                 [{ text: '✅ Сделано', callback_data: `donetask_${taskId}` }],
-                [{ text: '📅 В календарь', url: calUrl }]
+                [{ text: '📅 В календарь', url: calUrl }],
+                [{ text: '↩️ Не смогу — верните в поиск', callback_data: `droptask_${taskId}` }]
               ] 
             } 
           }); 
@@ -3723,77 +3794,17 @@ export default async function handler(req: any, res: any) {
           await clearSession(msg.from.id);
           const rawText = String(text).trim().slice(0, 800);
           if (!rawText) { await tg('sendMessage', { chat_id: chatId, text: 'Пустая задача — опиши, что нужно сделать.' }); return res.status(200).json({ ok: true }); }
-          
-          // ИИ причёсывает формулировку + извлекает теги (авто/время/навыки).
-          let cleanTitle = rawText.slice(0, 200);
-          let needsCar = false;
-          let targetTime = '';
-          try {
-            const aiResp = await geminiText(
-              `Задача участника: "${rawText}"\n\n` +
-              `Сделай:\n` +
-              `1. Причеши формулировку (понятно, кратко, по делу, до 150 символов).\n` +
-              `2. Извлеки ТЕГИ:\n` +
-              `   - needs_car: true/false (нужен автомобиль: забрать/отвезти/увезти)\n` +
-              `   - time: "время" если указано (завтра 9:00, в пятницу, до субботы и т.п.) или пусто\n\n` +
-              `Ответь ТОЛЬКО JSON: {"title":"...","needs_car":true/false,"time":"..."}\n` +
-              `Никаких пояснений, только JSON.`
-            );
-            const match = aiResp.match(/\{.*\}/s);
-            if (match) {
-              const parsed = JSON.parse(match[0]);
-              if (parsed.title) cleanTitle = String(parsed.title).slice(0, 200);
-              needsCar = !!parsed.needs_car;
-              targetTime = String(parsed.time || '').slice(0, 80);
-            }
-          } catch { /* используем исходный текст */ }
+          await createTaskFlow(evId, msg.from, chatId, rawText, true);
+          return res.status(200).json({ ok: true });
+        }
 
-          const ev = await getEvent(evId);
-          const { data: created } = await supabase
-            .from('tasks').insert({ event_id: evId, title: cleanTitle, created_by: msg.from.id, done: false }).select('id').single();
-          if (!created) { await tg('sendMessage', { chat_id: chatId, text: 'Не удалось создать задачу.' }); return res.status(200).json({ ok: true }); }
-          const taskId = (created as any).id;
-
-          // Умная рассылка: авто → только водителям, время → в тексте.
-          const eligible = await pollEligible(evId);
-          let targeted: number[] = eligible;
-          if (needsCar) {
-            const { data: regs } = await supabase
-              .from('registrations')
-              .select('telegram_id')
-              .eq('event_id', evId)
-              .eq('has_transport', true)
-              .neq('status', 'cancelled');
-            const drivers = new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter(Boolean));
-            if (drivers.size > 0) targeted = eligible.filter((id) => drivers.has(id));
-          }
-
-          const timeHint = targetTime ? `\n⏰ ${esc(targetTime)}` : '';
-          const carHint = needsCar ? ' 🚗' : '';
-          await tg('sendMessage', {
-            chat_id: chatId,
-            parse_mode: 'HTML',
-            text: `✅ Задача поставлена${needsCar ? ' (нужен авто → разослана водителям)' : ' и разослана'}:\n<b>${esc(cleanTitle)}</b>${timeHint}\nКто возьмёт — придёт уведомление.`,
-          });
-
-          // Детали (контакты/адреса из сырого текста) — только взявшему задачу.
-          // Храним в logistics.task_raw без миграции (jsonb уже есть).
-          try {
-            const logi = (ev as any)?.logistics || {};
-            const taskRaw = { ...(logi.task_raw || {}), [String(taskId)]: rawText };
-            await supabase.from('events').update({ logistics: { ...logi, task_raw: taskRaw } }).eq('id', evId);
-          } catch { /* best-effort */ }
-
-          // ПАРАЛЛЕЛЬНАЯ рассылка: последовательный цикл упирался в таймаут
-          // функции — создатель получал «поставлена», а до людей не доходило.
-          await Promise.allSettled(targeted.filter((id) => id !== msg.from.id).map((id) =>
-            tg('sendMessage', {
-              chat_id: id,
-              parse_mode: 'HTML',
-              text: `📋${carHint} <b>Задача — «${esc(ev?.title || 'событие')}»</b>\n\n${esc(cleanTitle)}${timeHint}\n\nОт: ${esc(msg.from.first_name || 'участник')}. Можешь взять?`,
-              reply_markup: kb([[{ text: '🙋 Беру в работу', callback_data: `taketask_${taskId}` }]]),
-            })
-          ));
+        // Ответ на уточняющий вопрос ИИ → создаём задачу с полными данными.
+        if (sess && sess.state === 'task_clarify') {
+          const { evId, raw } = sess.context || {};
+          await clearSession(msg.from.id);
+          const extra = String(text).trim();
+          const full = extra && extra !== '-' ? `${raw}\nУточнение: ${extra}` : String(raw || '');
+          await createTaskFlow(evId, msg.from, chatId, full.slice(0, 1000), false);
           return res.status(200).json({ ok: true });
         }
 
@@ -4068,6 +4079,16 @@ export default async function handler(req: any, res: any) {
 
         // Постоянное меню внизу чата (новая структура по UX-аудиту).
         // Старые тексты кнопок тоже понимаем — клавиатура у людей кешируется.
+        if (text === '⚙️ Панель организатора') {
+          if (!(await isCore(msg.from.id))) { await tg('sendMessage', { chat_id: chatId, text: 'Только для костяка клуба.' }); return res.status(200).json({ ok: true }); }
+          const { data: evsA } = await supabase.from('events').select('id,title,date').eq('status', 'open').order('date').limit(8);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '⚙️ <b>Панель организатора</b>\nВыбери событие:',
+            reply_markup: kb((evsA || []).map((e: any) => [{ text: `${e.title} · ${e.date}`, callback_data: `adm_${e.id}` }])),
+          });
+          return res.status(200).json({ ok: true });
+        }
         if (text === '🏠 Главная') {
           await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
           return res.status(200).json({ ok: true });
@@ -4104,6 +4125,14 @@ export default async function handler(req: any, res: any) {
       }
 
       if (text.startsWith('/start')) {
+        // Кнопка «Афиша» (web_app) — только участникам клуба; остальным прячем,
+        // чтобы не было обхода заявки через мини-апп.
+        try {
+          const approvedNow = await isApproved(msg.from.id);
+          await tg('setChatMenuButton', approvedNow
+            ? { chat_id: chatId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }
+            : { chat_id: chatId, menu_button: { type: 'default' } });
+        } catch { /* no-op */ }
         // /start всегда обрывает недоделанный диалог. Иначе человек, начавший
         // заявку поездки и ушедший, потом получает «Когда выезжаешь?» на ровном месте.
         await clearSession(msg.from.id);
@@ -4183,13 +4212,13 @@ export default async function handler(req: any, res: any) {
               text: eventCard(ev),
               reply_markup: kb(eventCardButtons(ev, openBtn, registered)),
             });
-            await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
+            await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(msg.from.id)) });
             return res.status(200).json({ ok: true });
           }
         }
         // Приветствие + открытые события кнопками (со сроком до старта).
         await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
-        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu() });
+        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(msg.from.id)) });
         // Догоняем вернувшегося: анкета/задачи/голосования, где нет его реакции.
         await sendCatchup(chatId, msg.from.id);
         return res.status(200).json({ ok: true });

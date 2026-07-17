@@ -284,7 +284,7 @@ export default async function handler(req: any, res: any) {
       const target = dayOffset(h.days);
       const { data: events } = await supabase
         .from('events')
-        .select('id,title,date,date_end,date_label,location,price_type,notifications,status,logistics,shopping')
+        .select('id,title,date,date_end,date_label,location,price_type,notifications,status,logistics,shopping,coordinates_lat,coordinates_lng')
         .eq('date', target)
         .eq('status', 'open');
 
@@ -465,6 +465,24 @@ export default async function handler(req: any, res: any) {
               `🛌 <b>Дефицит мест для сна — «${esc((ev as any).title)}»</b>\n\n` +
                 `Людей (с гостями): <b>${sleepers}</b>, заявленных мест в палатках: <b>${beds}</b>.\n` +
                 `Не хватает: <b>${sleepers - beds}</b>. Попроси участников заявить палатки («⛺ Своя палатка» в логистике) или продумай сон в машинах.`);
+          }
+        }
+
+        // За 1 день: дальний выезд (>30 км от Минска) колонной — организатор
+        // обязан задать точку и время сбора колонны. Не задал — пинг.
+        if (h.days === 1) {
+          const lat = Number((ev as any).coordinates_lat), lng = Number((ev as any).coordinates_lng);
+          if (Number.isFinite(lat) && Number.isFinite(lng)) {
+            const R = 6371, dLat = (lat - 53.9045) * Math.PI / 180, dLng = (lng - 27.5615) * Math.PI / 180;
+            const a = Math.sin(dLat / 2) ** 2 + Math.cos(53.9045 * Math.PI / 180) * Math.cos(lat * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+            const distKm = 2 * R * Math.asin(Math.sqrt(a));
+            const lg = (ev as any).logistics || {};
+            if (distKm > 30 && !lg.assemblyPoint) {
+              const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+              await send(Number(adminChat),
+                `🧭 <b>Нет точки сбора колонны — «${esc((ev as any).title)}»</b>\n\n` +
+                  `Выезд дальний (~${Math.round(distKm)} км): задай в админке (Логистика) точку сбора на выезде из Минска (координаты) и время — встретимся, познакомимся и стартуем колонной.`);
+            }
           }
         }
 
