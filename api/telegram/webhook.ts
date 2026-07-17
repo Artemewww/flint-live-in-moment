@@ -2446,21 +2446,17 @@ export default async function handler(req: any, res: any) {
         if (kind === 'payd') {
           // Только сам должник может отметить перевод.
           if (Number(t.from) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это не твой долг' }); return res.status(200).json({ ok: true }); }
-          t.status = 'sent'; t.sent_at = new Date().toISOString();
-          await saveSplit();
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отметил! Ждём подтверждения получателя' });
-          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
-          // Подтверждает ТОТ, КОМУ должны — до его «Получил» долг висит.
-          try {
-            await tg('sendMessage', {
-              chat_id: Number(t.to), parse_mode: 'HTML',
-              text: `💸 <b>${esc(t.from_name)}</b> отметил перевод <b>${t.amount} BYN</b> тебе (событие «${esc((evRow as any)?.title || '')}»).\nПроверь и подтверди получение.`,
-              reply_markup: kb([[
-                { text: '✅ Получил', callback_data: `payc_${evId}_${trId}` },
-                { text: '❌ Не получал', callback_data: `payx_${evId}_${trId}` },
-              ]]),
-            });
-          } catch { /* получатель мог не открыть бота */ }
+          // Просим скриншот перевода вместо простого нажатия.
+          await setSession(tgId, 'pay_proof', { evId, trId, from_name: t.from_name, to_name: t.to_name, amount: t.amount });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пришли скриншот перевода' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '📸 <b>Пришли скриншот перевода</b> (фото или скриншот из банка/приложения).\n\n' +
+              `Перевод: <b>${t.amount} BYN</b>\n` +
+              `Кому: <b>${esc(t.to_name)}</b>\n` +
+              `Событие: ${esc((evRow as any)?.title || '')}\n\n` +
+              'Получатель увидит твой скриншот и подтвердит получение.',
+          });
           return res.status(200).json({ ok: true });
         }
         // Подтверждение/отклонение — только получатель.
@@ -3578,6 +3574,52 @@ export default async function handler(req: any, res: any) {
         });
         return res.status(200).json({ ok: true });
       }
+      // Подтверждение перевода скриншотом: сохраняем фото и показываем получателю.
+      if (sess?.state === 'pay_proof' && sess.context?.evId && msg.photo) {
+        const { evId, trId, from_name, to_name, amount } = sess.context;
+        const ph = Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null;
+        const fileId = ph?.file_id || null;
+        await clearSession(msg.from.id);
+        // Обновляем статус перевода на "sent" и сохраняем фото.
+        try {
+          const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+          const shopping = (evRow as any)?.shopping || {};
+          const split = shopping.split || {};
+          const transfers: any[] = Array.isArray(split.transfers) ? split.transfers : [];
+          const t = transfers.find((x: any) => String(x.id) === trId);
+          if (t) {
+            t.status = 'sent';
+            t.sent_at = new Date().toISOString();
+            t.proof_photo = fileId;
+            await supabase.from('events').update({ shopping: { ...shopping, split: { ...split, transfers } } }).eq('id', evId);
+          }
+        } catch { /* no-op */ }
+        await tg('answerCallbackQuery', { callback_query_id: '', text: 'Скриншот отправлен' });
+        await tg('sendMessage', {
+          chat_id: msg.chat.id, parse_mode: 'HTML',
+          text: `✅ <b>Скриншот перевода отправлен</b> ${esc(to_name)} на проверку.\n\nПеревод: <b>${amount} BYN</b>\nСобытие: ${esc((await getEvent(evId))?.title || evId)}\n\nПолучатель подтвердит получение.`,
+        });
+        // Отправляем получателю скриншот с кнопками подтверждения.
+        try {
+          const { data: evRow2 } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+          const shopping2 = (evRow2 as any)?.shopping || {};
+          const split2 = shopping2.split || {};
+          const transfers2: any[] = Array.isArray(split2.transfers) ? split2.transfers : [];
+          const t2 = transfers2.find((x: any) => String(x.id) === trId);
+          if (t2) {
+            const caption =
+              `💸 <b>${esc(from_name)}</b> отправил(а) тебе <b>${amount} BYN</b> (событие «${esc((evRow2 as any)?.title || '')}»).\n\n` +
+              `Проверь скриншот и подтверди получение.`;
+            const markup = kb([[
+              { text: '✅ Получил', callback_data: `payc_${evId}_${trId}` },
+              { text: '❌ Не получал', callback_data: `payx_${evId}_${trId}` },
+            ]]);
+            if (fileId) await tg('sendPhoto', { chat_id: Number(t2.to), photo: fileId, parse_mode: 'HTML', caption, reply_markup: markup });
+            else await tg('sendMessage', { chat_id: Number(t2.to), parse_mode: 'HTML', text: caption, reply_markup: markup });
+          }
+        } catch { /* получатель мог не открыть бота */ }
+        return res.status(200).json({ ok: true });
+      }
       if (sess?.state === 'media_upload' && sess.context?.eventId) {
         const evId = String(sess.context.eventId);
         const src = msg.video || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null);
@@ -4272,40 +4314,50 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Общий расход, шаг 1: «Мясо 45.50» → название + сумма → просим чек.
+        // Общий расход, шаг 1: парсим текст → [{title, amount}]
         if (sess && sess.state === 'exp_add') {
           const evId = sess.context?.evId;
-          // Расширенный regexp: принимает любые форматы BYN/BYN/бел.руб/белорусских рублей/р/руб и просто число
-          const m = String(text).trim().match(/^(.*?)[\s—-]+(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn?|byr?|бел(?:орусских)?\s*руб(?:лей)?|руб\.?|р\.?)?$/i);
-          if (m && m[1].trim()) {
-            const title = m[1].trim();
-            const amount = parseFloat(m[2].replace(',', '.'));
-            await setSession(msg.from.id, 'exp_photo', { evId, title, amount });
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(title)}</b> — <b>${amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
-            return res.status(200).json({ ok: true });
-          }
-          // Fallback: пробуем ИИ-парсинг через Gemini (поддерживает несколько покупок в одном сообщении)
+          const raw = String(text).trim();
+          // Сначала пробуем ИИ — он лучше всего разбирает свободный текст
+          let items: Array<{title: string; amount: number}> = [];
           try {
             const { parseExpenseAI } = await import('./ai-helpers');
-            const items = await parseExpenseAI(String(text).trim());
-            if (items && items.length > 0) {
-              // Если одна покупка — обычный флоу с фото чека
-              if (items.length === 1) {
-                await setSession(msg.from.id, 'exp_photo', { evId, title: items[0].title, amount: items[0].amount });
-                await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(items[0].title)}</b> — <b>${items[0].amount} BYN</b>. Теперь пришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
-                return res.status(200).json({ ok: true });
+            const aiItems = await parseExpenseAI(raw);
+            if (aiItems && aiItems.length > 0) {
+              items = aiItems;
+            }
+          } catch { /* ИИ недоступен — fallback на regex */ }
+          // Если ИИ не сработал — пробуем простой regex
+          if (items.length === 0) {
+            const regex = /([A-Za-zА-Яа-яЁё0-9\s\-]+?)\s*[—-]\s*(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn?|byr?|бел(?:орусских)?\s*руб(?:лей)?|руб\.?|р\.?)?/gi;
+            let match;
+            while ((match = regex.exec(raw)) !== null) {
+              const title = match[1].trim();
+              const amount = parseFloat(match[2].replace(',', '.'));
+              if (title && amount > 0 && /[a-zA-Zа-яё]/i.test(title) && title.length > 1) {
+                items.push({ title: title.slice(0, 50), amount });
               }
-              // Если несколько — сохраняем все сразу без фото
-              for (const item of items) {
-                await saveAndBroadcastExpense(evId, msg.from, item.title, item.amount, null);
-              }
-              const summary = items.map(i => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
-              const total = items.reduce((s: number, i: any) => s + i.amount, 0);
-              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} расхода сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+            }
+          }
+          // Если нашли хотя бы одну позицию
+          if (items.length > 0) {
+            if (items.length === 1) {
+              // Одна позиция — обычный флоу с фото чека
+              await setSession(msg.from.id, 'exp_photo', { evId, title: items[0].title, amount: items[0].amount });
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💸 <b>${esc(items[0].title)}</b> — <b>${items[0].amount} BYN</b>.\n\nПришли фото чека или скрин переписки с ценой — его увидят все.\nНет чека — напиши «без чека».` });
               return res.status(200).json({ ok: true });
             }
-          } catch { /* ИИ недоступен — показываем ошибку */ }
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Не разобрал 🙈 Напиши название и сумму одной строкой, например: <i>«Мясо 45.50»</i> или <i>«Мясо 80 бел руб»</i>' });
+            // Несколько позиций — сохраняем все сразу без фото
+            for (const item of items) {
+              await saveAndBroadcastExpense(evId, msg.from, item.title, item.amount, null);
+            }
+            const summary = items.map(i => `• ${esc(i.title)} — <b>${i.amount} BYN</b>`).join('\n');
+            const total = items.reduce((s: number, i: any) => s + i.amount, 0);
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>${items.length} позиций сохранены и разосланы:</b>\n\n${summary}\n\nИтого: <b>${total} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+            return res.status(200).json({ ok: true });
+          }
+          // Ничего не нашли — показываем примеры
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Не разобрал 🙈\n\n<b>Формат:</b> <i>название — сумма</i>\n\nПримеры:\n• Мясо — 80 BYN\n• Маршмелоу — 18 BYN\n• Огурцы 1 кг — 5 BYN\n• Угли — 18 бел руб\n\nМожно несколько позиций в одном сообщении:\n• Мясо — 80, маршмелоу — 18, огурцы — 5 BYN' });
           return res.status(200).json({ ok: true });
         }
 
