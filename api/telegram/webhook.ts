@@ -646,6 +646,18 @@ async function sendPreferencesPrompt(chatId: number) {
  * интеллектуальному клубу не нужна логистика, бесплатному — оплата,
  * событию без координат — маршрут.
  */
+/** Координаты «lat, lon» из свободного текста точки (или null). */
+function pointCoords(s: string): string | null {
+  const m = String(s || '').match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
+  return m ? `${m[1].replace(',', '.')},${m[2].replace(',', '.')}` : null;
+}
+
+/** Ссылка на Яндекс.Карты: по координатам, иначе поиском по тексту. */
+function pointMapUrl(s: string): string {
+  const c = pointCoords(s);
+  return c ? `https://yandex.ru/maps/?text=${c}` : `https://yandex.ru/maps/?text=${encodeURIComponent(String(s).slice(0, 80))}`;
+}
+
 function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Незаписанному — только запись и базовая информация. Рабочие инструменты
   // (логистика/задачи/голосования/чат) открываются после регистрации.
@@ -666,23 +678,14 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Точки выезда и прибытия (из logistics)
   const lg = ev?.logistics || {};
   const pointsRow: any[] = [];
-  if (lg.assemblyPoint) {
-    const coords = lg.assemblyPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
-    pointsRow.push({ text: '🚩 Точка выезда', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.assemblyPoint)}` });
-  }
-  if (lg.arrivalPoint) {
-    const coords = lg.arrivalPoint.match(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/);
-    const mapUrl = coords ? `https://yandex.ru/maps/?text=${coords[1].replace(',', '.')},${coords[2].replace(',', '.')}` : null;
-    pointsRow.push({ text: '🏁 Точка прибытия', url: mapUrl || `https://yandex.ru/maps/?text=${encodeURIComponent(lg.arrivalPoint)}` });
-  }
+  if (lg.assemblyPoint) pointsRow.push({ text: '🚩 Точка выезда', url: pointMapUrl(lg.assemblyPoint) });
+  if (lg.arrivalPoint) pointsRow.push({ text: '🏁 Точка прибытия', url: pointMapUrl(lg.arrivalPoint) });
   if (lg.assemblyPoint || lg.arrivalPoint) {
     pointsRow.push({ text: '📍 Переслать точки', callback_data: `sharepoints_${ev.id}` });
     rows.push(pointsRow);
   }
 
-  // Чат события, маршрут, программа
-  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
+  // Маршрут, программа
   const nav: any[] = [];
   const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
   if (route) nav.push({ text: '🧭 Маршрут', url: route });
@@ -1298,6 +1301,14 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await supabase.from('events').update({ telegram_bot_url: link }).eq('id', evId);
+        // Жёсткая привязка chat_id → событие: по ней ИИ-менеджер группы находит контекст
+        // (у закрытых групп нет username, искать через telegram_bot_url нельзя).
+        try {
+          await supabase.from('event_groups').upsert(
+            { event_id: evId, chat_id: chatId, chat_title: (cq.message?.chat as any)?.title || null, active: true },
+            { onConflict: 'chat_id' }
+          );
+        } catch { /* best-effort */ }
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Чат привязан' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
@@ -1993,6 +2004,31 @@ export default async function handler(req: any, res: any) {
       }
 
       // Просмотр расходов — доступен любому участнику (не только админу).
+      // Точки дня (выезд/прибытие) — venue-сообщения, их можно переслать в любой чат.
+      if (data.startsWith('sharepoints_')) {
+        const evIdP = data.slice('sharepoints_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const evP = await getEvent(evIdP);
+        const lgP: any = (evP as any)?.logistics || {};
+        const pts = [
+          { label: '🚩 Точка выезда — сбор колонны', val: lgP.assemblyPoint || '', extra: lgP.departureTime || '' },
+          { label: '🏁 Точка прибытия', val: lgP.arrivalPoint || '', extra: '' },
+        ].filter((p) => p.val);
+        if (!pts.length) { await tg('sendMessage', { chat_id: chatId, text: 'Точки ещё не заданы.' }); return res.status(200).json({ ok: true }); }
+        for (const p of pts) {
+          const c = pointCoords(p.val);
+          try {
+            if (c) {
+              const [lat, lon] = c.split(',');
+              await tg('sendVenue', { chat_id: chatId, latitude: Number(lat), longitude: Number(lon), title: p.label.slice(0, 60), address: `${p.val}${p.extra ? ` · ${p.extra}` : ''}`.slice(0, 120) });
+            } else {
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `${p.label}\n${esc(p.val)}${p.extra ? `\n⏰ ${esc(p.extra)}` : ''}`, reply_markup: kb([[{ text: '🗺 Открыть карту', url: pointMapUrl(p.val) }]]) });
+            }
+          } catch { /* заблокировал бота — не критично */ }
+        }
+        await tg('sendMessage', { chat_id: chatId, text: 'Эти сообщения можно переслать в любой чат 📤' });
+        return res.status(200).json({ ok: true });
+      }
       if (data.startsWith('expview_')) {
         const evId = data.slice('expview_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -3871,12 +3907,25 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // ИИ-менеджер: анализ переписки → автоматические действия
-        // Определяем событие по чату (берём из events.telegram_bot_url)
-        const chatLink = `https://t.me/${(msg.chat as any).username || ''}`;
-        const { data: linkedEvent } = chatLink
-          ? await supabase.from('events').select('id,title,date').ilike('telegram_bot_url', `%${chatLink}%`).maybeSingle()
-          : { data: null };
+        // ИИ-менеджер: анализ переписки → автоматические действия.
+        // Определяем событие по чату: сначала жёсткая привязка event_groups
+        // (ставится через /link), затем фолбэк по username чата — у ЗАКРЫТЫХ
+        // групп (обычный случай) username нет, поэтому старый способ почти
+        // всегда давал null и ИИ-менеджер молчал во всех приватных группах.
+        const { data: eventGroupLink } = await supabase
+          .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+        let linkedEvent: any = null;
+        if (eventGroupLink) {
+          const { data } = await supabase.from('events').select('id,title,date').eq('id', (eventGroupLink as any).event_id).maybeSingle();
+          linkedEvent = data;
+        } else {
+          const chatUsername = (msg.chat as any).username;
+          if (chatUsername) {
+            const chatLink = `https://t.me/${chatUsername}`;
+            const { data } = await supabase.from('events').select('id,title,date').ilike('telegram_bot_url', `%${chatLink}%`).maybeSingle();
+            linkedEvent = data;
+          }
+        }
         
         // Сохраняем историю сообщений для обучения (только участники события)
         if (linkedEvent && msg.from?.id) {
@@ -3905,7 +3954,10 @@ export default async function handler(req: any, res: any) {
 
         // Триггеры для автоматических действий ИИ
         // 1. Кто-то предлагает что-то взять/привезти → задача
-        const offerPattern = /\b(я\s+(возьму|привезу|могу\s+взять|беру)|у\s+меня\s+есть)\b/i;
+        // \b в JS не распознаёт кириллицу как «словесный» символ — со старым \b
+        // все 4 паттерна ниже НИКОГДА не матчились на русском тексте, и ИИ-менеджер
+        // в группе молчал всегда, а не только сегодня ночью. Фикс: лукбихайнд по латинице/кириллице.
+        const offerPattern = /(?<![а-яёa-z])(я\s+(возьму|привезу|могу\s+взять|беру)|у\s+меня\s+есть)/i;
         if (linkedEvent && offerPattern.test(text) && text.length > 15) {
           // Извлекаем предмет через ИИ
           try {
@@ -3939,7 +3991,7 @@ export default async function handler(req: any, res: any) {
         }
 
         // 2. Вопрос про логистику (машина, места, доехать) → подсказка с кнопкой
-        const logisticsPattern = /\b(машин|мест|доехать|довезти|подвезти|попутка|как\s+добраться)\b/i;
+        const logisticsPattern = /(?<![а-яёa-z])(машин|мест|доехать|довезти|подвезти|попутка|как\s+добраться)/i;
         if (linkedEvent && logisticsPattern.test(text)) {
           const { data: rides } = await supabase
             .from('rides')
@@ -3961,7 +4013,7 @@ export default async function handler(req: any, res: any) {
         }
 
         // 3. Обсуждение времени/места сбора → предложение голосования
-        const votingPattern = /\b(когда\s+(выезжаем|собираемся|встречаемся)|во\s+сколько|где\s+сбор|какое\s+время)\b/i;
+        const votingPattern = /(?<![а-яёa-z])(когда\s+(выезжаем|собираемся|встречаемся)|во\s+сколько|где\s+сбор|какое\s+время)/i;
         if (linkedEvent && votingPattern.test(text) && text.includes('?')) {
           // Только если нет активных голосований по этой теме
           const { count } = await supabase
@@ -3980,7 +4032,7 @@ export default async function handler(req: any, res: any) {
         }
 
         // 4. Жалоба на проблему/нехватку чего-то → SOS организатору
-        const problemPattern = /\b(проблема|беда|не\s+хватает|забыли|потеряли|сломалось)\b/i;
+        const problemPattern = /(?<![а-яёa-z])(проблема|беда|не\s+хватает|забыли|потеряли|сломалось)/i;
         if (linkedEvent && problemPattern.test(text)) {
           const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', (linkedEvent as any).id).maybeSingle();
           const orgId = (ev as any)?.deputy_id || 377551019;
