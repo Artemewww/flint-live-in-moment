@@ -658,6 +658,55 @@ function pointMapUrl(s: string): string {
   return c ? `https://yandex.ru/maps/?text=${c}` : `https://yandex.ru/maps/?text=${encodeURIComponent(String(s).slice(0, 80))}`;
 }
 
+// Заглушки-плейсхолдеры вместо реальной марки/цвета — не показываем как факт.
+const JUNK_CAR_DETAILS = new Set(['свой автомобиль', 'спросите у него', 'спросить у него', 'спроси у него', '-', '']);
+
+/** Состав на точке: сколько человек (с гостями) и какие машины (модель/цвет из анкеты). */
+async function pointComposition(evId: string): Promise<{ headCount: number; carsText: string }> {
+  const { data: regs } = await supabase
+    .from('registrations')
+    .select('name,guest_count,has_transport,transport_details')
+    .eq('event_id', evId).neq('status', 'cancelled');
+  const headCount = (regs || []).reduce((n: number, r: any) => n + 1 + (Number(r.guest_count) || 0), 0);
+  const cars = (regs || [])
+    .filter((r: any) => r.has_transport)
+    .map((r: any) => {
+      const detail = String(r.transport_details || '').trim();
+      const known = detail && !JUNK_CAR_DETAILS.has(detail.toLowerCase());
+      return `🚗 ${esc(r.name || 'Водитель')} — ${known ? esc(detail) : '<i>модель не указана</i>'}`;
+    });
+  return { headCount, carsText: cars.join('\n') };
+}
+
+/** Точка + время + состав → готовый текст рассылки. kind: dep — выезд, arr — прибытие. */
+async function pointBroadcastText(ev: any, kind: 'dep' | 'arr'): Promise<{ text: string; mapUrl: string | null }> {
+  const lg = ev?.logistics || {};
+  const val = kind === 'dep' ? lg.assemblyPoint : lg.arrivalPoint;
+  if (!val) return { text: '', mapUrl: null };
+  const label = kind === 'dep' ? '🚩 Точка выезда — сбор колонны' : '🏁 Точка прибытия';
+  const { headCount, carsText } = await pointComposition(ev.id);
+  const text =
+    `${label} — «${esc(ev.title)}»\n\n` +
+    `📍 ${esc(val)}\n` +
+    (kind === 'dep' && lg.departureTime ? `🕐 Сбор в <b>${esc(lg.departureTime)}</b>\n` : '') +
+    `📅 ${esc(ev.date_label || ev.date)}\n\n` +
+    `👥 Едем: <b>${headCount}</b> чел.\n` +
+    (carsText ? `${carsText}\n` : '') +
+    (kind === 'dep' ? `\nВстречаемся, знакомимся — и стартуем колонной!` : `\nЖдём здесь!`);
+  return { text, mapUrl: pointMapUrl(val) };
+}
+
+/** Мягкое обогащение: по координатам — что рядом (без выдумывания фактов). */
+async function enrichPointName(coords: string): Promise<string> {
+  try {
+    const parsed = await geminiJSON(
+      `Координаты в Беларуси: ${coords}. Если по общим знаниям об этом районе можно коротко (до 60 симв.) назвать заметный ориентир рядом (АЗС, развязка, посёлок) — напиши. ` +
+      `Если не уверен — верни пустую строку, НЕ выдумывай конкретных названий заведений.\nJSON: {"name":"..."}`
+    );
+    return parsed?.name ? String(parsed.name).slice(0, 80) : '';
+  } catch { return ''; }
+}
+
 function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Незаписанному — только запись и базовая информация. Рабочие инструменты
   // (логистика/задачи/голосования/чат) открываются после регистрации.
@@ -2003,30 +2052,36 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
-      // Просмотр расходов — доступен любому участнику (не только админу).
-      // Точки дня (выезд/прибытие) — venue-сообщения, их можно переслать в любой чат.
+      // Точки дня: выбор какую переслать → готовое сообщение с составом
+      // и кнопкой Яндекс.Карт (не sendVenue — открывает конкретно Яндекс, не
+      // случайное картографическое приложение получателя).
       if (data.startsWith('sharepoints_')) {
         const evIdP = data.slice('sharepoints_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         const evP = await getEvent(evIdP);
         const lgP: any = (evP as any)?.logistics || {};
-        const pts = [
-          { label: '🚩 Точка выезда — сбор колонны', val: lgP.assemblyPoint || '', extra: lgP.departureTime || '' },
-          { label: '🏁 Точка прибытия', val: lgP.arrivalPoint || '', extra: '' },
-        ].filter((p) => p.val);
-        if (!pts.length) { await tg('sendMessage', { chat_id: chatId, text: 'Точки ещё не заданы.' }); return res.status(200).json({ ok: true }); }
-        for (const p of pts) {
-          const c = pointCoords(p.val);
-          try {
-            if (c) {
-              const [lat, lon] = c.split(',');
-              await tg('sendVenue', { chat_id: chatId, latitude: Number(lat), longitude: Number(lon), title: p.label.slice(0, 60), address: `${p.val}${p.extra ? ` · ${p.extra}` : ''}`.slice(0, 120) });
-            } else {
-              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `${p.label}\n${esc(p.val)}${p.extra ? `\n⏰ ${esc(p.extra)}` : ''}`, reply_markup: kb([[{ text: '🗺 Открыть карту', url: pointMapUrl(p.val) }]]) });
-            }
-          } catch { /* заблокировал бота — не критично */ }
+        const has: any[] = [];
+        if (lgP.assemblyPoint) has.push({ text: '🚩 Точка выезда', callback_data: `sharepoint_dep_${evIdP}` });
+        if (lgP.arrivalPoint) has.push({ text: '🏁 Точка прибытия', callback_data: `sharepoint_arr_${evIdP}` });
+        if (!has.length) { await tg('sendMessage', { chat_id: chatId, text: 'Точки ещё не заданы — организатор добавит их в панели.' }); return res.status(200).json({ ok: true }); }
+        if (has.length === 1) {
+          // Единственная точка — сразу отправляем, без лишнего шага выбора.
+          const kindOnly = has[0].callback_data.startsWith('sharepoint_dep_') ? 'dep' : 'arr';
+          const { text: draft, mapUrl } = await pointBroadcastText(evP, kindOnly);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: draft, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть в Яндекс.Картах', url: mapUrl }]]) : undefined });
+          return res.status(200).json({ ok: true });
         }
-        await tg('sendMessage', { chat_id: chatId, text: 'Эти сообщения можно переслать в любой чат 📤' });
+        await tg('sendMessage', { chat_id: chatId, text: 'Какую точку переслать?', reply_markup: kb(has.map((b) => [b])) });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('sharepoint_dep_') || data.startsWith('sharepoint_arr_')) {
+        const kindS = data.startsWith('sharepoint_dep_') ? 'dep' : 'arr';
+        const evIdS = data.slice(`sharepoint_${kindS}_`.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const evS = await getEvent(evIdS);
+        const { text: draft, mapUrl } = await pointBroadcastText(evS, kindS as 'dep' | 'arr');
+        if (!draft) { await tg('sendMessage', { chat_id: chatId, text: 'Точка не задана.' }); return res.status(200).json({ ok: true }); }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: draft, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть в Яндекс.Картах', url: mapUrl }]]) : undefined });
         return res.status(200).json({ ok: true });
       }
       if (data.startsWith('expview_')) {
@@ -2351,7 +2406,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data === 'admhome' || data === 'admmeetgo' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admmeet_') || data.startsWith('admmeetman_')) {
+      if (data === 'admhome' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admptask_') || data.startsWith('admptgo_') || data.startsWith('admpttime_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
           return res.status(200).json({ ok: true });
@@ -2373,7 +2428,7 @@ export default async function handler(req: any, res: any) {
             reply_markup: kb([
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
-              [{ text: '🧭 Точка сбора колонны', callback_data: `admmeet_${evId}` }],
+              [{ text: '🚩 Точка выезда', callback_data: `admptask_dep_${evId}` }, { text: '🏁 Точка прибытия', callback_data: `admptask_arr_${evId}` }],
               [{ text: '📋 Перегенерить программу → всем', callback_data: `admprog_${evId}` }],
               [{ text: '🗳 Статистика голосований', callback_data: `admpolls_${evId}` }],
               [{ text: '📊 Реакции на рассылку', callback_data: `admreact_${evId}` }],
@@ -2498,58 +2553,46 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Точка сбора колонны: ИИ предлагает место+время → орг одобряет → всем.
-        if (data.startsWith('admmeet_')) {
-          const evId = data.slice('admmeet_'.length);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Думаю…' });
-          const ev = await getEvent(evId);
-          const lat = Number((ev as any)?.coordinates_lat), lng = Number((ev as any)?.coordinates_lng);
-          const parsed = await geminiJSON(
-            `Колонна машин клуба выезжает из Минска на событие «${(ev as any)?.title}» (${(ev as any)?.date_label || (ev as any)?.date}, старт программы ${(ev as any)?.time || 'утром'}; точка назначения: ${Number.isFinite(lat) ? `${lat},${lng}` : (ev as any)?.location}).\n` +
-            `Предложи ОДНО удобное место сбора колонны на выезде из Минска по этому направлению (АЗС/парковка у МКАД, где встанут 5+ машин) и время сбора (чтобы успеть к старту, дорога ~1.5-2ч, +15 мин на знакомство).\n` +
-            `Верни JSON: {"point":"название места коротко","coords":"lat, lng","when":"время сбора, напр. 08:00","note":"одна строка почему тут удобно"}`
-          );
-          if (!parsed?.point) {
-            await tg('sendMessage', {
-              chat_id: chatId, parse_mode: 'HTML',
-              text: '🤖 Не смог предложить точку сам. Задай свою — я разошлю всем с кликабельной картой.',
-              reply_markup: kb([[{ text: '✏️ Задать точку (текстом)', callback_data: `admmeetman_${evId}` }]]),
-            });
-            return res.status(200).json({ ok: true });
-          }
-          const draft = `🧭 <b>Сбор колонны — «${esc((ev as any)?.title)}»</b>\n\n📍 ${esc(parsed.point)}\n🗺 <code>${esc(parsed.coords || '')}</code>\n🕐 Сбор в <b>${esc(parsed.when || '')}</b>\n${parsed.note ? `<i>${esc(parsed.note)}</i>\n` : ''}\nВстречаемся, знакомимся — и стартуем колонной!`;
-          await setSession(tgId, 'admmeet_draft', { evId, draft, point: parsed.point, coords: parsed.coords, when: parsed.when });
+        // Точка выезда/прибытия: орг вбивает название+координаты сам (дата тянется
+        // из события автоматом, время редактируется отдельно) — координаты обязательны,
+        // ИИ только мягко подсказывает, что рядом, и никогда не выдумывает адрес целиком.
+        if (data.startsWith('admptask_')) {
+          const rest = data.slice('admptask_'.length);
+          const us0 = rest.indexOf('_');
+          const kind = rest.slice(0, us0) as 'dep' | 'arr';
+          const evId = rest.slice(us0 + 1);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await setSession(tgId, 'admpt_manual', { evId, kind });
+          const label = kind === 'dep' ? 'выезда' : 'прибытия';
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: `${draft}\n\n<i>Проверь по карте. Разослать всем участникам?</i>`,
-            reply_markup: kb([[{ text: '✅ Разослать всем', callback_data: 'admmeetgo' }], [{ text: '✏️ Своя точка (текстом)', callback_data: `admmeetman_${evId}` }]]),
+            text: `✏️ Точка ${label}: напиши название (по желанию) и координаты цифрами.\n<i>Например: «АЗС Белоруснефть, 53.805872, 27.525547» — или просто координаты, подскажу, что рядом.</i>\n\nДата подтянется из события сама.`,
           });
           return res.status(200).json({ ok: true });
         }
-        if (data === 'admmeetgo') {
-          const sessM = await getSession(tgId);
-          if (!sessM || sessM.state !== 'admmeet_draft') { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик устарел' }); return res.status(200).json({ ok: true }); }
-          const { evId, draft, point, coords, when } = sessM.context || {};
-          await clearSession(tgId);
+        // Рассылка сохранённой точки (после подтверждения черновика или повторно из меню).
+        if (data.startsWith('admptgo_')) {
+          const rest = data.slice('admptgo_'.length);
+          const us1 = rest.indexOf('_');
+          const kind = rest.slice(0, us1) as 'dep' | 'arr';
+          const evId = rest.slice(us1 + 1);
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
-          try {
-            const ev2 = await getEvent(evId);
-            const lg = (ev2 as any)?.logistics || {};
-            await supabase.from('events').update({ logistics: { ...lg, assemblyPoint: `${point} (${coords})`, departureTime: when } }).eq('id', evId);
-          } catch { /* no-op */ }
+          const ev = await getEvent(evId);
+          const { text: draft, mapUrl } = await pointBroadcastText(ev, kind);
+          if (!draft) { await tg('sendMessage', { chat_id: chatId, text: 'Точка не задана.' }); return res.status(200).json({ ok: true }); }
           const elig = await pollEligible(evId);
-          const mapBtn = coords ? [[{ text: '🗺 Точка на карте', url: `https://yandex.ru/maps/?text=${encodeURIComponent(String(coords))}` }]] : [];
           await Promise.allSettled(elig.map((id) =>
-            tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: draft, reply_markup: mapBtn.length ? kb(mapBtn) : undefined })
+            tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: draft, reply_markup: mapUrl ? kb([[{ text: '🗺 Открыть в Яндекс.Картах', url: mapUrl }]]) : undefined })
           ));
-          await tg('sendMessage', { chat_id: chatId, text: `✅ Разослал ${elig.length} участникам и сохранил в логистику события.` });
+          await tg('sendMessage', { chat_id: chatId, text: `✅ Разослал ${elig.length} участникам.` });
           return res.status(200).json({ ok: true });
         }
-        if (data.startsWith('admmeetman_')) {
-          const evId = data.slice('admmeetman_'.length);
+        // Изменить только время сбора (координаты и название не трогаем).
+        if (data.startsWith('admpttime_')) {
+          const evId = data.slice('admpttime_'.length);
           await tg('answerCallbackQuery', { callback_query_id: cq.id });
-          await setSession(tgId, 'admmeet_manual', { evId });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✏️ Напиши одной строкой: место, координаты, ДАТА и ВРЕМЯ сбора.\n<i>Например: «Сбор колонны, 53.823241, 27.531874, 18 июля в 10:00»</i>' });
+          await setSession(tgId, 'admpt_time_manual', { evId });
+          await tg('sendMessage', { chat_id: chatId, text: '🕐 Во сколько сбор? Напиши время, например «08:00».' });
           return res.status(200).json({ ok: true });
         }
 
@@ -4359,32 +4402,56 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        // Организатор задал точку сбора вручную → рассылаем всем.
-        if (sess && sess.state === 'admmeet_manual') {
+        // Организатор задал точку (выезд или прибытие) вручную → сохраняем и
+        // показываем черновик с составом; дата всегда из события, не спрашиваем.
+        if (sess && sess.state === 'admpt_manual') {
+          const { evId, kind } = sess.context || {};
+          await clearSession(msg.from.id);
+          const raw = String(text).trim().slice(0, 200);
+          const coords = pointCoords(raw);
+          if (!coords) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Не нашёл координаты в сообщении — пришли их цифрами (широта, долгота), например «53.805872, 27.525547».' });
+            return res.status(200).json({ ok: true });
+          }
+          let name = raw.replace(/(-?\d+[.,]\d+)[,\s]+(-?\d+[.,]\d+)/, '').replace(/[,;\-–\s]+$/, '').replace(/^[,;\-–\s]+/, '').trim();
+          if (!name) name = (await enrichPointName(coords)) || 'Точка на карте';
+          const pointVal = `${name} (${coords})`;
+          const ev0 = await getEvent(evId);
+          const lg0 = (ev0 as any)?.logistics || {};
+          const patch: any = kind === 'dep' ? { assemblyPoint: pointVal } : { arrivalPoint: pointVal };
+          if (kind === 'dep' && !lg0.departureTime) patch.departureTime = (ev0 as any)?.time || '';
+          await supabase.from('events').update({ logistics: { ...lg0, ...patch } }).eq('id', evId);
+          const evFresh = await getEvent(evId);
+          const { text: draft, mapUrl } = await pointBroadcastText(evFresh, kind);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `${draft}\n\n<i>Проверь и разошли участникам:</i>`,
+            reply_markup: kb([
+              [{ text: '📨 Разослать всем', callback_data: `admptgo_${kind}_${evId}` }],
+              ...(kind === 'dep' ? [[{ text: '🕐 Изменить время сбора', callback_data: `admpttime_${evId}` }]] : []),
+              ...(mapUrl ? [[{ text: '🗺 Проверить на карте', url: mapUrl }]] : []),
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        // Только смена времени сбора (координаты и название остаются).
+        if (sess && sess.state === 'admpt_time_manual') {
           const evId = sess.context?.evId;
           await clearSession(msg.from.id);
-          const ev = await getEvent(evId);
-          const raw = String(text).trim().slice(0, 300);
-          const m = raw.match(/(-?\d+[.,]\d+)[,;\s]+(-?\d+[.,]\d+)/);
-          const coords = m ? `${m[1].replace(',', '.')}, ${m[2].replace(',', '.')}` : '';
-          // Состав на точке: сколько людей (с гостями) и какие машины (модель/цвет).
-          const [{ data: regsA }, { data: ridesA }] = await Promise.all([
-            supabase.from('registrations').select('guest_count').eq('event_id', evId).neq('status', 'cancelled'),
-            supabase.from('rides').select('driver_name,from_point,seats_total').eq('event_id', evId).eq('active', true).neq('kind', 'tent'),
-          ]);
-          const headA = (regsA || []).reduce((n: number, r: any) => n + 1 + (Number(r.guest_count) || 0), 0);
-          const carsA = (ridesA || []).map((c: any) => `🚗 ${esc(c.driver_name || 'Водитель')}${c.from_point && !/\d+[.,]\d+/.test(c.from_point) ? ` (${esc(c.from_point)})` : ''}`).join('\n');
-          const draft = `🧭 <b>Сбор колонны — «${esc((ev as any)?.title)}»</b>\n\n${esc(raw)}\n\n👥 Нас едет: <b>${headA}</b> (с гостями)\n${carsA ? `Машины:\n${carsA}\n` : ''}\nВстречаемся, знакомимся — и стартуем колонной!`;
-          try {
-            const lg = (ev as any)?.logistics || {};
-            await supabase.from('events').update({ logistics: { ...lg, assemblyPoint: raw } }).eq('id', evId);
-          } catch { /* no-op */ }
-          const elig = await pollEligible(evId);
-          const mapBtn = coords ? [[{ text: '🗺 Точка на карте', url: `https://yandex.ru/maps/?text=${encodeURIComponent(coords)}` }]] : [];
-          await Promise.allSettled(elig.map((id) =>
-            tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: draft, reply_markup: mapBtn.length ? kb(mapBtn) : undefined })
-          ));
-          await tg('sendMessage', { chat_id: chatId, text: `✅ Разослал ${elig.length} участникам и сохранил в логистику.` });
+          const time = String(text).trim().slice(0, 20);
+          const ev0 = await getEvent(evId);
+          const lg0 = (ev0 as any)?.logistics || {};
+          await supabase.from('events').update({ logistics: { ...lg0, departureTime: time } }).eq('id', evId);
+          const evFresh = await getEvent(evId);
+          const { text: draft, mapUrl } = await pointBroadcastText(evFresh, 'dep');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `${draft}\n\n<i>Время обновлено. Разослать?</i>`,
+            reply_markup: kb([
+              [{ text: '📨 Разослать всем', callback_data: `admptgo_dep_${evId}` }],
+              ...(mapUrl ? [[{ text: '🗺 Проверить на карте', url: mapUrl }]] : []),
+            ]),
+          });
           return res.status(200).json({ ok: true });
         }
 
@@ -4687,6 +4754,32 @@ export default async function handler(req: any, res: any) {
               reply_markup: kb(eventCardButtons(ev, openBtn, true)),
             });
           }
+          // Мягкая проверка задним числом — не задерживает основной ответ выше.
+          if (car && car !== '-') {
+            try {
+              const check = await geminiJSON(
+                `Текст "${car}" — ответ на просьбу назвать марку/модель автомобиля и цвет (нужно, чтобы люди узнали машину на точке сбора). ` +
+                `Это похоже на реальную марку+модель(+желательно цвет), или это отговорка/чушь вроде «спросите у него», «не знаю», «потом скажу», случайные символы?\nJSON: {"valid":true|false}`
+              );
+              if (check && check.valid === false) {
+                await setSession(msg.from.id, 'car_fix', { evId });
+                await tg('sendMessage', {
+                  chat_id: chatId, parse_mode: 'HTML',
+                  text: `🚗 Слушай, «<b>${esc(car)}</b>» не похоже на марку и цвет машины — на точке сбора тебя по ней не узнают 🙈\nНапиши, пожалуйста, нормально: марка, модель, цвет.\n<i>Например: «Kia Rio, белая»</i>`,
+                });
+              }
+            } catch { /* best-effort — не блокируем регистрацию */ }
+          }
+          return res.status(200).json({ ok: true });
+        }
+
+        // Исправление марки/цвета после мягкой ИИ-проверки выше.
+        if (sess && sess.state === 'car_fix') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const car = String(text).trim().slice(0, 120);
+          if (car) await updateReg(evId, msg.from.id, { transport_details: car });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Обновил: <b>${esc(car || '—')}</b>. Спасибо, теперь тебя точно узнают на точке сбора!` });
           return res.status(200).json({ ok: true });
         }
 
