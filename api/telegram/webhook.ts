@@ -172,12 +172,45 @@ async function saveAndBroadcastExpense(evId: string, from: any, title: string, a
 }
 
 /** Прямой вызов Gemini (REST): SDK живёт в api/ai.ts, в вебхук его не тащим. */
+
+// --- Ключ Gemini: сначала БД (app_config, меняется из панели орг. без редеплоя),
+// иначе env. Кэш 60с, чтобы не дёргать БД на каждый ИИ-вызов внутри одного апдейта.
+// Таблицы может ещё не быть (миграция не применена) — тихо падаем на env.
+let geminiKeyCache: { key: string; at: number } | null = null;
+async function getActiveGeminiKey(): Promise<string> {
+  if (geminiKeyCache && Date.now() - geminiKeyCache.at < 60_000) return geminiKeyCache.key;
+  let key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+    if (data?.value) key = data.value;
+  } catch { /* таблицы нет — работаем на env */ }
+  geminiKeyCache = { key, at: Date.now() };
+  return key;
+}
+
+/** Уведомить админа о закончившейся квоте — не чаще раза в 2 часа (throttle в app_config). */
+async function notifyQuotaExhausted() {
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'gemini_quota_notified_at').maybeSingle();
+    const last = data?.value ? new Date(data.value).getTime() : 0;
+    if (Date.now() - last < 2 * 3600 * 1000) return;
+    await supabase.from('app_config').upsert({ key: 'gemini_quota_notified_at', value: new Date().toISOString() }, { onConflict: 'key' });
+    if (ADMIN_CHAT_ID) {
+      await tg('sendMessage', {
+        chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+        text: '⚠️ <b>Квота Gemini API закончилась</b>\n\nИИ-функции бота (разбор задач/расходов, точки, программа) сейчас не отвечают — идёт безопасный фолбэк, ничего не падает.\n\nВставь новый ключ: панель организатора → 🔑 ИИ-ключ (Gemini).',
+      });
+    }
+  } catch { /* best-effort, таблицы может не быть */ }
+}
+
 /** Гарантированный JSON от Gemini (responseMimeType) + повтор: текстовый
  *  вариант отвечал прозой и парс задач срабатывал через раз. */
 async function geminiJSON(prompt: string): Promise<any | null> {
-  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+  const key = await getActiveGeminiKey();
   if (!key) return null;
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  let sawQuotaError = false;
   const attempt = async (model: string): Promise<any | null> => {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -186,20 +219,23 @@ async function geminiJSON(prompt: string): Promise<any | null> {
         generationConfig: { maxOutputTokens: 1200, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
       }),
     });
+    if (r.status === 429) sawQuotaError = true;
     const j: any = await r.json();
     const txt = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('').trim();
     if (!txt) return null;
     try { return JSON.parse(txt); } catch { const m = txt.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; }
   };
   for (const model of models) { try { const out = await attempt(model); if (out) return out; } catch { /* next */ } }
+  if (sawQuotaError) await notifyQuotaExhausted();
   return null;
 }
 
 async function geminiText(prompt: string): Promise<string> {
-  const key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+  const key = await getActiveGeminiKey();
   if (!key) return '';
   // У gemini-2.0-flash free-квота нулевая (limit: 0), у -latest — есть.
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  let sawQuotaError = false;
   const attempt = async (model: string, fast: boolean): Promise<string> => {
     const body: any = { contents: [{ parts: [{ text: prompt }] }] };
     // thinkingBudget:0 срезает «размышления» 2.5-моделей — иначе ответ идёт 30+ сек,
@@ -209,6 +245,7 @@ async function geminiText(prompt: string): Promise<string> {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    if (r.status === 429) sawQuotaError = true;
     const j: any = await r.json();
     const parts = j?.candidates?.[0]?.content?.parts || [];
     return parts.map((p: any) => p?.text || '').join('').trim();
@@ -219,6 +256,7 @@ async function geminiText(prompt: string): Promise<string> {
   for (const model of models.slice(0, 2)) {
     try { const out = await attempt(model, false); if (out) return out; } catch { /* дальше */ }
   }
+  if (sawQuotaError) await notifyQuotaExhausted();
   return '';
 }
 
@@ -720,23 +758,30 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     rows.push([openBtn]);
     return rows;
   }
-  const rows: any[] = [[{ text: '✅ Ты записан', callback_data: `myreg_${ev.id}` }], [{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }], [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }]];
-  // telegram_bot_url = инвайт-ссылка группового чата события (привязка: /link в группе).
-  if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
+  const rows: any[] = [[
+    { text: '✅ Ты записан', callback_data: `myreg_${ev.id}` },
+    { text: '❌ Отказаться', callback_data: `regcancel_${ev.id}` },
+  ]];
+  // Фото/чат — одной строкой; telegram_bot_url = инвайт-ссылка группы (привязка /link).
+  const mediaRow: any[] = [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }];
+  if (ev.telegram_bot_url) mediaRow.push({ text: '💬 Чат события', url: ev.telegram_bot_url });
+  rows.push(mediaRow);
 
-  // Точки выезда и прибытия (из logistics)
-  // Тап по точке сразу шлёт форвардируемое сообщение (место+координаты+состав) —
-  // отдельная кнопка «переслать точки» больше не нужна, каждая точка сама себя пересылает.
+  // Точки выезда и прибытия — одной строкой. Тап по точке сразу шлёт
+  // форвардируемое сообщение (место+координаты+состав).
   const lg = ev?.logistics || {};
   const pointsRow: any[] = [];
   if (lg.assemblyPoint) pointsRow.push({ text: '🚩 Точка выезда', callback_data: `sharepoint_dep_${ev.id}` });
   if (lg.arrivalPoint) pointsRow.push({ text: '🏁 Точка прибытия', callback_data: `sharepoint_arr_${ev.id}` });
   if (pointsRow.length) rows.push(pointsRow);
 
-  // Маршрут, программа
+  // Маршрут — фолбэк, ПОКА точка прибытия не задана организатором (как только
+  // она появится в панели, эта кнопка сама уступает место точке выше).
   const nav: any[] = [];
-  const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
-  if (route) nav.push({ text: '🧭 Маршрут', url: route });
+  if (!lg.arrivalPoint) {
+    const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
+    if (route) nav.push({ text: '🧭 Маршрут', url: route });
+  }
   if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
   if (ev.logistics?.prep) nav.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
   if (nav.length) rows.push(nav);
@@ -753,13 +798,12 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
     { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
   ]);
-  // Нижние кнопки: спрос/предложение + позвать + отказаться
+  // Нижние кнопки: спрос/предложение + позвать
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
     { text: '💡', callback_data: `idea_${ev.id}` },
     { text: '📤 Позвать', callback_data: `share_${ev.id}` },
   ]);
-  rows.push([{ text: '❌ Отказаться от участия', callback_data: `regcancel_${ev.id}` }]);
   rows.push([openBtn]);
   return rows;
 }
@@ -2494,7 +2538,7 @@ export default async function handler(req: any, res: any) {
       }
 
       // Панель организатора (все adm*-кнопки — только для костяка).
-      if (data === 'admhome' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admptask_') || data.startsWith('admptgo_') || data.startsWith('admpttime_')) {
+      if (data === 'admhome' || data === 'admkey' || data === 'admkeyset' || data === 'admproggo' || data.startsWith('admprog_') || data.startsWith('adm_') || data.startsWith('admsplit_') || data.startsWith('admdebt_') || data.startsWith('admping_') || data.startsWith('admpolls_') || data.startsWith('admreact_') || data.startsWith('admnudge_') || data.startsWith('admptask_') || data.startsWith('admptgo_') || data.startsWith('admpttime_')) {
         if (!(await isCore(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' });
           return res.status(200).json({ ok: true });
@@ -2503,8 +2547,31 @@ export default async function handler(req: any, res: any) {
         if (data === 'admhome') {
           await tg('answerCallbackQuery', { callback_query_id: cq.id });
           const { data: evs } = await supabase.from('events').select('id,title,date').eq('status', 'open').order('date').limit(8);
-          if (!evs?.length) { await tg('sendMessage', { chat_id: chatId, text: 'Открытых событий нет.' }); return res.status(200).json({ ok: true }); }
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⚙️ <b>Панель организатора</b>\nВыбери событие:', reply_markup: kb(evs.map((e: any) => [{ text: `${e.title} · ${e.date}`, callback_data: `adm_${e.id}` }])) });
+          const rowsHome = (evs || []).map((e: any) => [{ text: `${e.title} · ${e.date}`, callback_data: `adm_${e.id}` }]);
+          rowsHome.push([{ text: '🔑 ИИ-ключ (Gemini)', callback_data: 'admkey' }]);
+          if (!evs?.length) { await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Открытых событий нет.', reply_markup: kb([[{ text: '🔑 ИИ-ключ (Gemini)', callback_data: 'admkey' }]]) }); return res.status(200).json({ ok: true }); }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⚙️ <b>Панель организатора</b>\nВыбери событие:', reply_markup: kb(rowsHome) });
+          return res.status(200).json({ ok: true });
+        }
+        // Статус ключа Gemini (глобальный, не привязан к событию) + быстрая смена.
+        if (data === 'admkey') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          const key = await getActiveGeminiKey();
+          const masked = key ? `${key.slice(0, 6)}…${key.slice(-4)}` : 'не задан';
+          let src: any = null;
+          try { const r = await supabase.from('app_config').select('value,updated_at').eq('key', 'gemini_api_key').maybeSingle(); src = r.data; } catch { /* таблицы нет */ }
+          const source = src?.value ? `из панели (обновлён ${new Date(src.updated_at).toLocaleString('ru-RU', { timeZone: 'Europe/Minsk' })})` : 'из переменных окружения Vercel';
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `🔑 <b>Ключ Gemini API</b>\n\nТекущий: <code>${esc(masked)}</code>\nИсточник: ${esc(source)}\n\nЕсли ИИ-функции молчат — скорее всего кончилась дневная квота. Вставь новый ключ ниже.`,
+            reply_markup: kb([[{ text: '✏️ Указать новый ключ', callback_data: 'admkeyset' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (data === 'admkeyset') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await setSession(tgId, 'admkey_manual', {});
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✏️ Пришли новый ключ Gemini API одной строкой. Проверю его вживую перед сохранением.' });
           return res.status(200).json({ ok: true });
         }
         if (data.startsWith('adm_')) {
@@ -4541,6 +4608,42 @@ export default async function handler(req: any, res: any) {
               ...(mapUrl ? [[{ text: '🗺 Проверить на карте', url: mapUrl }]] : []),
             ]),
           });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Новый ключ Gemini: проверяем живым запросом ПЕРЕД сохранением —
+        // иначе можно тихо подменить рабочий ключ на битый и потерять весь ИИ.
+        if (sess && sess.state === 'admkey_manual') {
+          await clearSession(msg.from.id);
+          const newKey = String(text).trim();
+          if (newKey.length < 10) { await tg('sendMessage', { chat_id: chatId, text: 'Похоже, это не ключ — слишком коротко. Попробуй ещё раз через 🔑 ИИ-ключ.' }); return res.status(200).json({ ok: true }); }
+          await tg('sendMessage', { chat_id: chatId, text: '🔎 Проверяю ключ…' });
+          let verdict = '';
+          try {
+            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${newKey}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts: [{ text: 'ок' }] }], generationConfig: { maxOutputTokens: 5 } }),
+            });
+            if (r.status === 200) verdict = 'ok';
+            else if (r.status === 429) verdict = 'quota';
+            else verdict = `error_${r.status}`;
+          } catch { verdict = 'network'; }
+          if (verdict === 'ok') {
+            const { error: saveErr } = await supabase.from('app_config').upsert({ key: 'gemini_api_key', value: newKey, updated_at: new Date().toISOString(), updated_by: msg.from.id }, { onConflict: 'key' });
+            if (saveErr) {
+              // Таблицы app_config ещё нет — миграция не применена. Ключ рабочий,
+              // но сохранить некуда, не врём про успех.
+              await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `⚠️ Ключ рабочий, но НЕ сохранил: ${esc(saveErr.message.slice(0, 150))}\n\nПохоже, в базе ещё нет таблицы app_config — нужно один раз применить миграцию supabase/migrations/2026-app-config.sql в Supabase SQL Editor, тогда ключ сохранится.` });
+              return res.status(200).json({ ok: true });
+            }
+            geminiKeyCache = { key: newKey, at: Date.now() };
+            await supabase.from('app_config').delete().eq('key', 'gemini_quota_notified_at'); // сброс throttle — новый ключ, новая жизнь
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Ключ проверен и сохранён — ИИ-функции снова работают.' });
+          } else if (verdict === 'quota') {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⚠️ Ключ рабочий, но у него ТОЖЕ кончилась квота на сегодня. Не сохраняю — пришли другой ключ, либо подключи биллинг этому.' });
+          } else {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `❌ Ключ не прошёл проверку (${esc(verdict)}) — не сохраняю. Проверь, что скопировал целиком, и попробуй снова через 🔑 ИИ-ключ.` });
+          }
           return res.status(200).json({ ok: true });
         }
 

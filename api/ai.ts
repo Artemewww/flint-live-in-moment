@@ -1,5 +1,11 @@
 import { GoogleGenAI, Type } from '@google/genai';
+import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
+
+const supabase = createClient(
+  process.env.SUPABASE_URL || '',
+  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+);
 
 /**
  * ИИ-помощник-наставник сообщества «Живи в моменте» (Google Gemini).
@@ -12,7 +18,21 @@ import * as crypto from 'crypto';
  * Tasks: generate_event, program, shopping, clarifying_questions, detect_goal, autofill
  */
 
-const API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+const ENV_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+
+// Ключ, изменённый из панели организатора (app_config), имеет приоритет над env —
+// так можно сменить ключ на исчерпанной квоте без редеплоя. Кэш 60с.
+let keyCache: { key: string; at: number } | null = null;
+async function getActiveGeminiKey(): Promise<string> {
+  if (keyCache && Date.now() - keyCache.at < 60_000) return keyCache.key;
+  let key = ENV_API_KEY;
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+    if (data?.value) key = data.value;
+  } catch { /* таблицы нет — работаем на env */ }
+  keyCache = { key, at: Date.now() };
+  return key;
+}
 
 /**
  * Какие модели реально доступны этому ключу. Захардкоженный список угадывать
@@ -25,10 +45,10 @@ let modelCache: { at: number; models: string[] } | null = null;
 /** Какая модель в итоге ответила — возвращаем клиенту, чтобы отладка не была гаданием. */
 let usedModel = '';
 
-async function listModels(): Promise<string[]> {
+async function listModels(apiKey: string): Promise<string[]> {
   if (modelCache && Date.now() - modelCache.at < 30 * 60 * 1000) return modelCache.models;
 
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${API_KEY}&pageSize=200`);
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}&pageSize=200`);
   if (!r.ok) throw new Error(`ListModels ${r.status}: ${(await r.text()).slice(0, 200)}`);
   const j: any = await r.json();
 
@@ -61,8 +81,8 @@ function rankModels(available: string[]): string[] {
   return ranked;
 }
 
-async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
-  const available = await listModels();
+async function genJSON(ai: any, apiKey: string, prompt: string, schema: any): Promise<any> {
+  const available = await listModels(apiKey);
   if (!available.length) throw new Error('У ключа нет ни одной модели с generateContent');
 
   const queue = rankModels(available).slice(0, 6);
@@ -102,10 +122,31 @@ async function genJSON(ai: any, prompt: string, schema: any): Promise<any> {
   }
 
   const quota = errors.some((e) => /429|quota/i.test(e));
+  if (quota) await notifyQuotaExhausted();
   throw new Error(
     (quota ? 'Похоже, выбрана дневная квота Gemini у ключа. ' : '') +
     `Ни одна из ${queue.length} моделей не ответила.\n${errors.join('\n')}`
   );
+}
+
+/** Уведомить админа о закончившейся квоте — не чаще раза в 2 часа (throttle в app_config). */
+async function notifyQuotaExhausted() {
+  const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+  const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+  if (!BOT_TOKEN) return;
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'gemini_quota_notified_at').maybeSingle();
+    const last = data?.value ? new Date(data.value).getTime() : 0;
+    if (Date.now() - last < 2 * 3600 * 1000) return;
+    await supabase.from('app_config').upsert({ key: 'gemini_quota_notified_at', value: new Date().toISOString() }, { onConflict: 'key' });
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+        text: '⚠️ <b>Квота Gemini API закончилась</b>\n\nИИ-функции сейчас не отвечают — идёт безопасный фолбэк.\nВставь новый ключ: панель организатора → 🔑 ИИ-ключ (Gemini).',
+      }),
+    });
+  } catch { /* best-effort, таблицы может не быть */ }
 }
 
 const TYPE_RU: Record<string, string> = {
@@ -153,7 +194,8 @@ function deny(res: any) {
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!isAdmin(req)) return deny(res);
-  if (!API_KEY) return res.status(200).json({ error: 'GEMINI_API_KEY не задан в env' });
+  const apiKey = await getActiveGeminiKey();
+  if (!apiKey) return res.status(200).json({ error: 'GEMINI_API_KEY не задан' });
 
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
@@ -163,11 +205,11 @@ export default async function handler(req: any, res: any) {
     const diet = body.diet || {};
 
     if (task === 'models') {
-      const available = await listModels();
+      const available = await listModels(apiKey);
       return res.status(200).json({ available, ranked: rankModels(available).slice(0, 6) });
     }
 
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const ai = new GoogleGenAI({ apiKey });
     const typeRu = TYPE_RU[ev.type] || 'встреча сообщества';
     const days = ev.dateEnd && ev.dateEnd !== ev.date ? `многодневное (${ev.date} — ${ev.dateEnd})` : 'однодневное';
 
@@ -186,7 +228,7 @@ export default async function handler(req: any, res: any) {
         `- topic: одно-два слова темы (кино, поездка, еда, программа…).\n` +
         `- summary: одна строка пояснения для участников (что именно предлагают и детали: инвентарь, цена, время).\n\n` +
         `Пиши по-русски, дружелюбно. Верни JSON: { question, options: [строки], topic, summary }.`;
-      const parsed = await genJSON(ai, prompt, {
+      const parsed = await genJSON(ai, apiKey, prompt, {
         type: Type.OBJECT,
         properties: {
           question: { type: Type.STRING },
@@ -221,7 +263,7 @@ export default async function handler(req: any, res: any) {
         `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
         `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
         `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье).`;
-      const p = await genJSON(ai, prompt, {
+      const p = await genJSON(ai, apiKey, prompt, {
         type: Type.OBJECT,
         properties: {
           type: { type: Type.STRING, enum: ['male', 'mixed', 'intellectual', 'active'] },
@@ -280,7 +322,7 @@ export default async function handler(req: any, res: any) {
         `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
         `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье);\n` +
         `- maxParticipants: реалистичное число участников (5–30).`;
-      const p = await genJSON(ai, sys, {
+      const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
           title: { type: Type.STRING },
@@ -345,7 +387,7 @@ export default async function handler(req: any, res: any) {
         `- life (Счастье): радость, легкость, благодарность, удовольствие\n\n` +
         `Верни JSON: { quality: string, confidence: number (0..1), explanation: string }.\n` +
         `Если определить не удалось — quality: null.`;
-      const p = await genJSON(ai, sys, {
+      const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
           quality: { type: Type.STRING },
@@ -376,7 +418,7 @@ export default async function handler(req: any, res: any) {
         `Примеры: «Нужна ли колонка/звук?», «Кто ведёт машину?», «Нужен ли стол/стулья?», ` +
         `«Будет ли ночёвка?», «Нужен ли инструктор?».\n` +
         `Верни JSON: { questions: string[] } — массив из 3–5 вопросов.`;
-      const p = await genJSON(ai, sys, {
+      const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
           questions: { type: Type.ARRAY, items: { type: Type.STRING } },
@@ -415,7 +457,7 @@ export default async function handler(req: any, res: any) {
         `Верни JSON: массив items. Каждый элемент: item (продукт), qty (точное количество с единицей, напр. «3.5 кг» или «12 шт»), ` +
         `category (одно из: Мясо/рыба, Крупы/гарнир, Овощи/фрукты, Молочка, Хлеб/выпечка, Напитки, Перекусы, Специи/масло, Прочее), ` +
         `note (для какого приёма пищи и примерная цена в BYN).`;
-      const parsed = await genJSON(ai, prompt, {
+      const parsed = await genJSON(ai, apiKey, prompt, {
         type: Type.OBJECT,
         properties: {
           items: {
@@ -439,7 +481,7 @@ export default async function handler(req: any, res: any) {
         `payment (одно из: self=платит сам, host=за счёт организатора, split=делим поровну, free=бесплатно), ` +
         `price (число BYN, 0 если бесплатно/за счёт организатора), priceNote (за что платит, коротко). ` +
         `Координаты не указывай — их проставит организатор. Цены — ориентировочные по рынку Минска в BYN, реалистичные.`;
-      const parsed = await genJSON(ai, prompt, {
+      const parsed = await genJSON(ai, apiKey, prompt, {
         type: Type.OBJECT,
         properties: {
           points: {
@@ -490,7 +532,7 @@ export default async function handler(req: any, res: any) {
         (outdoors ? `4. 🍲 ЕДА И ВОДА — общий котёл, без скоропорта, вода 4 л/чел/сутки в канистрах.\n5. 👮 ЕСЛИ ПРОВЕРКА — один переговорщик, показать огнетушитель/порядок, машины вне водоохранной зоны, эко-мешки (вывозим свой и чужой мусор).\n` : `4. 🍲 ЕДА И ВОДА — что взять с собой или как устроено питание.\n`) +
         `В конце: «🚭 Формат клуба: 100% трезвость, экологичность, взаимопомощь.»\n` +
         `Объём 1200–2200 символов. Верни JSON: { prep: "текст памятки" }.`;
-      const parsed = await genJSON(ai, prompt, {
+      const parsed = await genJSON(ai, apiKey, prompt, {
         type: Type.OBJECT,
         properties: { prep: { type: Type.STRING } },
         required: ['prep'],
@@ -521,7 +563,7 @@ export default async function handler(req: any, res: any) {
       // Полнота: многодневным — почасовая детализация на каждый день.
       `ФОРМАТ КАЖДОГО ПУНКТА: «ДД месяц, ЧЧ:ММ — что делаем (конкретно: какие игры/активности), ключевые моменты» — дата И время обязательны в каждом пункте (дни путать нельзя).\n` +
       `Верни JSON: массив program из ${Number(body?.count) >= 1 && Number(body?.count) <= 40 ? `РОВНО ${Number(body.count)}` : current.length ? `не меньше ${current.length}` : (ev.dateEnd && ev.dateEnd !== ev.date ? '10–14 пунктов НА КАЖДЫЙ день (почасовая программа: подъём, еда, активности, вечер)' : '8–12')} пунктов.`;
-    const parsed = await genJSON(ai, prompt, {
+    const parsed = await genJSON(ai, apiKey, prompt, {
       type: Type.OBJECT,
       properties: { program: { type: Type.ARRAY, items: { type: Type.STRING } } },
       required: ['program'],
