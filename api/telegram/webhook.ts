@@ -723,11 +723,14 @@ async function pointBroadcastText(ev: any, kind: 'dep' | 'arr'): Promise<{ text:
   if (!val) return { text: '', mapUrl: null };
   const label = kind === 'dep' ? '🚩 Точка выезда — сбор колонны' : '🏁 Точка прибытия';
   const { headCount, carsText } = await pointComposition(ev.id);
+  // Дата и время — явно и раздельно (день недели + число + время), НЕ ev.date_label:
+  // у многодневных событий там смешивался диапазон дат с временем в одну строку
+  // («18–19 июля, 10:00»), и было не разобрать, к какому дню относится время.
+  const time = kind === 'dep' ? lg.departureTime : ev.time;
   const text =
     `${label} — «${esc(ev.title)}»\n\n` +
     `📍 ${esc(val)}\n` +
-    (kind === 'dep' && lg.departureTime ? `🕐 Сбор в <b>${esc(lg.departureTime)}</b>\n` : '') +
-    `📅 ${esc(ev.date_label || ev.date)}\n\n` +
+    `📅 ${esc(dayPhrase(ev.date))}${time ? ` · 🕐 <b>${esc(time)}</b>` : ''}\n\n` +
     `👥 Едем: <b>${headCount}</b> чел.\n` +
     (carsText ? `${carsText}\n` : '') +
     (kind === 'dep' ? `\nВстречаемся, знакомимся — и стартуем колонной!` : `\nЖдём здесь!`);
