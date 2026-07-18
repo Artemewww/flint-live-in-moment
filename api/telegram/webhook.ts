@@ -725,14 +725,13 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   if (ev.telegram_bot_url) rows.push([{ text: '💬 Чат события', url: ev.telegram_bot_url }]);
 
   // Точки выезда и прибытия (из logistics)
+  // Тап по точке сразу шлёт форвардируемое сообщение (место+координаты+состав) —
+  // отдельная кнопка «переслать точки» больше не нужна, каждая точка сама себя пересылает.
   const lg = ev?.logistics || {};
   const pointsRow: any[] = [];
-  if (lg.assemblyPoint) pointsRow.push({ text: '🚩 Точка выезда', url: pointMapUrl(lg.assemblyPoint) });
-  if (lg.arrivalPoint) pointsRow.push({ text: '🏁 Точка прибытия', url: pointMapUrl(lg.arrivalPoint) });
-  if (lg.assemblyPoint || lg.arrivalPoint) {
-    pointsRow.push({ text: '📍 Переслать точки', callback_data: `sharepoints_${ev.id}` });
-    rows.push(pointsRow);
-  }
+  if (lg.assemblyPoint) pointsRow.push({ text: '🚩 Точка выезда', callback_data: `sharepoint_dep_${ev.id}` });
+  if (lg.arrivalPoint) pointsRow.push({ text: '🏁 Точка прибытия', callback_data: `sharepoint_arr_${ev.id}` });
+  if (pointsRow.length) rows.push(pointsRow);
 
   // Маршрут, программа
   const nav: any[] = [];
@@ -2092,7 +2091,96 @@ export default async function handler(req: any, res: any) {
         if (!expenses.length) { await tg('sendMessage', { chat_id: chatId, text: '💸 Расходов пока нет. Добавь свой — «💸 Добавить расход».' }); return res.status(200).json({ ok: true }); }
         const total = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
         const lines = expenses.map((e: any) => `• ${esc(e.title)} — <b>${e.amount} BYN</b> (${esc(e.by_name || '')}${e.photo ? ', с чеком' : ''})`).join('\n');
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `📊 <b>Расходы — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines}\n\nИтого: <b>${Math.round(total * 100) / 100} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.` });
+        // Свой расход можно править/удалять; костяку доступны ЛЮБЫЕ + очистка всего списка.
+        const admin = await isCore(tgId);
+        const rowsExp: any[][] = [];
+        for (const e of expenses) {
+          if (admin || Number(e.by_id) === tgId) {
+            rowsExp.push([
+              { text: `✏️ ${String(e.title).slice(0, 18)}`, callback_data: `expedit_${evId}_${e.id}` },
+              { text: '🗑', callback_data: `expdel_${evId}_${e.id}` },
+            ]);
+          }
+        }
+        if (admin) rowsExp.push([{ text: '🧹 Очистить все расходы', callback_data: `expclearall_${evId}` }]);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `📊 <b>Расходы — «${esc((evRow as any)?.title || '')}»</b>\n\n${lines}\n\nИтого: <b>${Math.round(total * 100) / 100} BYN</b>\n\nДоли посчитаем при подведении итогов — каждый платит за себя и своих гостей.`,
+          reply_markup: rowsExp.length ? kb(rowsExp) : undefined,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Правка своего (или, для костяка, любого) расхода.
+      if (data.startsWith('expedit_')) {
+        const rest = data.slice('expedit_'.length);
+        const us = rest.lastIndexOf('_');
+        const evId = rest.slice(0, us), expId = rest.slice(us + 1);
+        const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+        const expenses = Array.isArray((evRow as any)?.shopping?.expenses) ? (evRow as any).shopping.expenses : [];
+        const ex = expenses.find((e: any) => e.id === expId);
+        if (!ex) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Расход не найден' }); return res.status(200).json({ ok: true }); }
+        if (!(await isCore(tgId)) && Number(ex.by_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Можно править только свои расходы' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'exp_edit', { evId, expId });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `✏️ Было: «<b>${esc(ex.title)}</b> — ${ex.amount} BYN».\nНапиши новую сумму (например «95») или название + сумму (например «Мясо 95»).`,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Удаление расхода — с подтверждением, чтобы не снести случайным тапом.
+      if (data.startsWith('expdel_')) {
+        const rest = data.slice('expdel_'.length);
+        const us = rest.lastIndexOf('_');
+        const evId = rest.slice(0, us), expId = rest.slice(us + 1);
+        const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+        const expenses = Array.isArray((evRow as any)?.shopping?.expenses) ? (evRow as any).shopping.expenses : [];
+        const ex = expenses.find((e: any) => e.id === expId);
+        if (!ex) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Расход не найден' }); return res.status(200).json({ ok: true }); }
+        if (!(await isCore(tgId)) && Number(ex.by_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Можно удалять только свои расходы' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `Удалить «<b>${esc(ex.title)}</b> — ${ex.amount} BYN»?`,
+          reply_markup: kb([[{ text: '🗑 Да, удалить', callback_data: `expdelgo_${evId}_${expId}` }, { text: 'Отмена', callback_data: `expview_${evId}` }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('expdelgo_')) {
+        const rest = data.slice('expdelgo_'.length);
+        const us = rest.lastIndexOf('_');
+        const evId = rest.slice(0, us), expId = rest.slice(us + 1);
+        const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+        const shopping = (evRow as any)?.shopping || {};
+        const expenses = Array.isArray(shopping.expenses) ? shopping.expenses : [];
+        const ex = expenses.find((e: any) => e.id === expId);
+        if (ex && !(await isCore(tgId)) && Number(ex.by_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Нет прав' }); return res.status(200).json({ ok: true }); }
+        const next = expenses.filter((e: any) => e.id !== expId);
+        await supabase.from('events').update({ shopping: { ...shopping, expenses: next } }).eq('id', evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Удалено' });
+        await tg('sendMessage', { chat_id: chatId, text: '🗑 Расход удалён. Сплит пересчитается по оставшимся при следующей рассылке.' });
+        return res.status(200).json({ ok: true });
+      }
+      // Полная очистка расходов события — только костяк, с подтверждением.
+      if (data.startsWith('expclearall_')) {
+        const evId = data.slice('expclearall_'.length);
+        if (!(await isCore(tgId))) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '⚠️ Точно очистить ВСЕ расходы события? Действие нельзя отменить — начнёте заполнять заново.',
+          reply_markup: kb([[{ text: '🧹 Да, очистить всё', callback_data: `expclearallgo_${evId}` }, { text: 'Отмена', callback_data: `expview_${evId}` }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('expclearallgo_')) {
+        const evId = data.slice('expclearallgo_'.length);
+        if (!(await isCore(tgId))) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка клуба' }); return res.status(200).json({ ok: true }); }
+        const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+        const shopping = (evRow as any)?.shopping || {};
+        await supabase.from('events').update({ shopping: { ...shopping, expenses: [], split: null } }).eq('id', evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Очищено' });
+        await tg('sendMessage', { chat_id: chatId, text: '🧹 Все расходы очищены. Заполняйте заново — «💸 Добавить расход».' });
         return res.status(200).json({ ok: true });
       }
       // Мои гости: логистика — выбрать водителя, чтобы забрать гостя по пути.
@@ -2426,6 +2514,7 @@ export default async function handler(req: any, res: any) {
             chat_id: chatId, parse_mode: 'HTML',
             text: '⚙️ <b>Что сделать?</b>',
             reply_markup: kb([
+              [{ text: '💸 Управление расходами', callback_data: `expview_${evId}` }],
               [{ text: '💰 Разослать сплит расходов', callback_data: `admsplit_${evId}` }],
               [{ text: '💸 Должники (статусы)', callback_data: `admdebt_${evId}` }],
               [{ text: '🚩 Точка выезда', callback_data: `admptask_dep_${evId}` }, { text: '🏁 Точка прибытия', callback_data: `admptask_arr_${evId}` }],
@@ -4612,6 +4701,27 @@ export default async function handler(req: any, res: any) {
           }
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Голосование создано и разослано участникам:\n\n<b>${esc(poll.question)}</b>\n${(poll.options as string[]).map((o) => `• ${esc(o)}`).join('\n')}` });
           await broadcastPoll((created as any).id, { event_id: evId, question: poll.question, options: optionsObj }, ev?.title || 'событие');
+          return res.status(200).json({ ok: true });
+        }
+
+        // Правка расхода: новая сумма, или «название сумма» — меняем и то, и то.
+        if (sess && sess.state === 'exp_edit') {
+          const { evId, expId } = sess.context || {};
+          await clearSession(msg.from.id);
+          const raw = String(text).trim();
+          const m = raw.match(/(\d+(?:[.,]\d{1,2})?)\s*(?:br|byn?|руб\.?|р\.?)?\s*$/i) || raw.match(/(\d+(?:[.,]\d{1,2})?)/);
+          const newAmount = m ? parseFloat(m[1].replace(',', '.')) : null;
+          const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+          const shopping = (evRow as any)?.shopping || {};
+          const expenses = Array.isArray(shopping.expenses) ? shopping.expenses : [];
+          const idx = expenses.findIndex((e: any) => e.id === expId);
+          if (idx === -1) { await tg('sendMessage', { chat_id: chatId, text: 'Расход не найден — возможно, уже удалён.' }); return res.status(200).json({ ok: true }); }
+          const old = expenses[idx];
+          const restTitle = m ? raw.replace(m[0], '').trim() : raw.trim();
+          const updated = { ...old, title: (restTitle || old.title).slice(0, 120), amount: newAmount != null ? Math.round(newAmount * 100) / 100 : old.amount };
+          expenses[idx] = updated;
+          await supabase.from('events').update({ shopping: { ...shopping, expenses } }).eq('id', evId);
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ Обновил: «<b>${esc(updated.title)}</b> — ${updated.amount} BYN».` });
           return res.status(200).json({ ok: true });
         }
 
