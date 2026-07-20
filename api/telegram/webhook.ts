@@ -1301,6 +1301,33 @@ export default async function handler(req: any, res: any) {
         await finishApplication(cq.from, chatId, { ...(s?.context || {}), gender });
         return res.status(200).json({ ok: true });
       }
+      // Финал короткого знакомства для реф-ссылки: сохраняем и БЕЗ ожидания
+      // approve (уже approved) сразу ведём человека к событиям.
+      if (data.startsWith('refgender_')) {
+        const gender = data.slice('refgender_'.length) === 'female' ? 'female' : 'male';
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const s = await getSession(tgId);
+        const ctx = s?.context || {};
+        await clearSession(tgId);
+        await supabase.from('members').update({
+          first_name: ctx.name || cq.from.first_name || null,
+          phone: ctx.phone || null,
+          gender, agreed_pd: true,
+        }).eq('telegram_id', tgId);
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, text: '✅ Профиль заполнен, спасибо!' });
+        if (ctx.evPayload && String(ctx.evPayload).startsWith('event_')) {
+          const ev = await getEvent(String(ctx.evPayload).slice('event_'.length));
+          if (ev) {
+            const registered = await hasActiveReg(ev.id, tgId);
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
+          }
+        } else {
+          await sendWelcome(chatId, openBtn, await isCore(tgId));
+        }
+        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(tgId)) });
+        return res.status(200).json({ ok: true });
+      }
 
       // Шаг 2: как зовут.
       if (data === 'verify_pd') {
@@ -4074,6 +4101,18 @@ export default async function handler(req: any, res: any) {
         await askApplySource(msg.from.id, msg.chat.id, { ...sess.context, phone: msg.contact.phone_number });
         return res.status(200).json({ ok: true });
       }
+      if (sess?.state === 'refonb_phone') {
+        await setSession(msg.from.id, 'refonb_gender', { ...sess.context, phone: msg.contact.phone_number });
+        await tg('sendMessage', {
+          chat_id: msg.chat.id, parse_mode: 'HTML', text: 'И последнее — укажи пол (для логистики и расселения).',
+          reply_markup: { remove_keyboard: true },
+        });
+        await tg('sendMessage', {
+          chat_id: msg.chat.id, reply_markup: kb([[{ text: '👨 Мужской', callback_data: 'refgender_male' }, { text: '👩 Женский', callback_data: 'refgender_female' }]]),
+          text: 'Выбери:',
+        });
+        return res.status(200).json({ ok: true });
+      }
       // Контакт вне сценария — просто сохраняем телефон.
       await supabase.from('members').update({ phone: msg.contact.phone_number }).eq('telegram_id', msg.from.id);
       await tg('sendMessage', { chat_id: msg.chat.id, text: '✅ Телефон сохранён.', reply_markup: mainMenu() });
@@ -4367,6 +4406,33 @@ export default async function handler(req: any, res: any) {
               { text: '👨 Мужской', callback_data: 'applyg_male' },
               { text: '👩 Женский', callback_data: 'applyg_female' },
             ]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // ── Короткое знакомство для пришедших по реф-ссылке (без модерации,
+        // approve не ждём — статус уже 'approved' от bindReferrer, здесь только
+        // добираем имя/телефон/пол, которых раньше не было вообще) ───────────
+        if (sess && sess.state === 'refonb_name') {
+          const name = text.slice(0, 80);
+          await setSession(msg.from.id, 'refonb_phone', { ...sess.context, name });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `Приятно, <b>${esc(name)}</b>! Оставь телефон — пригодится для логистики.`,
+            reply_markup: { keyboard: [[{ text: '📞 Отправить мой номер', request_contact: true }]], resize_keyboard: true, one_time_keyboard: true },
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'refonb_phone') {
+          const phone = text.replace(/[^\d+]/g, '').slice(0, 20);
+          if (phone.length < 7) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Не похоже на телефон. Напиши в формате +375XXXXXXXXX или нажми кнопку ниже.' });
+            return res.status(200).json({ ok: true });
+          }
+          await setSession(msg.from.id, 'refonb_gender', { ...sess.context, phone });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', text: 'И последнее — укажи пол (для логистики и расселения).',
+            reply_markup: kb([[{ text: '👨 Мужской', callback_data: 'refgender_male' }, { text: '👩 Женский', callback_data: 'refgender_female' }]]),
           });
           return res.status(200).json({ ok: true });
         }
@@ -5125,6 +5191,18 @@ export default async function handler(req: any, res: any) {
           try { invitedIn = await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
           payload = sep === -1 ? '' : `event_${rest.slice(sep + '_ev_'.length)}`;
           if (invitedIn) {
+            // Реф-ссылка впускает без модерации (доверие приглашающего), но раньше
+            // ПОЛНОСТЬЮ пропускала анкету — база не знала ни имени, ни телефона,
+            // ни пола пришедшего. Короткое знакомство ОБЯЗАТЕЛЬНО, approve не ждём.
+            const { data: meRef } = await supabase.from('members').select('phone').eq('telegram_id', msg.from.id).maybeSingle();
+            if (!(meRef as any)?.phone) {
+              await setSession(msg.from.id, 'refonb_name', { evPayload: payload });
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Давай коротко познакомимся (это займёт минуту) — как тебя зовут? Имя и фамилия.',
+              });
+              return res.status(200).json({ ok: true });
+            }
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
               text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Смотри события ниже.',
