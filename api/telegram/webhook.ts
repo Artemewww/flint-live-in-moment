@@ -2909,6 +2909,18 @@ export default async function handler(req: any, res: any) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '✅ Долг закрыт' });
           try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
           try { await tg('sendMessage', { chat_id: Number(t.from), parse_mode: 'HTML', text: `✅ ${esc(t.to_name)} подтвердил получение <b>${t.amount} BYN</b> — долг закрыт, спасибо!` }); } catch { /* no-op */ }
+          // Публично отметить в группе события — только факт оплаты, без реквизитов.
+          try {
+            const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+            if ((eg as any)?.chat_id) {
+              const total = transfers.length;
+              const done = transfers.filter((x: any) => x.status === 'confirmed').length;
+              await tg('sendMessage', {
+                chat_id: Number((eg as any).chat_id), parse_mode: 'HTML',
+                text: `✅ <b>${esc(t.from_name)}</b> → <b>${esc(t.to_name)}</b>: ${t.amount} BYN оплачено${total ? ` (${done}/${total} расчётов закрыто)` : ''}.`,
+              });
+            }
+          } catch { /* группа не привязана — не критично */ }
         } else {
           t.status = 'pending'; delete t.sent_at;
           await saveSplit();
