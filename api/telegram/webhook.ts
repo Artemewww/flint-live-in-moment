@@ -4716,6 +4716,38 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        // Получатель прислал реквизиты → сохраняем в профиль и рассылаем ЛИЧНО
+        // тем, кто ему переводит по этому событию (в группу — никогда, безопасность).
+        if (sess && sess.state === 'reqset') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const details = String(text).trim().slice(0, 200);
+          if (details.length < 5) { await tg('sendMessage', { chat_id: chatId, text: 'Слишком коротко. Напиши номер карты или телефон + банк, например: +375291234567 (Альфа).' }); return res.status(200).json({ ok: true }); }
+          // Сохраняем реквизиты в профиль (пригодятся и на будущих событиях).
+          const { data: mrow } = await supabase.from('members').select('prefs').eq('telegram_id', msg.from.id).maybeSingle();
+          const prefs: any = (mrow as any)?.prefs || {};
+          prefs.payment = { method: 'card', details };
+          await supabase.from('members').update({ prefs }).eq('telegram_id', msg.from.id);
+          // Рассылаем плательщикам, у кого долг ИМЕННО этому получателю.
+          const { data: evR } = await supabase.from('events').select('title,shopping').eq('id', evId).maybeSingle();
+          const split: any = (evR as any)?.shopping?.split || {};
+          const transfers: any[] = Array.isArray(split.transfers) ? split.transfers : [];
+          const mine = transfers.filter((t) => Number(t.to) === msg.from.id && t.status !== 'confirmed');
+          let relayed = 0;
+          for (const t of mine) {
+            try {
+              await tg('sendMessage', {
+                chat_id: Number(t.from), parse_mode: 'HTML',
+                text: `💳 <b>Реквизиты для перевода ${t.amount} BYN</b> — ${esc(t.to_name)} (${esc((evR as any)?.title || 'событие')}):\n<code>${esc(details)}</code>\n\nКак переведёшь — жми кнопку, получатель подтвердит.`,
+                reply_markup: kb([[{ text: `✅ Перевёл ${t.amount} — ${t.to_name}`.slice(0, 60), callback_data: `payd_${evId}_${t.id}` }]]),
+              });
+              relayed++;
+            } catch { /* заблокировал бота */ }
+          }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: relayed ? `✅ Реквизиты сохранены и отправлены лично ${relayed} ${relayed === 1 ? 'человеку' : 'участникам'}, кто тебе переводит. В группу ничего не попало 🔒` : '✅ Реквизиты сохранены. Как появятся переводы к тебе — бот отправит их плательщикам.' });
+          return res.status(200).json({ ok: true });
+        }
+
         // Постановщик описал, что доделать → передаём исполнителю.
         if (sess && sess.state === 'task_fix') {
           const taskId = Number(sess.context?.taskId);
