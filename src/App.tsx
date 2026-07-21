@@ -369,6 +369,14 @@ export default function App() {
   // «сохранялось» на экране, но пропадало после обновления и не доходило до
   // бота. Теперь оба места отрисовки AdminPanel пишут в API, проверяют ответ и
   // рефетчат список с сервера.
+  // Кука админки истекает/слетает раньше клиентского флага localStorage —
+  // тогда запрос ловит 401. Раньше это выглядело как «просто не сохранилось».
+  // Теперь: чистим клиентскую сессию и просим войти заново.
+  const handleAdminExpired = () => {
+    try { localStorage.removeItem('flint_admin_session'); } catch { /* no-op */ }
+    alert('Сессия админки истекла — войди заново (кнопка «Админ» → пароль). Твои данные не потеряны, просто повтори сохранение после входа.');
+    window.location.reload();
+  };
   const adminSaveEvent = async (ev: CommunityEvent, isNew: boolean) => {
     try {
       const res = await fetch('/api/admin/events', {
@@ -376,6 +384,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(ev),
       });
+      if (res.status === 401) { handleAdminExpired(); return; }
       if (!res.ok) {
         const body = await res.json().catch(() => ({} as any));
         alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
@@ -390,6 +399,7 @@ export default function App() {
   const adminDeleteEvent = async (eventId: string) => {
     try {
       const res = await fetch(`/api/admin/events?eventId=${eventId}`, { method: 'DELETE' });
+      if (res.status === 401) { handleAdminExpired(); return; }
       if (!res.ok) {
         alert(`Не удалось удалить событие: HTTP ${res.status}`);
         return;
