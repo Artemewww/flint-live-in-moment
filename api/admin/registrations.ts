@@ -231,8 +231,15 @@ export default async function handler(req: any, res: any) {
       const { data: rideRequests } = await supabase
         .from('ride_requests').select('*').eq('event_id', eventId).eq('active', true);
 
-      const { data: feedback } = await supabase
+      const { data: feedbackRaw } = await supabase
         .from('feedback').select('*').eq('event_id', eventId).order('created_at', { ascending: false });
+      // Кто оставил отзыв: резолвим имя по members (в feedback только telegram_id).
+      const fbIds = Array.from(new Set((feedbackRaw || []).map((f: any) => Number(f.telegram_id)).filter((id: number) => id > 0)));
+      const { data: fbMembers } = fbIds.length
+        ? await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', fbIds)
+        : { data: [] as any[] };
+      const nameOf = new Map((fbMembers || []).map((m: any) => [Number(m.telegram_id), m.first_name || (m.username ? '@' + m.username : `id${m.telegram_id}`)]));
+      const feedback = (feedbackRaw || []).map((f: any) => ({ ...f, author_name: nameOf.get(Number(f.telegram_id)) || `id${f.telegram_id}` }));
 
       const { count: interestCount } = await supabase
         .from('interests').select('id', { count: 'exact', head: true }).eq('event_id', eventId);

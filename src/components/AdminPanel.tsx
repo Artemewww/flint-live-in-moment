@@ -2098,7 +2098,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           eventStats.feedback.map((f: any) => (
                             <div key={f.id} className="bg-white/5 rounded-lg p-3">
                               <div className="flex items-center justify-between mb-1">
+                                <span className="text-white/90 text-xs font-medium">{f.author_name || `id${f.telegram_id}`}</span>
                                 <span className="text-brand text-xs">{'★'.repeat(f.rating || 0)}</span>
+                              </div>
+                              <div className="flex items-center justify-between mb-1">
+                                <span className="text-[9px] text-white/40 font-mono">
+                                  {f.created_at ? new Date(f.created_at).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : ''}
+                                </span>
                                 <span className={`text-[9px] font-mono ${f.would_return ? 'text-brand' : 'text-rose-400'}`}>
                                   {f.would_return ? 'придёт снова' : 'не придёт'}
                                 </span>
@@ -3106,6 +3112,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               </span>
                             )}
                           </div>
+                          {m.referredBy && (
+                            <div className="text-[9px] text-white/45 font-mono mt-1">
+                              ← пришёл от: {(() => {
+                                const inv = ((audience?.members) || []).find((x: any) => String(x.telegramId) === String(m.referredBy));
+                                return inv ? (inv.firstName || (inv.username ? '@' + inv.username : `id${m.referredBy}`)) : `id${m.referredBy}`;
+                              })()}
+                            </div>
+                          )}
                         </div>
                         <div className="text-right shrink-0">
                           <p className="text-brand font-black text-sm">{m.points} 🏅</p>
