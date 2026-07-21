@@ -483,6 +483,33 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true, sent });
       }
 
+      // Живой статус расчёта: текущий shopping.split + расходы + сводка.
+      // Кнопка «должники» в админке дёргает это и показывает на момент вызова.
+      if (req.query?.action === 'split_status') {
+        const eventId = String(body.eventId || body.id || '');
+        if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+        const { data: ev } = await supabase.from('events').select('shopping').eq('id', eventId).maybeSingle();
+        const shopping = (ev as any)?.shopping || {};
+        const expenses = Array.isArray(shopping.expenses) ? shopping.expenses : [];
+        const split = shopping.split || {};
+        const transfers = Array.isArray(split.transfers) ? split.transfers : [];
+        const expTotal = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+        const openCount = transfers.filter((t: any) => t.status !== 'confirmed').length;
+        const confirmedSum = transfers.filter((t: any) => t.status === 'confirmed').reduce((s: number, t: any) => s + (Number(t.amount) || 0), 0);
+        const pendingSum = transfers.filter((t: any) => t.status !== 'confirmed').reduce((s: number, t: any) => s + (Number(t.amount) || 0), 0);
+        return res.status(200).json({
+          ok: true,
+          expenses: expenses.map((e: any) => ({ title: e.title, amount: e.amount, by_name: e.by_name })),
+          expensesTotal: Math.round(expTotal * 100) / 100,
+          transfers,
+          openCount,
+          confirmedSum: Math.round(confirmedSum * 100) / 100,
+          pendingSum: Math.round(pendingSum * 100) / 100,
+          total: split.total ?? null,
+          note: split.note ?? null,
+        });
+      }
+
       // Финальный сплит расходов: доля по ртам (участник + его гости; за гостей
       // собирает пригласивший), отказы (optout) не платят за позицию. Каждому в
       // бот — его сумма и кому переводить; сводка — в админ-чат и в ответ API.

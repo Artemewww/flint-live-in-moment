@@ -993,6 +993,20 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
   const saved: any[] = Array.isArray(event?.shopping?.expenses) ? event.shopping.expenses : [];
   const [splitBusy, setSplitBusy] = useState(false);
   const [splitResult, setSplitResult] = useState<string>('');
+  const [live, setLive] = useState<any>(null);
+  const [liveBusy, setLiveBusy] = useState(false);
+  const refreshStatus = async () => {
+    setLiveBusy(true);
+    try {
+      const res = await fetch(`/api/admin/events?action=split_status`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ eventId: event.id }),
+      });
+      const j = await res.json();
+      if (res.ok && j.ok) setLive(j);
+    } catch { /* no-op */ }
+    setLiveBusy(false);
+  };
   const sendSplit = async () => {
     if (!window.confirm('Разослать каждому участнику его долю и кому переводить?')) return;
     setSplitBusy(true); setSplitResult('');
@@ -1065,18 +1079,38 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
           >{splitBusy ? '⏳ Считаю…' : '📤 Разослать сплит в бот (по ртам: участник + гости)'}</button>
           {splitResult && <pre className="text-[9px] text-white/60 whitespace-pre-wrap mt-1">{splitResult}</pre>}
 
-          {/* Долги: висят, пока должник не переведёт, а ПОЛУЧАТЕЛЬ не подтвердит */}
-          {Array.isArray(event?.shopping?.split?.transfers) && event.shopping.split.transfers.length > 0 && (
-            <div className="mt-2 space-y-0.5">
-              <p className="text-[9px] text-white/50 uppercase font-bold">Долги ({event.shopping.split.transfers.filter((t: any) => t.status !== 'confirmed').length} открыто)</p>
-              {event.shopping.split.transfers.map((t: any, i: number) => (
-                <p key={i} className="text-[10px] text-white/70">
-                  {t.status === 'confirmed' ? '✅' : t.status === 'sent' ? '🔵' : '🟡'} {t.from_name} → {t.to_name}: <b>{t.amount} BYN</b>
-                  <span className="text-white/40"> · {t.status === 'confirmed' ? 'подтверждено' : t.status === 'sent' ? 'переведено, ждёт подтверждения получателя' : 'висит'}</span>
-                </p>
-              ))}
-            </div>
-          )}
+          {/* Должники / статус оплат: живой (по кнопке «обновить») или из загруженного события */}
+          {(() => {
+            const tr = (live?.transfers ?? event?.shopping?.split?.transfers);
+            const hasTr = Array.isArray(tr) && tr.length > 0;
+            return (
+              <div className="mt-2 space-y-0.5">
+                <div className="flex items-center justify-between">
+                  <p className="text-[9px] text-white/50 uppercase font-bold">
+                    Должники{hasTr ? ` (${tr.filter((t: any) => t.status !== 'confirmed').length} открыто)` : ''}
+                  </p>
+                  <button type="button" onClick={refreshStatus} disabled={liveBusy}
+                    className="flex items-center gap-1 text-[9px] text-brand hover:text-brand-hover font-bold uppercase border-none bg-transparent cursor-pointer">
+                    <RefreshCw className={`w-3 h-3 ${liveBusy ? 'animate-spin' : ''}`} /> Обновить
+                  </button>
+                </div>
+                {live && (
+                  <p className="text-[9px] text-white/40 font-mono">
+                    Расходы: {live.expensesTotal} BYN · закрыто {live.confirmedSum} · висит {live.pendingSum}
+                  </p>
+                )}
+                {!hasTr ? (
+                  <p className="text-[10px] text-white/40">Сплит ещё не рассылали.</p>
+                ) : tr.map((t: any, i: number) => (
+                  <p key={i} className="text-[10px] text-white/70">
+                    {t.status === 'confirmed' ? '✅' : t.status === 'sent' ? '🔵' : '🟡'} {t.from_name} → {t.to_name}: <b>{t.amount} BYN</b>
+                    {t.reason ? <span className="text-white/35"> ({t.reason})</span> : null}
+                    <span className="text-white/40"> · {t.status === 'confirmed' ? 'подтверждено' : t.status === 'sent' ? 'ждёт подтверждения' : 'висит'}</span>
+                  </p>
+                ))}
+              </div>
+            );
+          })()}
         </div>
       )}
 
