@@ -83,27 +83,44 @@ export default async function handler(req: any, res: any) {
     // Событие — для дефолтного текста.
     const { data: event } = await supabase.from('events').select('*').eq('id', eventId).single();
 
-    // Получатели: только реальные Telegram id (положительные).
-    const { data: regs } = await supabase
-      .from('registrations')
-      .select('telegram_id, status')
-      .eq('event_id', eventId);
-
-    const ids = Array.from(
-      new Set(
+    // audience='all' — всем одобрённым членам клуба (анонс нового события);
+    // иначе (по умолчанию) — только записанным на это событие.
+    const toAll = body.audience === 'all';
+    let ids: number[];
+    let total: number;
+    if (toAll) {
+      const { data: members } = await supabase
+        .from('members')
+        .select('telegram_id, status, bot_active')
+        .eq('status', 'approved');
+      ids = Array.from(new Set(
+        (members || [])
+          .filter((m: any) => m.bot_active !== false)
+          .map((m: any) => Number(m.telegram_id))
+          .filter((id: number) => Number.isFinite(id) && id > 0)
+      ));
+      total = ids.length;
+    } else {
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('telegram_id, status')
+        .eq('event_id', eventId);
+      ids = Array.from(new Set(
         (regs || [])
           .map((r: any) => Number(r.telegram_id))
           .filter((id: number) => Number.isFinite(id) && id > 0)
-      )
-    );
+      ));
+      total = (regs || []).length;
+    }
 
-    const total = (regs || []).length;
     if (ids.length === 0) {
       return res.status(200).json({
         ok: false,
         sent: 0,
         total,
-        message: 'Некому слать: ни у одного участника нет Telegram chat_id (регистрации только с сайта). Рассылка возможна тем, кто записался через бота.',
+        message: toAll
+          ? 'В базе нет одобрённых членов с Telegram chat_id.'
+          : 'Некому слать: ни у одного участника нет Telegram chat_id (регистрации только с сайта). Рассылка возможна тем, кто записался через бота.',
       });
     }
 

@@ -1447,6 +1447,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   const broadcastEvent = async (event: CommunityEvent) => {
+    // Выбор аудитории: всем в базе клуба (анонс) или только записанным на событие.
+    const toAll = window.confirm(
+      'Кому разослать?\n\nОК — ВСЕМ членам клуба в базе (анонс события).\nОтмена — только записанным на это событие.'
+    );
+    if (broadcasting) return;
     setBroadcasting(event.id);
     setBroadcastResult(null);
     try {
@@ -1454,14 +1459,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       const res = await fetch('/api/admin/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ eventId: event.id }),
+        body: JSON.stringify({ eventId: event.id, audience: toAll ? 'all' : 'event' }),
       });
+      if (res.status === 401) { handleLogout(); return; }
       const data = await res.json().catch(() => ({}));
       setBroadcastResult({
         eventId: event.id,
         success: !!data.ok,
         message: data.ok
-          ? `Отправлено ${data.sent}/${data.total} участникам`
+          ? `Отправлено ${data.sent}/${data.total} ${toAll ? 'членам клуба' : 'участникам'}`
           : (data.message || data.error || 'Некому слать (нет Telegram-получателей)'),
       });
       setTimeout(() => setBroadcastResult(null), 6000);
