@@ -1021,6 +1021,35 @@ async function finishApplication(from: any, chatId: number, context: any) {
       ]),
     });
   }
+  // Сразу собираем согласие на съёмку (пока заявка на рассмотрении) — не блокирует.
+  try { await askMediaConsent(chatId, tgId); } catch { /* no-op */ }
+}
+
+/** Записано ли согласие участника на фото/видеосъёмку (в members.prefs.media_consent). */
+async function hasMediaConsent(tgId: number): Promise<boolean> {
+  const { data } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+  return !!(data as any)?.prefs?.media_consent?.agreed;
+}
+
+/** Спросить согласие на съёмку/публикацию — только если ещё не отвечал. */
+async function askMediaConsent(chatId: number, tgId: number, force = false): Promise<void> {
+  if (!force) {
+    const { data } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+    // Если уже есть ЛЮБОЙ ответ (да/нет) — повторно не спрашиваем.
+    if ((data as any)?.prefs?.media_consent) return;
+  }
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text:
+      '📸 <b>Согласие на фото- и видеосъёмку</b>\n\n' +
+      'На событиях клуба мы снимаем фото и видео для памяти участников и публикаций клуба (соцсети, сайт, чат). ' +
+      'На них можешь оказаться и ты.\n\n' +
+      'Даёшь согласие на съёмку и публикацию материалов с твоим участием? Согласие добровольное, его можно отозвать — напиши в поддержку.',
+    reply_markup: kb([
+      [{ text: '✅ Согласен(на)', callback_data: 'mconsent_yes' }],
+      [{ text: '❌ Не согласен(на)', callback_data: 'mconsent_no' }],
+    ]),
+  });
 }
 
 /**
@@ -1200,7 +1229,7 @@ export default async function handler(req: any, res: any) {
        * непринятый человек мог открыть событие, занять место в машине и увидеть
        * логистику. Пропускаем лишь вступление, поддержку и модерацию костяка.
        */
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|support|approve_|reject_|payok_|payno_|reply_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|support|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -1301,6 +1330,25 @@ export default async function handler(req: any, res: any) {
         await finishApplication(cq.from, chatId, { ...(s?.context || {}), gender });
         return res.status(200).json({ ok: true });
       }
+      // Согласие на фото/видео — фиксируем в members.prefs.media_consent (закон РБ).
+      if (data === 'mconsent_yes' || data === 'mconsent_no') {
+        const agreed = data === 'mconsent_yes';
+        try {
+          const { data: mrow } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+          const prefs: any = (mrow as any)?.prefs || {};
+          prefs.media_consent = { agreed, at: new Date().toISOString() };
+          await supabase.from('members').update({ prefs }).eq('telegram_id', tgId);
+        } catch { /* no-op */ }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: agreed ? 'Спасибо!' : 'Принято' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: agreed
+            ? '✅ Спасибо! Согласие на съёмку зафиксировано. Отозвать можно в любой момент — напиши в поддержку.'
+            : '❌ Понял, согласия нет. Мы постараемся не снимать тебя крупным планом и не публиковать материалы с тобой. Если попадёшь в кадр — напиши, уберём.',
+        });
+        return res.status(200).json({ ok: true });
+      }
       // Финал короткого знакомства для реф-ссылки: сохраняем и БЕЗ ожидания
       // approve (уже approved) сразу ведём человека к событиям.
       if (data.startsWith('refgender_')) {
@@ -1326,6 +1374,7 @@ export default async function handler(req: any, res: any) {
           await sendWelcome(chatId, openBtn, await isCore(tgId));
         }
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(tgId)) });
+        try { await askMediaConsent(chatId, tgId); } catch { /* no-op */ }
         return res.status(200).json({ ok: true });
       }
 
