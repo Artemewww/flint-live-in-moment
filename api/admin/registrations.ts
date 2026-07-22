@@ -148,10 +148,31 @@ export default async function handler(req: any, res: any) {
       if (body.isCore !== undefined) patch.is_core = !!body.isCore;
       if (body.status !== undefined) patch.status = body.status;
       if (body.role !== undefined) patch.role = body.role;
+      if (body.gender !== undefined) patch.gender = body.gender === 'female' ? 'female' : body.gender === 'male' ? 'male' : null;
+      // Ручная правка «от кого пришёл» (защита очков: ссылку могли переслать).
+      if (body.referredBy !== undefined) patch.referred_by = body.referredBy ? Number(body.referredBy) : null;
       if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to update' });
 
       const { error } = await supabase.from('members').update(patch).eq('telegram_id', telegramId);
       if (error) return res.status(500).json({ error: error.message });
+      // Блокировка = полная изоляция: отменяем активные регистрации (иначе
+      // рассылки/напоминания бьют по registrations и доходят до заблокированного)
+      // и убираем кнопку афиши из его бота.
+      if (body.status === 'blocked') {
+        try {
+          await supabase.from('registrations').update({ status: 'cancelled' })
+            .eq('telegram_id', telegramId).neq('status', 'cancelled');
+        } catch { /* no-op */ }
+        const botToken = process.env.TELEGRAM_BOT_TOKEN;
+        if (botToken) {
+          try {
+            await fetch(`https://api.telegram.org/bot${botToken}/setChatMenuButton`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: telegramId, menu_button: { type: 'default' } }),
+            });
+          } catch { /* no-op */ }
+        }
+      }
       return res.status(200).json({ success: true });
     } catch (error) {
       return res.status(500).json({ error: (error as Error).message });

@@ -104,13 +104,21 @@ export default async function handler(req: any, res: any) {
       const { data: regs } = await supabase
         .from('registrations')
         .select('telegram_id, status')
-        .eq('event_id', eventId);
-      ids = Array.from(new Set(
+        .eq('event_id', eventId)
+        .neq('status', 'cancelled');
+      let evIds = Array.from(new Set(
         (regs || [])
           .map((r: any) => Number(r.telegram_id))
           .filter((id: number) => Number.isFinite(id) && id > 0)
       ));
-      total = (regs || []).length;
+      // Исключаем заблокированных членов — им не должно приходить ничего.
+      if (evIds.length) {
+        const { data: blk } = await supabase.from('members').select('telegram_id').eq('status', 'blocked').in('telegram_id', evIds);
+        const blocked = new Set((blk || []).map((m: any) => Number(m.telegram_id)));
+        evIds = evIds.filter((id) => !blocked.has(id));
+      }
+      ids = evIds;
+      total = ids.length;
     }
 
     if (ids.length === 0) {

@@ -48,12 +48,24 @@ async function getEvent(id: string) {
 // Состояние храним в polls.options как объект { list, status, winner, topic,
 // summary } — без миграции (колонка jsonb уже есть). poll_votes.choice = индекс.
 
-/** Кто имеет право голосовать = зарегистрированные на событие с реальным TG id. */
+/** Убрать заблокированных из списка получателей (защита: blocked не должен
+ *  получать ничего, даже если регистрация осталась активной). */
+async function dropBlocked(ids: number[]): Promise<number[]> {
+  if (!ids.length) return ids;
+  try {
+    const { data } = await supabase.from('members').select('telegram_id').eq('status', 'blocked').in('telegram_id', ids);
+    const blocked = new Set((data || []).map((m: any) => Number(m.telegram_id)));
+    return ids.filter((id) => !blocked.has(id));
+  } catch { return ids; }
+}
+
+/** Кто имеет право голосовать = зарегистрированные на событие с реальным TG id (без заблокированных). */
 async function pollEligible(evId: string): Promise<number[]> {
   const { data } = await supabase
     .from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
-  return Array.from(new Set((data || [])
+  const ids = Array.from(new Set((data || [])
     .map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0)));
+  return dropBlocked(ids);
 }
 
 /** Подсчёт голосов по вариантам + список проголосовавших. */
@@ -1510,6 +1522,12 @@ export default async function handler(req: any, res: any) {
         const approve = data.startsWith('approve_');
         const targetId = Number(data.split('_')[1]);
         await supabase.from('members').update({ status: approve ? 'approved' : 'blocked', approved_by: cq.from.id }).eq('telegram_id', targetId);
+        if (!approve) {
+          // Блокировка = полная изоляция: отменяем регистрации (иначе рассылки
+          // по registrations доходят до заблокированного) и убираем кнопку афиши.
+          try { await supabase.from('registrations').update({ status: 'cancelled' }).eq('telegram_id', targetId).neq('status', 'cancelled'); } catch { /* no-op */ }
+          try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'default' } }); } catch { /* no-op */ }
+        }
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: approve ? 'Принят ✅' : 'Отклонён' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
