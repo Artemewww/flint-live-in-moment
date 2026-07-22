@@ -23,10 +23,14 @@
 /* Страница «плавала» влево-вправо: какой-то блок вылезал за ширину экрана.
    Запрещаем горизонтальный сдвиг на уровне документа. */
 html, body {
+  width: 100%;
   max-width: 100%;
   overflow-x: hidden;
   overscroll-behavior-x: none;
+  position: relative;
 }
 #root {
-  overflow-x: hidden;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: clip; /* clip надёжнее hidden: не создаёт скролл-контекст, но режет вылезающее вправо */
 }

@@ -71,10 +71,10 @@ function mapEventToCamelCase(event: any): CommunityEvent {
  * Инфографики пути развития личности и колеса жизненного баланса.
  * Задел пополнять: добавляй объекты в массив CARDS.
  */
-function PhilosophySection() {
+function PhilosophyModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const CARDS = [
     {
-      img: '/assets/flint-stages.jpg',
+      img: '/assets/flint-stages.webp',
       title: 'Ступени развития личности',
       sub: 'Путь от заботы о себе к смыслу и единству с миром',
       desc: 'Базовый уровень → саморазвитие → самотрансценденция → единение. Мы растём вместе: от опоры и безопасности к раскрытию потенциала, служению команде и природе — и к состоянию потока и присутствия.',
@@ -87,37 +87,54 @@ function PhilosophySection() {
     },
   ];
   const [zoom, setZoom] = useState<string | null>(null);
+  useEffect(() => { if (!open) setZoom(null); }, [open]);
+  if (!open) return null;
   return (
-    <section id="philosophy-block" className="pt-8 border-t border-white/10">
-      <div className="mb-6">
-        <h2 className="font-display font-black text-2xl sm:text-3xl uppercase tracking-tight">Философия клуба</h2>
-        <p className="text-white/60 text-sm mt-1">Только живое общение. 100% чистота. Без алкоголя и фальши. Равенство, искренность и поддержка каждого.</p>
-      </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-        {CARDS.map((c) => (
-          <div key={c.img} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden flex flex-col">
-            <button type="button" onClick={() => setZoom(c.img)}
-              className="block w-full bg-black/30 border-none cursor-zoom-in p-0" aria-label={`Открыть ${c.title}`}>
-              <img src={c.img} alt={c.title} loading="lazy"
-                className="w-full h-auto max-h-[560px] object-contain" />
-            </button>
-            <div className="p-4">
-              <h3 className="font-display font-black text-lg uppercase leading-tight">{c.title}</h3>
-              <p className="text-brand text-xs font-mono uppercase tracking-wide mt-0.5">{c.sub}</p>
-              <p className="text-white/70 text-[13px] leading-relaxed mt-2">{c.desc}</p>
-            </div>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" id="philosophy-modal-root">
+      <div className="absolute inset-0 bg-black/85 backdrop-blur-md" onClick={onClose} />
+
+      <div className="bg-[#121212] rounded-3xl w-full max-w-3xl shadow-2xl relative z-10 border border-white/10 max-h-[88vh] overflow-y-auto flex flex-col text-white">
+        {/* Header */}
+        <div className="p-6 border-b border-white/10 flex justify-between items-start bg-[#181818] sticky top-0 z-10">
+          <div>
+            <span className="text-[10px] uppercase font-mono font-bold tracking-widest text-[#000] bg-brand px-2.5 py-1 rounded-full inline-block mb-1.5">Философия клуба</span>
+            <h2 className="font-display font-black text-2xl sm:text-3xl uppercase tracking-tight leading-none">Путь развития</h2>
+            <p className="text-white/60 text-sm mt-2">Только живое общение. 100% чистота. Без алкоголя и фальши. Равенство, искренность и поддержка каждого.</p>
           </div>
-        ))}
+          <button type="button" onClick={onClose}
+            className="text-white/50 hover:text-white bg-white/5 hover:bg-white/10 rounded-full w-9 h-9 flex items-center justify-center border-none cursor-pointer shrink-0 ml-3">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+          {CARDS.map((c) => (
+            <div key={c.img} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden flex flex-col">
+              <button type="button" onClick={() => setZoom(c.img)}
+                className="block w-full bg-black/30 border-none cursor-zoom-in p-0" aria-label={`Открыть ${c.title}`}>
+                <img src={c.img} alt={c.title} loading="lazy"
+                  className="w-full h-auto max-h-[520px] object-contain" />
+              </button>
+              <div className="p-4">
+                <h3 className="font-display font-black text-lg uppercase leading-tight">{c.title}</h3>
+                <p className="text-brand text-xs font-mono uppercase tracking-wide mt-0.5">{c.sub}</p>
+                <p className="text-white/70 text-[13px] leading-relaxed mt-2">{c.desc}</p>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
+
       {zoom && (
-        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
+        <div className="fixed inset-0 z-[70] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
           onClick={() => setZoom(null)}>
           <img src={zoom} alt="" className="max-w-full max-h-full object-contain rounded-lg" />
-          <button type="button" onClick={() => setZoom(null)}
+          <button type="button" onClick={(e) => { e.stopPropagation(); setZoom(null); }}
             className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full w-10 h-10 border-none cursor-pointer text-xl">✕</button>
         </div>
       )}
-    </section>
+    </div>
   );
 }
 
@@ -130,6 +147,7 @@ export default function App() {
   const [registeringEvent, setRegisteringEvent] = useState<CommunityEvent | null>(null);
   const [showMyRegistrationsModal, setShowMyRegistrationsModal] = useState<boolean>(false);
   const [showManifestoModal, setShowManifestoModal] = useState<boolean>(false);
+  const [showPhilosophyModal, setShowPhilosophyModal] = useState<boolean>(false);
   const [activeDetailEvent, setActiveDetailEvent] = useState<CommunityEvent | null>(null);
   const [verifyingEvent, setVerifyingEvent] = useState<CommunityEvent | null>(null);
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
@@ -550,6 +568,16 @@ export default function App() {
               <span>Манифест</span>
             </button>
 
+            {/* Philosophy button */}
+            <button
+              onClick={() => setShowPhilosophyModal(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+              id="show-philosophy-header-btn"
+            >
+              <Compass className="w-4 h-4 text-brand" />
+              <span>Философия</span>
+            </button>
+
             {/* Birthday Calendar button */}
             <button
               onClick={() => setShowBirthdayCalendar(true)}
@@ -631,6 +659,14 @@ export default function App() {
                 >
                   <BookOpen className="w-4 h-4 text-brand" />
                   Манифест
+                </button>
+
+                <button
+                  onClick={() => { setShowPhilosophyModal(true); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                >
+                  <Compass className="w-4 h-4 text-brand" />
+                  Философия
                 </button>
 
                 <button
@@ -723,9 +759,6 @@ export default function App() {
           />
         </section>
 
-        {/* Философия клуба: инфографики пути развития и колеса баланса */}
-        <PhilosophySection />
-
       </main>
 
       {/* Footer Block: «100% Чистота» Principles reminder */}
@@ -760,6 +793,9 @@ export default function App() {
           onSuccess={handleRegistrationSuccess}
         />
       )}
+
+      {/* Философия клуба: инфографики пути развития и колеса баланса (модалка из шапки) */}
+      <PhilosophyModal open={showPhilosophyModal} onClose={() => setShowPhilosophyModal(false)} />
 
       {/* CUSTOM POPUP MODAL 1: Community Core Manifesto & House of Persona Vectors */}
       {showManifestoModal && (
