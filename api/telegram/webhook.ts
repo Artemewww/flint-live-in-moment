@@ -540,7 +540,7 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
     { onConflict: 'telegram_id' }
   );
 
-  const { data: me } = await supabase.from('members').select('referred_by,status').eq('telegram_id', from.id).maybeSingle();
+  const { data: me } = await supabase.from('members').select('referred_by,status,phone').eq('telegram_id', from.id).maybeSingle();
   if ((me as any)?.status === 'blocked') return false;
   // Уже внутри — ссылка ничего не меняет.
   if ((me as any)?.status === 'approved') return true;
@@ -551,7 +551,14 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
   const inviterInside = (inv as any).status === 'approved' || (inv as any).is_core === true;
   if (!inviterInside) return false;
 
-  const patch: Record<string, unknown> = { status: 'approved', approved_by: inv.telegram_id };
+  // Реф-ссылка снимает МОДЕРАЦИЮ (доверие приглашающего), но НЕ этапы онбординга.
+  // Впускаем сразу только если профиль уже заполнен (человек проходил онбординг
+  // раньше). Новичка НЕ делаем approved до конца анкеты — иначе он получал бы
+  // кнопку «Афиша» и доступ, пропустив все этапы («в левую»). Approve ставится
+  // в конце refonb (обработчик refgender_).
+  const alreadyOnboarded = !!(me as any)?.phone;
+  const patch: Record<string, unknown> = { approved_by: inv.telegram_id };
+  if (alreadyOnboarded) patch.status = 'approved';
   if (!(me as any)?.referred_by) patch.referred_by = inv.telegram_id;
   await supabase.from('members').update(patch).eq('telegram_id', from.id);
 
@@ -1304,7 +1311,9 @@ export default async function handler(req: any, res: any) {
        * непринятый человек мог открыть событие, занять место в машине и увидеть
        * логистику. Пропускаем лишь вступление, поддержку и модерацию костяка.
        */
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|support|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
+      // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
+      // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -1424,8 +1433,10 @@ export default async function handler(req: any, res: any) {
         });
         return res.status(200).json({ ok: true });
       }
-      // Финал короткого знакомства для реф-ссылки: сохраняем и БЕЗ ожидания
-      // approve (уже approved) сразу ведём человека к событиям.
+      // Финал короткого знакомства для реф-ссылки: сохраняем профиль и ТОЛЬКО
+      // ТЕПЕРЬ впускаем (status=approved). До этого момента реф-новичок НЕ был
+      // approved (см. bindReferrer) — поэтому не мог получить «Афишу»/доступ,
+      // пропустив этапы. Прошёл онбординг → approved + включаем кнопку «Афиша».
       if (data.startsWith('refgender_')) {
         const gender = data.slice('refgender_'.length) === 'female' ? 'female' : 'male';
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -1435,10 +1446,12 @@ export default async function handler(req: any, res: any) {
         await supabase.from('members').update({
           first_name: ctx.name || cq.from.first_name || null,
           phone: ctx.phone || null,
-          gender, agreed_pd: true,
+          gender, agreed_pd: true, status: 'approved',
         }).eq('telegram_id', tgId);
+        // Онбординг завершён → включаем мини-апп «Афиша» для этого чата.
+        try { await tg('setChatMenuButton', { chat_id: chatId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }); } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
-        await tg('sendMessage', { chat_id: chatId, text: '✅ Профиль заполнен, спасибо!' });
+        await tg('sendMessage', { chat_id: chatId, text: '✅ Профиль заполнен, добро пожаловать! Двери клуба открыты.' });
         if (ctx.evPayload && String(ctx.evPayload).startsWith('event_')) {
           const ev = await getEvent(String(ctx.evPayload).slice('event_'.length));
           if (ev) {
