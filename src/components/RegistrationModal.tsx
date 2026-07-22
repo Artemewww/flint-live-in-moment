@@ -4,6 +4,7 @@ import { X, Send, CheckCircle2, ShieldCheck, Bell, Sparkles, Loader2, Bot, Info,
 import { CommunityEvent, Registration } from '../types';
 import { isInsideTelegram, getTelegramUser, getStartParam, haptic } from '../telegram';
 import { submitRegistration } from '../api';
+import RegistrationGate from './RegistrationGate';
 
 interface RegistrationModalProps {
   event: CommunityEvent;
@@ -53,6 +54,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
   const [delivered, setDelivered] = useState<boolean | null>(null);
   const [error, setError] = useState('');
   const [consentGiven, setConsentGiven] = useState(false);
+  // Строгий допуск: правила клуба + программа события приняты поэтапно.
+  // Пока не пройдено — к формам записи не пускаем.
+  const [gatePassed, setGatePassed] = useState(false);
 
   // Определяем реферала (из URL или Telegram start_param) и личность из Telegram.
   useEffect(() => {
@@ -213,7 +217,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
 
         {/* Modal Scrollable Canvas */}
         <div className="p-6 overflow-y-auto max-h-[75vh]" id="modal-scroll-area">
-          {!isDone ? (
+          {!isDone && !gatePassed ? (
+            <RegistrationGate event={event} onAccept={() => setGatePassed(true)} onClose={onClose} />
+          ) : !isDone ? (
             <div className="space-y-5">
               
               {/* Closed community value proposition */}
