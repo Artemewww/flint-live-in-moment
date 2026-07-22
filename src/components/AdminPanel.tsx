@@ -827,6 +827,24 @@ function fmtMsgTime(iso?: string): string {
   return `${dd}.${mo} ${hh}:${mm}`;
 }
 
+/** Дата вступления «22.07.26». */
+function fmtJoinDate(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  const yy = String(d.getFullYear()).slice(2);
+  return `${dd}.${mo}.${yy}`;
+}
+/** Сколько дней человек в боте (с даты вступления). */
+function daysInBot(iso?: string): number {
+  if (!iso) return 0;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 0;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+}
+
 /** Короткая метка отсчёта для админки: «сегодня», «завтра», «через 5 дн.», «прошло». */
 function countdownLabel(date?: string): string {
   const n = daysUntil(date);
@@ -1283,8 +1301,30 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     finally { setReplySending(false); }
   };
 
-  /** Изменить права участника (костяк/статус) и обновить список аудитории. */
-  const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string }) => {
+  /** Ручная правка «от кого пришёл»: защита очков (ссылку могли переслать). */
+  const editReferrer = async (m: any) => {
+    const input = window.prompt(
+      `От кого пришёл ${m.firstName || m.username || 'участник'}?\nВведи @ник или Telegram id пригласившего. Пусто — очистить.`,
+      m.username && m.referredByName ? '' : ''
+    );
+    if (input === null) return;
+    const val = input.trim();
+    let refId: number | null = null;
+    if (val) {
+      if (/^-?\d+$/.test(val)) refId = Number(val);
+      else {
+        const uname = val.replace(/^@/, '').toLowerCase();
+        const found = ((audience?.members) || []).find((x: any) => String(x.username || '').toLowerCase() === uname);
+        if (!found) { setActionMsg({ ok: false, text: `@${uname} не найден в аудитории` }); return; }
+        refId = Number(found.telegramId);
+      }
+      if (refId === Number(m.telegramId)) { setActionMsg({ ok: false, text: 'Нельзя указать самого себя' }); return; }
+    }
+    await patchMember(Number(m.telegramId), { referredBy: refId });
+  };
+
+  /** Изменить права участника (костяк/статус/реферер) и обновить список аудитории. */
+  const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string; referredBy?: number | null }) => {
     try {
       const res = await fetch(`/api/admin/registrations?action=member&telegramId=${telegramId}`, {
         method: 'PATCH',
@@ -3334,12 +3374,16 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           </div>
                           {m.referredBy && (
                             <div className="text-[9px] text-white/45 font-mono mt-1">
-                              ← пришёл от: {(() => {
+                              ← пришёл от: {m.referredByName || (() => {
                                 const inv = ((audience?.members) || []).find((x: any) => String(x.telegramId) === String(m.referredBy));
                                 return inv ? (inv.firstName || (inv.username ? '@' + inv.username : `id${m.referredBy}`)) : `id${m.referredBy}`;
                               })()}
                             </div>
                           )}
+                          <div className="text-[9px] text-white/40 font-mono mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+                            {m.phone && <span>📞 {m.phone}</span>}
+                            {m.createdAt && <span>в клубе с {fmtJoinDate(m.createdAt)} ({daysInBot(m.createdAt)} дн)</span>}
+                          </div>
                         </div>
                         <div className="text-right shrink-0">
                           <p className="text-brand font-black text-sm">{m.points} 🏅</p>
@@ -3347,6 +3391,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         </div>
                       </div>
                       <div className="mt-2 pt-2 border-t border-white/5 flex flex-wrap gap-2">
+                        {m.realTelegram && (
+                          <button
+                            type="button"
+                            onClick={() => { setShowAudience(false); setShowChats(true); setActiveThread(null); openThread(String(m.telegramId), m.firstName, m.username); loadConversations(); }}
+                            className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none bg-brand/15 text-brand hover:bg-brand/25"
+                            title="Открыть переписку с участником"
+                          >
+                            ✍️ Написать
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => editReferrer(m)}
+                          className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none bg-white/10 text-white/70 hover:bg-white/20"
+                          title="Изменить, от кого пришёл (защита баллов)"
+                        >
+                          ✎ Реферер
+                        </button>
                         <button
                           type="button"
                           onClick={() => patchMember(m.telegramId, { isCore: !m.isCore })}
