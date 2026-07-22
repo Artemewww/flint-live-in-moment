@@ -83,10 +83,17 @@ export default async function handler(req: any, res: any) {
    */
   if (req.method === 'GET' && req.query?.action === 'members') {
     try {
-      const { data: members } = await supabase
+      const { data: membersRaw } = await supabase
         .from('members')
-        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at')
+        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at,phone')
         .order('points', { ascending: false });
+      // Служебные Telegram-боты (анонимный админ группы, каналы, сервис) не участники —
+      // не показываем их в аудитории, чтобы список был «чётким» (жалоба владельца).
+      const SERVICE_BOT_IDS = new Set([1087968824, 136817688, 777000, 93372553]);
+      const members = (membersRaw || []).filter((m: any) =>
+        !SERVICE_BOT_IDS.has(Number(m.telegram_id)) &&
+        String(m.username || '').toLowerCase() !== 'groupanonymousbot'
+      );
 
       const { data: attended } = await supabase
         .from('registrations').select('telegram_id').eq('attended', true);
@@ -104,18 +111,26 @@ export default async function handler(req: any, res: any) {
       const attendedBy = countBy(attended || []);
       const regsBy = countBy(regs || []);
       const invitedBy = countBy((members || []).filter((m: any) => m.referred_by).map((m: any) => ({ telegram_id: m.referred_by })));
+      // Имя пригласившего по id (из полного списка, чтобы резолвить даже отфильтрованных).
+      const nameById = new Map<string, string>();
+      for (const m of membersRaw || []) {
+        nameById.set(String((m as any).telegram_id), (m as any).first_name || ((m as any).username ? '@' + (m as any).username : ''));
+      }
 
       const list = (members || []).map((m: any) => ({
         telegramId: String(m.telegram_id),
         username: m.username,
         firstName: m.first_name,
+        phone: m.phone || null,
         status: m.status || 'pending',
         isCore: !!m.is_core,
         role: m.role || 'member',
         referredBy: m.referred_by ? String(m.referred_by) : null,
+        referredByName: m.referred_by ? (nameById.get(String(m.referred_by)) || `id ${m.referred_by}`) : null,
         points: m.points || 0,
         botActive: m.bot_active !== false,
         lastSeenAt: m.last_seen_at,
+        createdAt: m.created_at,
         // Веб-заявки без Telegram имеют отрицательный хеш вместо id.
         realTelegram: Number(m.telegram_id) > 0,
         attendedCount: attendedBy.get(String(m.telegram_id)) || 0,
@@ -433,35 +448,26 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      // Сбрасываем пользователя: очищаем telegram_id, статус, реф-код, чтобы мог заново注册иться
-      const { error: updateError } = await supabase
-        .from('members')
-        .update({
-          status: 'pending',
-          referred_by: null,
-          ref_code: null,
-          bot_active: true,
-          phone: null,
-          first_name: null,
-          username: null,
-        })
-        .eq('telegram_id', telegramId);
-
-      if (updateError) {
-        return res.status(500).json({ error: updateError.message });
-      }
-
-      // Удаляем все регистрации пользователя
+      // Удаляем связанные данные, затем САМУ запись участника. Раньше здесь был
+      // лишь сброс в status='pending' с обнулением имени — из-за этого «удалённый»
+      // висел призраком «Без имени», счётчики не менялись (жалоба владельца).
       await supabase.from('registrations').delete().eq('telegram_id', telegramId);
-      // Удаляем реферальные связи
       await supabase.from('referrals').delete().or(`inviter_id.eq.${telegramId},invited_id.eq.${telegramId}`);
-      // Удаляем голоса, отзывы, интересы
       await supabase.from('program_votes').delete().eq('telegram_id', telegramId);
       await supabase.from('feedback').delete().eq('telegram_id', telegramId);
       await supabase.from('interests').delete().eq('telegram_id', telegramId);
       await supabase.from('bot_sessions').delete().eq('telegram_id', telegramId);
+      try { await supabase.from('support_messages').delete().eq('telegram_id', telegramId); } catch { /* таблицы может не быть */ }
+      // Чужой referred_by, указывавший на удалённого, обнуляем — иначе повиснет
+      // ссылка на несуществующего пригласителя.
+      await supabase.from('members').update({ referred_by: null }).eq('referred_by', telegramId);
 
-      return res.status(200).json({ success: true, notified: !!reason });
+      const { error: delError } = await supabase.from('members').delete().eq('telegram_id', telegramId);
+      if (delError) {
+        return res.status(500).json({ error: delError.message });
+      }
+
+      return res.status(200).json({ success: true, deleted: true, notified: !!reason });
     } catch (error) {
       return res.status(500).json({ error: (error as Error).message });
     }

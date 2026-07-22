@@ -1288,7 +1288,11 @@ export default async function handler(req: any, res: any) {
     // Отметка живости: любой апдейт от человека = бот у него не заблокирован.
     // Без этого нельзя честно сказать, сколько участников реально получат рассылку.
     const actor = update.callback_query?.from || update.message?.from;
-    if (actor?.id) {
+    // Служебные боты (GroupAnonymousBot, каналы, любой is_bot) — не участники;
+    // иначе в аудитории появляются «левые боты» (жалоба владельца).
+    const SERVICE_BOT_IDS = new Set([1087968824, 136817688, 777000, 93372553]);
+    const isServiceActor = !!actor && (actor.is_bot === true || SERVICE_BOT_IDS.has(Number(actor.id)));
+    if (actor?.id && !isServiceActor) {
       const base = { telegram_id: actor.id, username: actor.username || null, first_name: actor.first_name || null };
       const { error } = await supabase.from('members').upsert(
         { ...base, bot_active: true, last_seen_at: new Date().toISOString() },
