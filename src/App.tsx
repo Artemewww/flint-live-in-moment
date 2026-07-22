@@ -66,6 +66,61 @@ function mapEventToCamelCase(event: any): CommunityEvent {
   };
 }
 
+/**
+ * Раздел «Философия клуба» — визуальная опора идеологии.
+ * Инфографики пути развития личности и колеса жизненного баланса.
+ * Задел пополнять: добавляй объекты в массив CARDS.
+ */
+function PhilosophySection() {
+  const CARDS = [
+    {
+      img: '/assets/flint-stages.jpg',
+      title: 'Ступени развития личности',
+      sub: 'Путь от заботы о себе к смыслу и единству с миром',
+      desc: 'Базовый уровень → саморазвитие → самотрансценденция → единение. Мы растём вместе: от опоры и безопасности к раскрытию потенциала, служению команде и природе — и к состоянию потока и присутствия.',
+    },
+    {
+      img: '/assets/flint-wheel.jpg',
+      title: 'Колесо жизненного баланса',
+      sub: 'Гармония внутри — сила снаружи',
+      desc: '8 сфер жизни: личный рост, здоровье, карьера и дело, отдых, духовность, окружение, отношения, финансы. Развивай каждую — живи сбалансированно и будь своей лучшей версией.',
+    },
+  ];
+  const [zoom, setZoom] = useState<string | null>(null);
+  return (
+    <section id="philosophy-block" className="pt-8 border-t border-white/10">
+      <div className="mb-6">
+        <h2 className="font-display font-black text-2xl sm:text-3xl uppercase tracking-tight">Философия клуба</h2>
+        <p className="text-white/60 text-sm mt-1">Только живое общение. 100% чистота. Без алкоголя и фальши. Равенство, искренность и поддержка каждого.</p>
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+        {CARDS.map((c) => (
+          <div key={c.img} className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden flex flex-col">
+            <button type="button" onClick={() => setZoom(c.img)}
+              className="block w-full bg-black/30 border-none cursor-zoom-in p-0" aria-label={`Открыть ${c.title}`}>
+              <img src={c.img} alt={c.title} loading="lazy"
+                className="w-full h-auto max-h-[560px] object-contain" />
+            </button>
+            <div className="p-4">
+              <h3 className="font-display font-black text-lg uppercase leading-tight">{c.title}</h3>
+              <p className="text-brand text-xs font-mono uppercase tracking-wide mt-0.5">{c.sub}</p>
+              <p className="text-white/70 text-[13px] leading-relaxed mt-2">{c.desc}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+      {zoom && (
+        <div className="fixed inset-0 z-[60] bg-black/90 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out"
+          onClick={() => setZoom(null)}>
+          <img src={zoom} alt="" className="max-w-full max-h-full object-contain rounded-lg" />
+          <button type="button" onClick={() => setZoom(null)}
+            className="absolute top-4 right-4 bg-white/10 hover:bg-white/20 text-white rounded-full w-10 h-10 border-none cursor-pointer text-xl">✕</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function App() {
   const [events, setEvents] = useState<CommunityEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -667,6 +722,9 @@ export default function App() {
             selectedEventId={selectedEventId}
           />
         </section>
+
+        {/* Философия клуба: инфографики пути развития и колеса баланса */}
+        <PhilosophySection />
 
       </main>
 
