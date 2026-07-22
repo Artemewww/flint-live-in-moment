@@ -3679,12 +3679,41 @@ export default async function handler(req: any, res: any) {
         try {
           await tg('sendMessage', {
             chat_id: (ride as any).driver_id, parse_mode: 'HTML',
-            text: `🧍 <b>К тебе в машину сел ${esc(cq.from.first_name || '')}</b>` +
+            text: `🧍 <b>К тебе в машину просится ${esc(cq.from.first_name || '')}</b>` +
               (cq.from.username ? ` @${esc(cq.from.username)}` : '') + '\n' +
               ((paxInfo as any)?.phone ? `📞 <code>${esc((paxInfo as any).phone)}</code>\n` : '') +
-              `\nСобытие: ${esc((await getEvent((ride as any).event_id))?.title || '')}`,
+              `\nСобытие: ${esc((await getEvent((ride as any).event_id))?.title || '')}\n\nМесто пока за ним. Подтверди или высади:`,
+            reply_markup: kb([[
+              { text: '✅ Подтвердить', callback_data: `paxok_${rideId}_${tgId}` },
+              { text: '❌ Высадить', callback_data: `paxno_${rideId}_${tgId}` },
+            ]]),
           });
         } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+      // Водитель подтверждает/высаживает пассажира.
+      if (data.startsWith('paxok_') || data.startsWith('paxno_')) {
+        const ok = data.startsWith('paxok_');
+        const rest = data.slice(ok ? 'paxok_'.length : 'paxno_'.length);
+        const us = rest.indexOf('_');
+        const rideId = Number(rest.slice(0, us));
+        const paxId = Number(rest.slice(us + 1));
+        const { data: ride } = await supabase.from('rides').select('driver_id,driver_name,from_point,depart_text,event_id').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
+        if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
+        const paxM = await supabase.from('members').select('first_name').eq('telegram_id', paxId).maybeSingle();
+        const paxName = (paxM.data as any)?.first_name || 'Пассажир';
+        if (ok) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждено' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '✅ Подтверждён', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
+          try { await tg('sendMessage', { chat_id: paxId, parse_mode: 'HTML', text: `✅ Водитель <b>${esc((ride as any).driver_name || '')}</b> подтвердил твоё место. Выезд: ${esc((ride as any).from_point)} · ${esc((ride as any).depart_text)}` }); } catch { /* no-op */ }
+        } else {
+          // Высадить: освобождаем место и уведомляем пассажира.
+          await supabase.rpc('cancel_ride_seat', { p_ride_id: rideId, p_passenger: paxId });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пассажир высажен, место свободно' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '❌ Высажен', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
+          try { await tg('sendMessage', { chat_id: paxId, parse_mode: 'HTML', text: `❌ К сожалению, водитель <b>${esc((ride as any).driver_name || '')}</b> не смог взять тебя в эту машину. Посмотри другие машины или встань в очередь — «🚗 Логистика».` }); } catch { /* no-op */ }
+        }
         return res.status(200).json({ ok: true });
       }
 
