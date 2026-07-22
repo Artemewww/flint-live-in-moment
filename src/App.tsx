@@ -173,6 +173,9 @@ export default function App() {
   const [incompleteProfile, setIncompleteProfile] = useState(false);
   /** Участник заблокирован (members.status === 'blocked') — афиша ему недоступна. */
   const [banned, setBanned] = useState(false);
+  /** Сервер ответил 403 members_only: не зарегистрирован в клубе — афишу не показываем.
+   *  Реф-код больше НЕ открывает афишу (только вступление в боте). */
+  const [membersOnly, setMembersOnly] = useState(false);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -198,7 +201,7 @@ export default function App() {
       headers: { 'X-Telegram-Init-Data': getInitData() },
     })
       .then(res => {
-        if (res.status === 403) { setEvents([]); setEventsLoading(false); return Promise.reject('members_only'); }
+        if (res.status === 403) { setEvents([]); setEventsLoading(false); setMembersOnly(true); return Promise.reject('members_only'); }
         return res.ok ? res.json() : Promise.reject('API not available');
       })
       .then(data => {
@@ -500,6 +503,35 @@ export default function App() {
 
   if (gateEnabled && !gatePassed) {
     return <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />;
+  }
+
+  // Жёсткий клубный гейт: сервер отдаёт афишу только зарегистрированным участникам
+  // (approved/core через Telegram initData). Реф-код больше НЕ открывает систему —
+  // сначала вступление в боте. Кто прошёл визуальный гейт кодом, но не член — сюда.
+  if (gateEnabled && membersOnly && !showAdminPanel) {
+    return (
+      <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center px-6 text-center overflow-hidden relative">
+        <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand/5 rounded-full blur-3xl pointer-events-none" />
+        <div className="text-5xl mb-6 relative z-10">🔒</div>
+        <h1 className="font-display font-black text-3xl uppercase tracking-tight mb-3 relative z-10">Только для участников</h1>
+        <p className="text-sm text-white/60 max-w-sm leading-relaxed font-sans relative z-10">
+          «Живи в моменте» — закрытый клуб. Афишу видят только зарегистрированные участники.
+          Вступление проходит в Telegram-боте: пройди короткие этапы — и афиша откроется здесь автоматически.
+        </p>
+        <a
+          href="https://t.me/campsflint_bot"
+          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide relative z-10"
+        >
+          Вступить через бот
+        </a>
+        <button
+          onClick={() => setShowAdminPanel(true)}
+          className="mt-4 text-[11px] text-white/30 hover:text-white/70 transition-colors font-mono bg-transparent border-none cursor-pointer relative z-10"
+        >
+          Я организатор — вход в админку
+        </button>
+      </div>
+    );
   }
 
   // Бан: заблокированному участнику афиша полностью недоступна (независимо от шлюза).

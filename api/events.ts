@@ -584,25 +584,18 @@ export default async function handler(req: any, res: any) {
     if (req.query?.action === 'gallery') return await handleGallery(req, res);
     if (req.query?.action === 'media') return await handleMedia(req, res);
 
-    // Афиша — только для своих. Раньше список отдавался публично целиком
-    // (select *): любой, знающий URL, видел закрытые события с деталями оплат
-    // и координатами. Пускаем участника клуба (подписанный initData) или
-    // человека с валидным реф-кодом приглашения.
+    // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
+    // отдавался публично, а затем пускал по одному реф-коду — так не-член видел
+    // всю систему, не пройдя этапы. Владелец: закрыть жёстко. Теперь доступ дают
+    // только: (а) подписанный Telegram initData участника approved/core, либо
+    // (б) админ-кука. Голого реф-кода НЕДОСТАТОЧНО — сначала вступление в боте.
     if ((process.env.GATE_ENABLED ?? '1') !== '0') {
-      // Админ (httpOnly-кука сессии) видит афишу всегда — иначе после
-      // закрытия списка гейтом админка оставалась без событий.
       let allowed = isAdmin(req);
       const user = allowed ? null : verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
       if (user) {
         const { data: m } = await supabase
           .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
         allowed = !!m && (m.status === 'approved' || m.is_core === true);
-      }
-      const ref = String(req.query?.ref || '').trim();
-      if (!allowed && ref) {
-        const { data: inviter } = await supabase
-          .from('members').select('telegram_id').eq('ref_code', ref).maybeSingle();
-        allowed = !!inviter;
       }
       if (!allowed) return res.status(403).json({ error: 'members_only' });
     }
