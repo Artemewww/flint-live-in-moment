@@ -564,6 +564,33 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
   return true;
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
+
+// Причины высадки пассажира: короткий код → человекочитаемая формулировка,
+// которую увидит высаженный. «other» — водитель пишет свою причину текстом.
+const DROP_REASON: Record<string, string> = {
+  full: 'Машина заполнилась',
+  route: 'Изменился маршрут — не по пути',
+  plans: 'Изменились планы',
+};
+/** Клавиатура выбора причины. prefix = `pxd_<ride>_<pax>` или `pxdall_<ride>`. */
+function dropReasonKb(prefix: string) {
+  return kb([
+    [{ text: '🚗 Машина заполнилась', callback_data: `${prefix}_full` }],
+    [{ text: '🗺 Не по пути', callback_data: `${prefix}_route` }],
+    [{ text: '🕐 Изменились планы', callback_data: `${prefix}_plans` }],
+    [{ text: '✍️ Другая причина', callback_data: `${prefix}_other` }],
+  ]);
+}
+/** Освободить место пассажира и уведомить его с причиной. */
+async function dropPassenger(rideId: number, paxId: number, reason: string, driverName: string) {
+  await supabase.rpc('cancel_ride_seat', { p_ride_id: rideId, p_passenger: paxId });
+  try {
+    await tg('sendMessage', {
+      chat_id: paxId, parse_mode: 'HTML',
+      text: `❌ Водитель <b>${esc(driverName || '')}</b> не сможет взять тебя в машину.\nПричина: <i>${esc(reason)}</i>\n\nПосмотри другие машины или встань в очередь — «🚗 Логистика».`,
+    });
+  } catch { /* пассажир мог остановить бота */ }
+}
 /**
  * Флаги функций события. Админ включает/выключает в карточке события
  * (живут в events.notifications: feat_food/feat_rides/feat_tents, без DDL).
@@ -3707,29 +3734,100 @@ export default async function handler(req: any, res: any) {
         } catch { /* no-op */ }
         return res.status(200).json({ ok: true });
       }
-      // Водитель подтверждает/высаживает пассажира.
-      if (data.startsWith('paxok_') || data.startsWith('paxno_')) {
-        const ok = data.startsWith('paxok_');
-        const rest = data.slice(ok ? 'paxok_'.length : 'paxno_'.length);
+      // Водитель ✅ подтверждает пассажира.
+      if (data.startsWith('paxok_')) {
+        const rest = data.slice('paxok_'.length);
         const us = rest.indexOf('_');
         const rideId = Number(rest.slice(0, us));
         const paxId = Number(rest.slice(us + 1));
         const { data: ride } = await supabase.from('rides').select('driver_id,driver_name,from_point,depart_text,event_id').eq('id', rideId).maybeSingle();
         if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
         if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждено' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '✅ Подтверждён', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
+        try { await tg('sendMessage', { chat_id: paxId, parse_mode: 'HTML', text: `✅ Водитель <b>${esc((ride as any).driver_name || '')}</b> подтвердил твоё место. Выезд: ${esc((ride as any).from_point)} · ${esc((ride as any).depart_text)}` }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+      // Водитель ❌ высаживает — сначала выбор причины (одного) + «высадить всех».
+      if (data.startsWith('paxno_')) {
+        const rest = data.slice('paxno_'.length);
+        const us = rest.indexOf('_');
+        const rideId = Number(rest.slice(0, us));
+        const paxId = Number(rest.slice(us + 1));
+        const { data: ride } = await supabase.from('rides').select('driver_id').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
+        if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
         const paxM = await supabase.from('members').select('first_name').eq('telegram_id', paxId).maybeSingle();
-        const paxName = (paxM.data as any)?.first_name || 'Пассажир';
-        if (ok) {
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждено' });
-          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '✅ Подтверждён', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
-          try { await tg('sendMessage', { chat_id: paxId, parse_mode: 'HTML', text: `✅ Водитель <b>${esc((ride as any).driver_name || '')}</b> подтвердил твоё место. Выезд: ${esc((ride as any).from_point)} · ${esc((ride as any).depart_text)}` }); } catch { /* no-op */ }
-        } else {
-          // Высадить: освобождаем место и уведомляем пассажира.
-          await supabase.rpc('cancel_ride_seat', { p_ride_id: rideId, p_passenger: paxId });
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пассажир высажен, место свободно' });
-          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([[{ text: '❌ Высажен', callback_data: 'pnoop_0' }]]) }); } catch { /* no-op */ }
-          try { await tg('sendMessage', { chat_id: paxId, parse_mode: 'HTML', text: `❌ К сожалению, водитель <b>${esc((ride as any).driver_name || '')}</b> не смог взять тебя в эту машину. Посмотри другие машины или встань в очередь — «🚗 Логистика».` }); } catch { /* no-op */ }
+        const paxName = (paxM.data as any)?.first_name || 'пассажира';
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const rows = dropReasonKb(`pxd_${rideId}_${paxId}`).inline_keyboard;
+        rows.push([{ text: '❌ Высадить ВСЕХ пассажиров', callback_data: `pxda_${rideId}` }]);
+        try {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: `За что высаживаешь <b>${esc(paxName)}</b>?\nВыбери причину — пассажир её увидит.`,
+            reply_markup: kb(rows),
+          });
+        } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+      // Высадить ОДНОГО с выбранной причиной (или «Другая» → ввод текста).
+      if (data.startsWith('pxd_')) {
+        const [, rideRaw, paxRaw, code] = data.split('_');
+        const rideId = Number(rideRaw), paxId = Number(paxRaw);
+        const { data: ride } = await supabase.from('rides').select('driver_id,driver_name').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
+        if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
+        if (code === 'other') {
+          await setSession(tgId, 'ride_drop_reason', { rideId, paxId, scope: 'one' });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([]) }); } catch { /* no-op */ }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✍️ Напиши причину высадки — пассажир её увидит.' });
+          return res.status(200).json({ ok: true });
         }
+        const reason = DROP_REASON[code] || 'Не срослось';
+        await dropPassenger(rideId, paxId, reason, (ride as any).driver_name || '');
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пассажир высажен' });
+        try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `❌ Высажен. Причина: <i>${esc(reason)}</i>` }); } catch { /* no-op */ }
+        await notifyWaitlist(rideId, 'car');
+        return res.status(200).json({ ok: true });
+      }
+      // «Высадить всех» → показать выбор причины для всех.
+      if (data.startsWith('pxda_')) {
+        const rideId = Number(data.slice('pxda_'.length));
+        const { data: ride } = await supabase.from('rides').select('driver_id').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
+        if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        try {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: 'Высаживаешь ВСЕХ пассажиров. За что? Причину увидит каждый.',
+            reply_markup: dropReasonKb(`pxdall_${rideId}`),
+          });
+        } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+      // Высадить ВСЕХ с выбранной причиной (или «Другая» → ввод текста).
+      if (data.startsWith('pxdall_')) {
+        const [, rideRaw, code] = data.split('_');
+        const rideId = Number(rideRaw);
+        const { data: ride } = await supabase.from('rides').select('driver_id,driver_name').eq('id', rideId).maybeSingle();
+        if (!ride) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Поездка не найдена' }); return res.status(200).json({ ok: true }); }
+        if (Number((ride as any).driver_id) !== tgId) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает водитель этой машины' }); return res.status(200).json({ ok: true }); }
+        if (code === 'other') {
+          await setSession(tgId, 'ride_drop_reason', { rideId, scope: 'all' });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([]) }); } catch { /* no-op */ }
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✍️ Напиши причину высадки всех — пассажиры её увидят.' });
+          return res.status(200).json({ ok: true });
+        }
+        const reason = DROP_REASON[code] || 'Не срослось';
+        const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').eq('ride_id', rideId);
+        for (const p of pax || []) await dropPassenger(rideId, Number((p as any).passenger_id), reason, (ride as any).driver_name || '');
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Все пассажиры высажены' });
+        try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: `❌ Все пассажиры высажены. Причина: <i>${esc(reason)}</i>` }); } catch { /* no-op */ }
+        await notifyWaitlist(rideId, 'car');
         return res.status(200).json({ ok: true });
       }
 
@@ -4477,16 +4575,45 @@ export default async function handler(req: any, res: any) {
         }
         if (sess && sess.state === 'ride_point') {
           await setSession(msg.from.id, 'ride_depart', { ...sess.context, from: text.slice(0, 120) });
-          // Подставляем дату события — чтобы не лезть в календарь.
+          // Дату НЕ спрашиваем — она всегда берётся из события (чтобы не разъезжалась
+          // с реальной датой, как было с ошибочным «17 июля» вместо 24-го).
           const evD = await getEvent(sess.context?.evId);
-          const dayLbl = evD ? (evD.date_label || dayPhrase(evD.date)) : '';
-          const example = evD ? `${dayPhrase(evD.date)}, 08:00` : '18 июля, 08:00';
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🕐 <b>Когда выезжаешь?</b>${dayLbl ? `\nСобытие: <b>${esc(dayLbl)}</b>${evD?.time ? `, старт в ${esc(evD.time)}` : ''}.` : ''}\nНапиши дату и время выезда — напр. «${esc(example)}».` });
+          const dayLbl = evD ? dayPhrase(evD.date) : '';
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🕐 <b>Во сколько выезжаешь?</b>${dayLbl ? `\nДата — как у события: <b>${esc(dayLbl)}</b>${evD?.time ? ` (старт в ${esc(evD.time)})` : ''}.` : ''}\nНапиши только время выезда — напр. «08:00».` });
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'ride_depart') {
-          await setSession(msg.from.id, 'ride_seats', { ...sess.context, depart: text.slice(0, 80) });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '💺 Сколько свободных мест можешь взять?', reply_markup: kb([[1, 2, 3, 4].map((n) => ({ text: String(n), callback_data: `rseats_${n}` }))]) });
+          // Собираем «дата события + время водителя»: дата фиксирована событием,
+          // от водителя нужно только время. Так дата всегда совпадает с событием.
+          const evD = await getEvent(sess.context?.evId);
+          const dayLbl = evD ? dayPhrase(evD.date) : '';
+          const tm = String(text).match(/(\d{1,2})[:.\s](\d{2})/);
+          const timePart = tm ? `${tm[1].padStart(2, '0')}:${tm[2]}` : (evD?.time || String(text).slice(0, 20).trim());
+          const depart = dayLbl ? `${dayLbl}, ${timePart}` : timePart;
+          await setSession(msg.from.id, 'ride_seats', { ...sess.context, depart: depart.slice(0, 80) });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `Записал выезд: <b>${esc(depart)}</b>.\n\n💺 Сколько свободных мест можешь взять?`, reply_markup: kb([[1, 2, 3, 4].map((n) => ({ text: String(n), callback_data: `rseats_${n}` }))]) });
+          return res.status(200).json({ ok: true });
+        }
+        // Водитель пишет свою причину высадки (кнопка «Другая причина»).
+        if (sess && sess.state === 'ride_drop_reason') {
+          const { rideId, paxId, scope } = sess.context || {};
+          await clearSession(msg.from.id);
+          const { data: ride } = await supabase.from('rides').select('driver_id,driver_name').eq('id', rideId).maybeSingle();
+          if (!ride || Number((ride as any).driver_id) !== msg.from.id) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Это не твоя поездка.' });
+            return res.status(200).json({ ok: true });
+          }
+          const reason = String(text).slice(0, 200);
+          const driverName = (ride as any).driver_name || '';
+          if (scope === 'all') {
+            const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').eq('ride_id', rideId);
+            for (const p of pax || []) await dropPassenger(rideId, Number((p as any).passenger_id), reason, driverName);
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `❌ Высадил всех пассажиров. Причина отправлена им: <i>${esc(reason)}</i>` });
+          } else {
+            await dropPassenger(rideId, Number(paxId), reason, driverName);
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `❌ Высадил пассажира. Причина отправлена: <i>${esc(reason)}</i>` });
+          }
+          await notifyWaitlist(rideId, 'car');
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'fb_comment') {
