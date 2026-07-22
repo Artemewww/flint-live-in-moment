@@ -494,9 +494,13 @@ async function updateReg(evId: string, tgId: any, patch: Record<string, unknown>
 
 // Очередь ожидания: место освободилось → зовём первого в очереди на эту машину/палатку.
 async function notifyWaitlist(rideId: number, kind: 'car' | 'tent') {
-  const { data: next } = await supabase.from('ride_requests')
+  const { data: queue } = await supabase.from('ride_requests')
     .select('passenger_id').eq('ride_id', rideId).eq('active', true)
-    .order('created_at', { ascending: true }).limit(1).maybeSingle();
+    .order('created_at', { ascending: true }).limit(10);
+  if (!queue || !queue.length) return;
+  // Из очереди берём первого approved-члена: не-членам место не предлагаем.
+  const ok = await approvedOnly(queue.map((q: any) => q.passenger_id));
+  const next = queue.find((q: any) => ok.has(Number(q.passenger_id)));
   if (!next) return;
   // Снимаем его с очереди — свой шанс он получил (кто первый нажал, того и бронь).
   await supabase.from('ride_requests').update({ active: false })
@@ -1012,6 +1016,22 @@ async function isApproved(tgId: number): Promise<boolean> {
 async function isCore(tgId: number): Promise<boolean> {
   const m = await memberOf(tgId);
   return !!m && m.is_core === true;
+}
+
+/**
+ * Оставить из списка id только approved-членов клуба. Любые club-рассылки
+ * (попутки, логистика, события) не должны уходить не-членам — даже если они
+ * как-то попали в rides/ride_requests. Защита-в-глубину против утечки.
+ */
+async function approvedOnly(ids: Array<number | string>): Promise<Set<number>> {
+  const uniq = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!uniq.length) return new Set();
+  const { data } = await supabase.from('members').select('telegram_id,status,is_core').in('telegram_id', uniq);
+  const ok = new Set<number>();
+  for (const m of data || []) {
+    if ((m as any).status === 'approved' || (m as any).is_core === true) ok.add(Number((m as any).telegram_id));
+  }
+  return ok;
 }
 
 /** Шаг «откуда узнал». Если человек пришёл по ссылке — реферер уже известен. */
@@ -3630,9 +3650,11 @@ export default async function handler(req: any, res: any) {
             + (carBonus ? `\n\n🏅 <b>+${POINTS_SHARE_CAR} баллов</b> за то, что везёшь других! Всего: ${carBonus}.` : ''),
           reply_markup: kb([[openBtn]]),
         });
-        // Уведомить тех, кто искал попутку.
+        // Уведомить тех, кто искал попутку (только approved-членов — не-членам не шлём).
         const { data: reqs } = await supabase.from('ride_requests').select('passenger_id').eq('event_id', evId).eq('active', true);
+        const reqOk = await approvedOnly((reqs || []).map((r: any) => r.passenger_id));
         for (const r of (reqs || [])) {
+          if (!reqOk.has(Number((r as any).passenger_id))) continue;
           try { await tg('sendMessage', { chat_id: (r as any).passenger_id, parse_mode: 'HTML', text: `🚗 Появилась машина на событие! ${esc(cq.from.first_name || 'Водитель')} едет из «${esc(from)}» (${esc(depart)}). Открой «Кто едет», чтобы занять место.`, reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]) }); } catch { /* no-op */ }
         }
         return res.status(200).json({ ok: true });
@@ -3696,6 +3718,10 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место забронировано ✅' });
+        // Сел в машину → снимаем его заявку «нужна попутка», чтобы не висел в списке
+        // ищущих (и в админке). Матчим по событию и пассажиру (как ставили в rideseek_).
+        await supabase.from('ride_requests').update({ active: false })
+          .eq('event_id', (ride as any).event_id).eq('passenger_id', tgId);
 
         // Контакты в обе стороны: Telegram у человека может быть закрыт настройками,
         // и тогда без телефона попутчики друг друга не найдут.
@@ -3989,7 +4015,9 @@ export default async function handler(req: any, res: any) {
         await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🚶 Заявка «нужна попутка» принята. Как только кто-то заявит машину — пришлю сюда. Можешь и сам заглянуть в «Кто едет».', reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]) });
         const { data: drivers } = await supabase.from('rides').select('driver_id').eq('event_id', evId).eq('active', true);
         const uniq = [...new Set((drivers || []).map((d: any) => d.driver_id))];
+        const drvOk = await approvedOnly(uniq);
         for (const did of uniq) {
+          if (!drvOk.has(Number(did))) continue;
           try { await tg('sendMessage', { chat_id: did, parse_mode: 'HTML', text: `🚶 ${esc(cq.from.first_name || 'Участник')} ищет попутку на событие. Если есть место — напиши ему или добавь мест.` }); } catch { /* no-op */ }
         }
         return res.status(200).json({ ok: true });
