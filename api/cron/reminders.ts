@@ -29,8 +29,26 @@ function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// Защита-в-глубину: забаненные (members.status='blocked') не должны получать
+// НИ ОДНОГО автосообщения крона. Основной барьер — бан отменяет регистрации
+// (d033626), но для legacy/гонок фильтруем централизованно на слое отправки:
+// заполняется один раз в начале handler, короткозамыкает оба пути (tg/send).
+let blockedIds = new Set<number>();
+async function loadBlockedIds(): Promise<void> {
+  try {
+    const { data } = await supabase.from('members').select('telegram_id').eq('status', 'blocked');
+    blockedIds = new Set((data || []).map((m: any) => Number(m.telegram_id)).filter((n: number) => Number.isFinite(n)));
+  } catch { blockedIds = new Set(); }
+}
+/** Личное сообщение забаненному — не слать. Групповые (отрицательный chat_id) не трогаем. */
+function isBlockedChat(chatId: unknown): boolean {
+  const n = Number(chatId);
+  return Number.isFinite(n) && n > 0 && blockedIds.has(n);
+}
+
 async function tg(method: string, payload: unknown) {
   try {
+    if (method === 'sendMessage' && isBlockedChat((payload as any)?.chat_id)) return { ok: false, blocked: true };
     const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -43,6 +61,7 @@ async function tg(method: string, payload: unknown) {
 }
 
 async function send(chatId: number, text: string, replyMarkup?: unknown): Promise<boolean> {
+  if (isBlockedChat(chatId)) return false;
   try {
     const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -118,6 +137,9 @@ export default async function handler(req: any, res: any) {
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
   const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, autoRemindersSent: 0, errors: [] as string[] };
+
+  // Забаненных исключаем на слое отправки (защита-в-глубину для legacy).
+  await loadBlockedIds();
 
   // ══════════════════════════════════════════════════════════════════════════
   // БЛОК A: Автонапоминания (каждые 15 мин, не ждём суточного крона)
