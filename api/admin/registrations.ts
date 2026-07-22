@@ -7,6 +7,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 );
 
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+
 /** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
 function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
   const line: any = { t: new Date().toISOString(), level, scope: 'admin/registrations', msg };
@@ -132,6 +134,115 @@ export default async function handler(req: any, res: any) {
           blocked: list.filter((m) => m.realTelegram && !m.botActive).length,
         },
       });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
+  // ─── Переписка поддержки: лента «костяк ↔ участник» ────────────────────────
+  // Список диалогов: по каждому собеседнику — последнее сообщение, счётчик,
+  // сколько входящих без ответа. Имя тянем из members.
+  if (req.method === 'GET' && req.query?.action === 'conversations') {
+    try {
+      const { data: msgs } = await supabase
+        .from('support_messages')
+        .select('telegram_id,direction,text,from_name,created_at')
+        .order('created_at', { ascending: false })
+        .limit(2000);
+      const rows = msgs || [];
+      const nameMap = new Map<string, { first_name?: string; username?: string }>();
+      const ids = Array.from(new Set(rows.map((m: any) => Number(m.telegram_id))));
+      if (ids.length) {
+        const { data: mem } = await supabase
+          .from('members').select('telegram_id,first_name,username').in('telegram_id', ids);
+        for (const m of mem || []) nameMap.set(String((m as any).telegram_id), m as any);
+      }
+      const threads = new Map<string, any>();
+      for (const m of rows) {
+        const key = String(m.telegram_id);
+        let t = threads.get(key);
+        if (!t) {
+          const nm = nameMap.get(key);
+          t = {
+            telegramId: key,
+            firstName: nm?.first_name || null,
+            username: nm?.username || null,
+            lastText: m.text,
+            lastDirection: m.direction,
+            lastAt: m.created_at,
+            count: 0,
+            unanswered: 0,
+          };
+          threads.set(key, t);
+        }
+        t.count += 1;
+      }
+      // Непрочитанные: входящие, пришедшие после последнего исходящего.
+      for (const [key, t] of threads) {
+        const thread = rows.filter((m: any) => String(m.telegram_id) === key); // desc
+        let unanswered = 0;
+        for (const m of thread) {
+          if (m.direction === 'out') break;
+          unanswered += 1;
+        }
+        t.unanswered = unanswered;
+      }
+      const list = Array.from(threads.values())
+        .sort((a, b) => new Date(b.lastAt).getTime() - new Date(a.lastAt).getTime());
+      return res.status(200).json({ conversations: list });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
+  // Полная лента одного собеседника (по возрастанию времени).
+  if (req.method === 'GET' && req.query?.action === 'conversation') {
+    try {
+      const tid = Number(req.query.tid);
+      if (!Number.isFinite(tid)) return res.status(400).json({ error: 'bad tid' });
+      const { data: msgs } = await supabase
+        .from('support_messages')
+        .select('id,direction,text,from_name,created_at')
+        .eq('telegram_id', tid)
+        .order('created_at', { ascending: true })
+        .limit(500);
+      const { data: mem } = await supabase
+        .from('members').select('first_name,username').eq('telegram_id', tid).maybeSingle();
+      return res.status(200).json({
+        telegramId: String(tid),
+        firstName: (mem as any)?.first_name || null,
+        username: (mem as any)?.username || null,
+        messages: msgs || [],
+      });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
+  // Ответ участнику прямо из админки: шлём в бот + пишем в ленту.
+  if (req.method === 'POST' && req.query?.action === 'reply') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+      const tid = Number(body.telegramId);
+      const text = String(body.text || '').trim();
+      if (!Number.isFinite(tid) || tid <= 0) return res.status(400).json({ error: 'Нужен реальный Telegram id' });
+      if (!text) return res.status(400).json({ error: 'Пустой ответ' });
+      if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
+      const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: tid, parse_mode: 'HTML',
+          text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
+        }),
+      });
+      const tgj = await r.json().catch(() => ({ ok: false }));
+      if (!tgj.ok) return res.status(200).json({ ok: false, error: 'Не доставлено — участник мог остановить бота' });
+      await supabase.from('support_messages').insert({
+        telegram_id: tid, direction: 'out', text: text.slice(0, 4000), from_name: 'Организатор (админка)',
+      });
+      return res.status(200).json({ ok: true });
     } catch (error) {
       return res.status(500).json({ error: (error as Error).message });
     }

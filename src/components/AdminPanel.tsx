@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen } from 'lucide-react';
+import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft } from 'lucide-react';
 import { CommunityEvent, HouseQuality, UserProfile } from '../types';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
@@ -812,6 +812,21 @@ function daysUntil(date?: string): number | null {
   return Math.round((d.getTime() - today.getTime()) / 86400000);
 }
 
+/** Метка времени сообщения: «14:32» сегодня, иначе «22.07 14:32». */
+function fmtMsgTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  if (sameDay) return `${hh}:${mm}`;
+  const dd = String(d.getDate()).padStart(2, '0');
+  const mo = String(d.getMonth() + 1).padStart(2, '0');
+  return `${dd}.${mo} ${hh}:${mm}`;
+}
+
 /** Короткая метка отсчёта для админки: «сегодня», «завтра», «через 5 дн.», «прошло». */
 function countdownLabel(date?: string): string {
   const n = daysUntil(date);
@@ -1193,6 +1208,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Сортировка аудитории. */
   const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name'>('default');
 
+  /** Переписка поддержки: список диалогов и открытый тред. */
+  const [showChats, setShowChats] = useState(false);
+  const [conversations, setConversations] = useState<any[] | null>(null);
+  const [activeThread, setActiveThread] = useState<any | null>(null);
+  const [replyText, setReplyText] = useState('');
+  const [replySending, setReplySending] = useState(false);
+
   /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
   const openParticipants = (filter: typeof partFilter, attended = false) => {
     setPartFilter(filter);
@@ -1211,6 +1233,54 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     } catch (e) {
       setActionMsg({ ok: false, text: 'Не удалось загрузить участников' });
     }
+  };
+
+  /** Переписка: список диалогов «костяк ↔ участник». */
+  const loadConversations = async () => {
+    try {
+      const res = await fetch('/api/admin/registrations?action=conversations');
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setConversations(j.conversations || []);
+    } catch { setActionMsg({ ok: false, text: 'Не удалось загрузить переписку' }); }
+  };
+
+  /** Открыть полную ленту одного собеседника. */
+  const openThread = async (tid: string, name?: string, username?: string) => {
+    setActiveThread({ telegramId: tid, firstName: name, username, messages: null });
+    setReplyText('');
+    try {
+      const res = await fetch(`/api/admin/registrations?action=conversation&tid=${encodeURIComponent(tid)}`);
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setActiveThread(j);
+    } catch { setActionMsg({ ok: false, text: 'Не удалось открыть диалог' }); }
+  };
+
+  /** Ответить участнику прямо из админки (бот доставит + запишем в ленту). */
+  const sendReply = async () => {
+    const tid = activeThread?.telegramId;
+    const text = replyText.trim();
+    if (!tid || !text || replySending) return;
+    if (Number(tid) <= 0) { setActionMsg({ ok: false, text: 'Веб-заявка без Telegram — ответить нельзя' }); return; }
+    setReplySending(true);
+    try {
+      const res = await fetch('/api/admin/registrations?action=reply', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramId: Number(tid), text }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      if (j.ok) {
+        setReplyText('');
+        await openThread(String(tid), activeThread?.firstName, activeThread?.username);
+        loadConversations();
+        setActionMsg({ ok: true, text: 'Ответ отправлен' });
+      } else {
+        setActionMsg({ ok: false, text: j.error || 'Не отправлено' });
+      }
+    } catch { setActionMsg({ ok: false, text: 'Ошибка сети' }); }
+    finally { setReplySending(false); }
   };
 
   /** Изменить права участника (костяк/статус) и обновить список аудитории. */
@@ -1583,12 +1653,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h2 className="font-display font-black text-lg md:text-2xl uppercase">Админка</h2>
-            <button
-              onClick={() => { setShowAudience(true); loadAudience(); }}
-              className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
-            >
-              👥 Аудитория клуба →
-            </button>
+            <div className="flex items-center gap-3 flex-wrap">
+              <button
+                onClick={() => { setShowAudience(true); loadAudience(); }}
+                className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
+                👥 Аудитория клуба →
+              </button>
+              <button
+                onClick={() => { setShowChats(true); setActiveThread(null); loadConversations(); }}
+                className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
+                💬 Переписка →
+              </button>
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <div
@@ -3046,6 +3124,114 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       {/* Модалка ввода (даты/причины/объявления) вместо системного prompt */}
       <AnimatePresence>
         {inputModal && <InputModal spec={inputModal} onClose={() => setInputModal(null)} />}
+      </AnimatePresence>
+
+      {/* Переписка поддержки — лента «костяк ↔ участник», ответ из админки */}
+      <AnimatePresence>
+        {showChats && (
+          <div className="fixed inset-0 z-[80] flex items-end md:items-center justify-center md:p-4">
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={() => { setShowChats(false); setActiveThread(null); }} />
+            <motion.div
+              initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+              className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-2xl relative z-10 border border-white/10 flex flex-col h-[90dvh] md:max-h-[85vh] text-white"
+            >
+              {/* Header */}
+              <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  {activeThread && (
+                    <button onClick={() => setActiveThread(null)} className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white shrink-0" title="К списку">
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                  )}
+                  <div className="min-w-0">
+                    <h3 className="font-display font-black text-lg uppercase truncate">
+                      {activeThread ? (activeThread.firstName || `id ${activeThread.telegramId}`) : 'Переписка'}
+                    </h3>
+                    <p className="text-[11px] text-white/50 font-mono truncate">
+                      {activeThread
+                        ? (activeThread.username ? '@' + activeThread.username : `id ${activeThread.telegramId}`)
+                        : `диалогов: ${conversations?.length ?? '…'}`}
+                    </p>
+                  </div>
+                </div>
+                <button onClick={() => { setShowChats(false); setActiveThread(null); }} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Список диалогов */}
+              {!activeThread ? (
+                <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                  {conversations === null ? (
+                    <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
+                  ) : conversations.length === 0 ? (
+                    <p className="text-white/40 text-xs text-center py-8">Переписки пока нет. Сообщения из «💬 Поддержка» появятся здесь.</p>
+                  ) : conversations.map((c: any) => (
+                    <button
+                      key={c.telegramId}
+                      onClick={() => openThread(c.telegramId, c.firstName, c.username)}
+                      className="w-full text-left bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl p-3 cursor-pointer transition-all flex items-start gap-3"
+                    >
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-sm truncate">{c.firstName || `id ${c.telegramId}`}</span>
+                          {c.username && <span className="text-[11px] text-white/40 font-mono truncate">@{c.username}</span>}
+                        </div>
+                        <p className="text-xs text-white/60 truncate mt-0.5">
+                          {c.lastDirection === 'out' ? '↩ ' : ''}{c.lastText}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <span className="text-[9px] text-white/30 font-mono">{fmtMsgTime(c.lastAt)}</span>
+                        {c.unanswered > 0 && (
+                          <span className="bg-brand text-black text-[10px] font-black rounded-full px-1.5 min-w-5 h-5 flex items-center justify-center">{c.unanswered}</span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <>
+                  {/* Лента одного собеседника */}
+                  <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+                    {activeThread.messages === null ? (
+                      <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
+                    ) : activeThread.messages.length === 0 ? (
+                      <p className="text-white/40 text-xs text-center py-8">Сообщений нет.</p>
+                    ) : activeThread.messages.map((m: any) => (
+                      <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 ${m.direction === 'out' ? 'bg-brand text-black rounded-br-sm' : 'bg-white/10 text-white rounded-bl-sm'}`}>
+                          <p className="text-sm whitespace-pre-wrap break-words">{m.text}</p>
+                          <span className={`text-[9px] font-mono block mt-1 ${m.direction === 'out' ? 'text-black/50' : 'text-white/40'}`}>
+                            {m.from_name ? `${m.from_name} · ` : ''}{fmtMsgTime(m.created_at)}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {/* Ответ */}
+                  <div className="p-3 md:p-4 border-t border-white/10 flex items-end gap-2">
+                    <textarea
+                      value={replyText}
+                      onChange={(e) => setReplyText(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendReply(); } }}
+                      rows={1}
+                      placeholder="Ответ участнику… (Ctrl+Enter — отправить)"
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none resize-none max-h-32"
+                    />
+                    <button
+                      onClick={sendReply}
+                      disabled={replySending || !replyText.trim() || Number(activeThread.telegramId) <= 0}
+                      className="bg-brand hover:bg-brand-hover text-black font-black rounded-xl px-4 py-2.5 cursor-pointer border-none uppercase text-xs tracking-wider disabled:opacity-40 shrink-0"
+                    >
+                      {replySending ? '…' : 'Отпр.'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       {/* Аудитория клуба — все участники, кто активен, кто кого привёл */}

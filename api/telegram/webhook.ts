@@ -34,6 +34,22 @@ function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Пишем реплику переписки поддержки в БД (best-effort). Лента «костяк ↔ участник»
+ * группируется в админке по telegram_id собеседника. Если таблицы ещё нет
+ * (миграция не накатана) — тихо игнорируем, флоу не ломаем.
+ */
+async function logSupport(telegramId: number, direction: 'in' | 'out', text: string, fromName?: string) {
+  try {
+    await supabase.from('support_messages').insert({
+      telegram_id: telegramId,
+      direction,
+      text: String(text).slice(0, 4000),
+      from_name: fromName || null,
+    });
+  } catch { /* таблицы может не быть до миграции — не критично */ }
+}
+
 function siteUrl(req: any): string {
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app';
   return `https://${host}`;
@@ -4608,6 +4624,7 @@ export default async function handler(req: any, res: any) {
               chat_id: targetId, parse_mode: 'HTML',
               text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
             });
+            await logSupport(Number(targetId), 'out', text, msg.from.first_name || 'Организатор');
             await tg('sendMessage', { chat_id: chatId, text: '✅ Ответ отправлен.' });
           } catch {
             await tg('sendMessage', { chat_id: chatId, text: '⚠️ Не удалось доставить — пользователь мог остановить бота.' });
@@ -4617,6 +4634,8 @@ export default async function handler(req: any, res: any) {
 
         if (sess && sess.state === 'support_text') {
           await clearSession(msg.from.id);
+          const supAuthor = `${msg.from.first_name || ''}${msg.from.username ? ' @' + msg.from.username : ''}`.trim() || `id${msg.from.id}`;
+          await logSupport(Number(msg.from.id), 'in', text, supAuthor);
           if (ADMIN_CHAT_ID) {
             await tg('sendMessage', {
               chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
