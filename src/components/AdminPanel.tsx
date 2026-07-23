@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft } from 'lucide-react';
 import { CommunityEvent, HouseQuality, UserProfile } from '../types';
+import { getInitData, isInsideTelegram } from '../telegram';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
 import { EVENT_TEMPLATES, EventTemplate } from '../data/eventTemplates';
@@ -1474,6 +1475,40 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
+  /** Вход костяка по Telegram-подписи (без пароля). Возвращает true при успехе. */
+  const handleTelegramLogin = async (silent = false): Promise<boolean> => {
+    const initData = getInitData();
+    if (!initData) { if (!silent) setLoginError('Открой админку внутри Telegram, чтобы войти по подписи.'); return false; }
+    if (!silent) { setLoginError(''); setLoggingIn(true); }
+    try {
+      const res = await fetch('/api/admin/events?action=login_telegram', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ initData }),
+      });
+      if (!res.ok) {
+        // Тихую попытку не превращаем в ошибку — просто покажем обычную форму пароля.
+        if (!silent) setLoginError(res.status === 403 ? 'Ты не в костяке клуба' : 'Подпись Telegram не подтверждена');
+        return false;
+      }
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
+      setIsAuthenticated(true);
+      window.dispatchEvent(new Event('flint:events-refetch'));
+      return true;
+    } catch {
+      if (!silent) setLoginError('Ошибка сети');
+      return false;
+    } finally {
+      if (!silent) setLoggingIn(false);
+    }
+  };
+
+  // Автовход костяка: внутри Telegram пробуем подпись сразу, без пароля.
+  useEffect(() => {
+    if (isAuthenticated || !isInsideTelegram()) return;
+    handleTelegramLogin(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleLogout = async () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
     try { await fetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
@@ -1667,6 +1702,25 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             >
               {loggingIn ? 'Проверяю…' : 'Войти'}
             </button>
+
+            {isInsideTelegram() && (
+              <>
+                <div className="flex items-center gap-2 my-1">
+                  <span className="h-px flex-1 bg-white/10" />
+                  <span className="text-[9px] text-white/30 uppercase font-mono">или</span>
+                  <span className="h-px flex-1 bg-white/10" />
+                </div>
+                <button
+                  onClick={() => handleTelegramLogin(false)}
+                  disabled={loggingIn}
+                  className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Shield className="w-4 h-4 text-brand" />
+                  Войти как костяк (Telegram)
+                </button>
+                <p className="text-[10px] text-white/35 text-center">Костяку пароль не нужен — вход по Telegram-подписи</p>
+              </>
+            )}
           </div>
 
           <button

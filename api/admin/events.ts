@@ -9,6 +9,30 @@ const supabase = createClient(
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 
+// Подпись Telegram WebApp initData → достоверный telegram_id (для входа костяка
+// в админку без общего пароля). auth_date-окно 24ч отсекает replay.
+const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;
+function verifyInitData(initData: string): { id: number } | null {
+  if (!initData || !BOT_TOKEN) return null;
+  try {
+    const params = new URLSearchParams(initData);
+    const hash = params.get('hash');
+    if (!hash) return null;
+    params.delete('hash');
+    const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const expected = crypto.createHmac('sha256', secret).update(dcs).digest('hex');
+    const a = Buffer.from(expected), b = Buffer.from(hash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const authDate = Number(params.get('auth_date') || 0);
+    if (!authDate || (Date.now() / 1000 - authDate) > INITDATA_MAX_AGE_SEC) return null;
+    const u = JSON.parse(params.get('user') || '{}');
+    return u && u.id ? { id: Number(u.id) } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Структурированный лог: одна JSON-строка на событие — greppable в Vercel. */
 function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
   const line: any = { t: new Date().toISOString(), level, scope: 'admin/events', msg };
@@ -265,6 +289,26 @@ export default async function handler(req: any, res: any) {
     } catch { /* no-op */ }
     res.setHeader('Set-Cookie', sessionCookie());
     return res.status(200).json({ ok: true });
+  }
+  // Вход костяка БЕЗ пароля: по подписанному Telegram initData. Личность
+  // доказана подписью бота (неподделываемо), проверяем is_core в members —
+  // и выдаём ту же httpOnly-куку. Безопаснее общего пароля (у каждого своя
+  // личность, секрет-пароль не нужен и не может утечь).
+  if (req.method === 'POST' && req.query?.action === 'login_telegram') {
+    const rl = await rateLimit('login', clientIp(req), 8, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfter));
+      return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${Math.ceil(rl.retryAfter / 60)} мин.` });
+    }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const user = verifyInitData(String(body.initData || ''));
+    if (!user) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
+    const { data: m } = await supabase.from('members').select('is_core,status').eq('telegram_id', user.id).maybeSingle();
+    if (!m || (m as any).is_core !== true) {
+      return res.status(403).json({ error: 'Доступ только для костяка клуба' });
+    }
+    res.setHeader('Set-Cookie', sessionCookie());
+    return res.status(200).json({ ok: true, core: true });
   }
   if (req.method === 'POST' && req.query?.action === 'logout') {
     res.setHeader('Set-Cookie', clearCookie());
