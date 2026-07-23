@@ -3462,8 +3462,6 @@ export default async function handler(req: any, res: any) {
         if (!ev) return res.status(200).json({ ok: true });
         const code = await ensureRefCode(tgId);
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
-        const invite = `${ev.title} — ${dayPhrase(ev.date)} (${whenPhrase(ev.date)}). Едем вместе?`;
-        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}`;
 
         // Вертикальная афиша для Telegram (telegram_image) или обычная картинка
         const telegramImage = ev.telegram_image || ev.telegramImage || '';
@@ -3491,7 +3489,9 @@ export default async function handler(req: any, res: any) {
             ? `💳 Каждый платит за себя\n`
             : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`);
 
-        // Кнопки: Программа, Правила (памятка), Забронировать место, Поделиться
+        // Кнопки готового поста: Программа, Правила (памятка), Забронировать место.
+        // Кнопку «Отправить другу» убрали — на пересланной другу карточке она лишняя
+        // (друг видит только инфо + бронь); переслать пост можно нативным форвардом.
         const buttons: any[] = [];
         const progRow: any[] = [];
         if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
@@ -3502,7 +3502,6 @@ export default async function handler(req: any, res: any) {
         }
         if (progRow.length > 0) buttons.push(progRow);
         buttons.push([{ text: '✅ Забронировать место', url: link }]);
-        buttons.push([{ text: '📤 Отправить другу', url: shareUrl }]);
         const markup = kb(buttons);
 
         // Отправляем с вертикальной афишей если есть, иначе с обычной картинкой
