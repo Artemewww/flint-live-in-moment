@@ -112,11 +112,23 @@ async function notifyEventChanges(eventId: string, before: any, after: any): Pro
   if ((before.location || '') !== (after.location || '')) {
     changes.push(`📍 Место: <b>${esc(after.location)}</b>`);
   }
-  // Координаты назначения: изменились → всем кликабельная ссылка на карту.
-  if (String(before.coordinates_lat || '') !== String(after.coordinates_lat || '') || String(before.coordinates_lng || '') !== String(after.coordinates_lng || '')) {
+  // Координаты назначения: сравниваем ЧИСЛЕННО с допуском (тип/точность из БД и
+  // формы могут отличаться — строковое сравнение давало ложные срабатывания).
+  const coordChanged = (a: any, b: any): boolean => {
+    const na = parseFloat(a), nb = parseFloat(b);
+    const fa = Number.isFinite(na), fb = Number.isFinite(nb);
+    if (!fa && !fb) return false;      // обе пустые
+    if (fa !== fb) return true;         // одна задана, другая нет
+    return Math.abs(na - nb) > 1e-6;    // ~0.1 м
+  };
+  if (coordChanged(before.coordinates_lat, after.coordinates_lat) || coordChanged(before.coordinates_lng, after.coordinates_lng)) {
     if (after.coordinates_lat && after.coordinates_lng) {
       changes.push(`🗺 Новые координаты: <a href="https://yandex.ru/maps/?text=${after.coordinates_lat},${after.coordinates_lng}">${esc(`${after.coordinates_lat}, ${after.coordinates_lng}`)}</a> (нажми — откроется карта)`);
     }
+  }
+  // Условия участия (порог входа) изменились — тоже сюрприз-worthy.
+  if ((before.entry_threshold || '') !== (after.entry_threshold || '')) {
+    changes.push(`📌 Обновлены условия участия: <b>${esc(after.entry_threshold || '—')}</b>`);
   }
   // Точка сбора колонны из логистики.
   const beforeAsm = String(before.logistics?.assemblyPoint || ''), afterAsm = String(after.logistics?.assemblyPoint || '');
@@ -179,6 +191,7 @@ function mapEventToCamelCase(event: any) {
     },
     painPoint: event.pain_point,
     image: event.image,
+    telegramImage: event.telegram_image || undefined,
     maxParticipants: event.max_participants,
     participantsCount: event.participants_count,
     telegramBotUrl: event.telegram_bot_url,
@@ -763,20 +776,32 @@ export default async function handler(req: any, res: any) {
       if (body.logistics) (eventData as any).logistics = body.logistics;
       if (body.paymentDetails) (eventData as any).payment_details = body.paymentDetails;
       if (body.checklist) (eventData as any).checklist = body.checklist;
+      // Отдельная вертикальная афиша для шеринга в Telegram (og:image при пересылке).
+      // Колонка может отсутствовать до миграции — ниже сохраняем устойчиво.
+      if (body.telegramImage !== undefined) (eventData as any).telegram_image = body.telegramImage || null;
 
       // Старая версия — чтобы после сохранения понять, что изменилось, и
       // уведомить записанных (только при реальном отличии ключевых полей).
+      // ВАЖНО: тянем и coordinates_lat/lng + entry_threshold, иначе сравнение
+      // «было/стало» по координатам всегда ложно срабатывало (before.* = undefined),
+      // и любое сохранение (даже смена картинки) слало «новые координаты».
       const { data: before } = await supabase
-        .from('events').select('date,date_end,time,time_end,location,date_label,logistics,program')
+        .from('events').select('date,date_end,time,time_end,location,date_label,logistics,program,coordinates_lat,coordinates_lng,entry_threshold')
         .eq('id', body.id).maybeSingle();
 
-      const { data: event, error } = await supabase
+      let { data: event, error } = await supabase
         .from('events')
-        .upsert(eventData, {
-          onConflict: 'id'
-        })
+        .upsert(eventData, { onConflict: 'id' })
         .select()
         .single();
+
+      // Колонки telegram_image ещё нет (миграция не накатана) — сохраняем без неё,
+      // чтобы не ронять сохранение события. Афиша подхватится после миграции.
+      if (error && /telegram_image/i.test(error.message || '')) {
+        const { telegram_image, ...rest } = eventData as any;
+        ({ data: event, error } = await supabase
+          .from('events').upsert(rest, { onConflict: 'id' }).select().single());
+      }
 
       if (error) {
         slog('error', 'Event save error', error);
