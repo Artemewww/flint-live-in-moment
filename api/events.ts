@@ -308,8 +308,12 @@ async function handleHealth(res: any) {
  */
 async function handleImage(req: any, res: any) {
   const id = String(req.query.id || '');
-  const { data: ev } = await supabase.from('events').select('image').eq('id', id).maybeSingle();
-  const img = (ev as any)?.image || '';
+  // kind=telegram → вертикальная афиша (telegram_image) для шеринга; иначе обычная.
+  // Афиши грузятся как data:-URL (base64) — Telegram их не тянет напрямую, поэтому
+  // отдаём байтами через этот прокси (публичный URL). Фолбэк на обычную картинку.
+  const kind = String(req.query.kind || '');
+  const { data: ev } = await supabase.from('events').select('image,telegram_image').eq('id', id).maybeSingle();
+  const img = (kind === 'telegram' ? ((ev as any)?.telegram_image || (ev as any)?.image) : (ev as any)?.image) || '';
 
   const m = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(img);
   if (!m) {
@@ -465,7 +469,7 @@ async function handleOg(req: any, res: any) {
   const ref = String(req.query.ref || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
 
   const { data: ev } = await supabase
-    .from('events').select('id,title,description,date,date_label,location,image').eq('id', id).maybeSingle();
+    .from('events').select('id,title,description,date,date_label,location,image,telegram_image').eq('id', id).maybeSingle();
 
   if (!ev) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -474,7 +478,10 @@ async function handleOg(req: any, res: any) {
 
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const site = `https://${host}`;
-  const imageUrl = (ev as any).image ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}` : `${site}/assets/images/og-default.png`;
+  // Превью ссылки: приоритет — вертикальная афиша (telegram_image), иначе обычная.
+  const imageUrl = (ev as any).telegram_image
+    ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}&kind=telegram`
+    : ((ev as any).image ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}` : `${site}/assets/images/og-default.png`);
   const botUrl = `https://t.me/${BOT_USERNAME}?start=${ref ? `ref_${ref}_ev_${id}` : `event_${id}`}`;
 
   const title = `Живи в моменте: ${(ev as any).title}`;

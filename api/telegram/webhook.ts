@@ -3559,12 +3559,13 @@ export default async function handler(req: any, res: any) {
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
         const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`🎉 ${ev.title} — едем вместе!`)}`;
 
+        // Афиша (telegram_image) или обычная картинка. И то, и другое грузится как
+        // data:-URL, который Telegram НЕ тянет напрямую → всегда шлём через прокси
+        // /api/events?action=image (отдаёт байтами). kind=telegram — вертикальная афиша.
         const telegramImage = ev.telegram_image || ev.telegramImage || '';
-        const photo = telegramImage && !String(telegramImage).startsWith('data:')
-          ? String(telegramImage)
-          : (ev.image && !String(ev.image).startsWith('data:')
-            ? String(ev.image)
-            : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`);
+        const photo = telegramImage
+          ? `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&kind=telegram`
+          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`;
 
         const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
         const whenStr = whenPhrase(ev.date);
