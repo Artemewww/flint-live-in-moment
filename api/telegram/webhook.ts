@@ -19,14 +19,25 @@ import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
-// Секрет для аутентификации вебхука. Без него любой мог слать боту ПОДДЕЛЬНЫЕ
-// апдейты (задать любой from.id, выдать себя за костяк, самоодобриться) — это и
-// была дыра «зашёл как хакер». TELEGRAM_WEBHOOK_SECRET в env не задан, поэтому
-// выводим секрет ДЕТЕРМИНИРОВАННО из BOT_TOKEN (он в env и у Telegram): значение
-// совпадёт с тем, что регистрируем в setWebhook(secret_token), а подделать его
-// без BOT_TOKEN нельзя. Приоритет — явный env, если владелец его задаст.
-const EFFECTIVE_WEBHOOK_SECRET = WEBHOOK_SECRET
-  || (BOT_TOKEN ? crypto.createHmac('sha256', BOT_TOKEN).update('flint-webhook-secret-v1').digest('hex') : '');
+// Секрет аутентификации вебхука. Без него любой мог слать ПОДДЕЛЬНЫЕ апдейты
+// (любой from.id, выдать себя за костяк, самоодобриться) — дыра «зашёл как хакер».
+// Секрет храним в БД (bot_sessions, зарезервированная строка) — им управляю я и
+// регистрирую его же в setWebhook(secret_token); не зависит от Vercel-env/токена.
+// Принимаем апдейт, если secret-token совпал с БД-секретом ЛИБО с env-секретом.
+let _whSecret: string | null = null;
+async function webhookSecret(): Promise<string> {
+  if (_whSecret !== null) return _whSecret;
+  try {
+    const { data } = await supabase.from('bot_sessions').select('context').eq('telegram_id', 0).eq('state', 'webhook_secret').maybeSingle();
+    _whSecret = ((data as any)?.context?.value) || '';
+  } catch { _whSecret = ''; }
+  return _whSecret;
+}
+function secretMatches(hdr: string, secret: string): boolean {
+  if (!secret) return false;
+  const A = Buffer.from(hdr), B = Buffer.from(secret);
+  return A.length === B.length && crypto.timingSafeEqual(A, B);
+}
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
@@ -1280,15 +1291,16 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
   }
-  // FAIL-CLOSED: принимаем только апдейты с верным secret-token от Telegram.
-  // Раньше при несовпадении лишь писали warning и ВСЁ РАВНО обрабатывали — из-за
-  // этого вебхук был по сути открытым (подделка апдейтов = вход «как хакер»).
-  // Секрет тот же, что регистрируется в setWebhook (см. EFFECTIVE_WEBHOOK_SECRET).
-  if (EFFECTIVE_WEBHOOK_SECRET) {
-    const hdr = String(req.headers['x-telegram-bot-api-secret-token'] || '');
-    const A = Buffer.from(hdr), B = Buffer.from(EFFECTIVE_WEBHOOK_SECRET);
-    if (A.length !== B.length || !crypto.timingSafeEqual(A, B)) {
-      return res.status(401).json({ ok: false });
+  // FAIL-CLOSED: принимаем только апдейты с верным secret-token. Раньше при
+  // несовпадении лишь писали warning и ВСЁ РАВНО обрабатывали — вебхук был открыт.
+  // Если секрет нигде не настроен (пустой) — fail-open, чтобы не оборвать бота.
+  {
+    const dbSecret = await webhookSecret();
+    if (dbSecret || WEBHOOK_SECRET) {
+      const hdr = String(req.headers['x-telegram-bot-api-secret-token'] || '');
+      if (!secretMatches(hdr, dbSecret) && !secretMatches(hdr, WEBHOOK_SECRET)) {
+        return res.status(401).json({ ok: false });
+      }
     }
   }
   if (!BOT_TOKEN) return res.status(200).json({ ok: true, warning: 'TELEGRAM_BOT_TOKEN не задан' });
