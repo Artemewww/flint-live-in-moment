@@ -135,6 +135,7 @@ function mapEventToCamelCase(event: any) {
     },
     painPoint: event.pain_point,
     image: event.image,
+    telegramImage: event.telegram_image || undefined,
     maxParticipants: event.max_participants,
     participantsCount: event.participants_count,
     telegramBotUrl: event.telegram_bot_url,
