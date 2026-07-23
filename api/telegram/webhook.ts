@@ -3559,9 +3559,10 @@ export default async function handler(req: any, res: any) {
         const botLink = `https://t.me/${BOT_USERNAME}?start=${code ? `ref_${code}_ev_${ev.id}` : `event_${ev.id}`}`;
 
         const telegramImage = ev.telegram_image || ev.telegramImage || '';
+        const ts = Date.now();
         const photo = telegramImage
-          ? `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&kind=telegram`
-          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`;
+          ? `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&kind=telegram&t=${ts}`
+          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&t=${ts}`;
 
         const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
         const whenStr = whenPhrase(ev.date);

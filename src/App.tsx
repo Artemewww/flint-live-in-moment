@@ -467,12 +467,12 @@ export default function App() {
         alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
         return;
       }
-      // Сервер уже возвращает event в camelCase (mapEventToCamelCase на сервере),
-      // поэтому повторный mapEventToCamelCase сломает поля. Берём как есть.
+      // Сервер возвращает event в camelCase. Обновляем стейт из ответа.
+      // Refetch НЕ вызываем — он перезапишет стейт старыми данными из /api/events,
+      // и telegramImage/image могут потеряться, пока новый код не задеплоен.
       const data = await res.json().catch(() => ({} as any));
       const saved = data?.event || ev;
       setEvents((prev) => (isNew ? [...prev, saved] : prev.map((x) => (x.id === saved.id ? saved : x))));
-      window.dispatchEvent(new Event('flint:events-refetch'));
     } catch (err) {
       alert(`Ошибка сети при сохранении события: ${(err as Error).message}`);
     }
