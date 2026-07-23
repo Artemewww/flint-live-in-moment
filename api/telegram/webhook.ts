@@ -846,7 +846,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
     if ((ev.program || []).length) nav0.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
     if (ev.logistics?.prep) nav0.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
     if (nav0.length) rows.push(nav0);
-    rows.push([{ text: '📤 Позвать', callback_data: `share_${ev.id}` }]);
+    rows.push([{ text: '📤 Позвать', switch_inline_query: `${ev.id}` }]);
     rows.push([openBtn]);
     return rows;
   }
@@ -894,7 +894,7 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   rows.push([
     { text: '❓', callback_data: `ask_${ev.id}` },
     { text: '💡', callback_data: `idea_${ev.id}` },
-    { text: '📤 Позвать', callback_data: `share_${ev.id}` },
+    { text: '📤 Позвать', switch_inline_query: `${ev.id}` },
   ]);
   rows.push([openBtn]);
   return rows;
@@ -3704,7 +3704,7 @@ export default async function handler(req: any, res: any) {
 
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML', text: txt,
-          reply_markup: kb([[{ text: '📤 Позвать друга', callback_data: `share_${evId}` }]]),
+          reply_markup: kb([[{ text: '📤 Позвать друга', switch_inline_query: `${evId}` }]]),
         });
         return res.status(200).json({ ok: true });
       }
@@ -4363,6 +4363,99 @@ export default async function handler(req: any, res: any) {
       }
 
       await tg('answerCallbackQuery', { callback_query_id: cq.id });
+      return res.status(200).json({ ok: true });
+    }
+
+    // === Inline-запрос: пользователь выбрал «Позвать друга» → пошёл в чат ===
+    // switch_inline_query в кнопках передаёт ID события как query. Бот отвечает
+    // картинкой+текстом+кнопками (Программа, Правила, Забронировать).
+    if (update.inline_query) {
+      const iq = update.inline_query;
+      const evId = (iq.query || '').trim();
+
+      if (evId) {
+        const ev = await getEvent(evId);
+        if (ev) {
+          const code = await ensureRefCode(iq.from.id);
+          const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
+
+          // Вертикальная афиша
+          const telegramImage = ev.telegram_image || ev.telegramImage || '';
+          const photo = telegramImage && !String(telegramImage).startsWith('data:')
+            ? String(telegramImage)
+            : (ev.image && !String(ev.image).startsWith('data:')
+              ? String(ev.image)
+              : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`);
+
+          const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
+          const whenStr = whenPhrase(ev.date);
+          const whenLine = whenStr ? ` · ${whenStr}` : '';
+          const locationStr = ev.location
+            ? ev.location.toLowerCase().includes('ислочь')
+              ? 'Поляна на реке Ислочь'
+              : ev.location
+            : '';
+
+          const caption =
+            `🎉 <b>${esc(ev.title)} — едем вместе!</b>\n\n` +
+            `📅 ${esc(dateLine)}${esc(whenLine)}\n` +
+            (locationStr ? `📍 ${esc(locationStr)}\n` : '') +
+            (ev.price_type === 'free' || !ev.price_type
+              ? `💳 Каждый платит за себя\n`
+              : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`);
+
+          const buttons: any[] = [];
+          const progRow: any[] = [];
+          if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
+            progRow.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
+          }
+          if (ev.logistics?.prep) {
+            progRow.push({ text: '⚠️ Правила', callback_data: `prep_${ev.id}` });
+          }
+          if (progRow.length > 0) buttons.push(progRow);
+          buttons.push([{ text: '✅ Забронировать место', url: link }]);
+
+          const result: any = {
+            type: 'photo',
+            id: `share_${ev.id}`,
+            photo_url: photo,
+            thumbnail_url: photo,
+            caption: caption,
+            parse_mode: 'HTML',
+            reply_markup: { inline_keyboard: buttons },
+          };
+
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerInlineQuery`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              inline_query_id: iq.id,
+              results: JSON.stringify([result]),
+              cache_time: 60,
+              is_personal: true,
+            }),
+          });
+          return res.status(200).json({ ok: true });
+        }
+      }
+
+      // Если события нет — показываем заглушку
+      await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/answerInlineQuery`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          inline_query_id: iq.id,
+          results: JSON.stringify([{
+            type: 'article',
+            id: 'noevent',
+            title: 'Выбери событие в боте',
+            description: 'Открой карточку события и нажми «📤 Позвать»',
+            input_message_content: { message_text: 'Открой @campsflint_bot, выбери событие и нажми «📤 Позвать» — поделюсь карточкой с кнопками.', parse_mode: 'HTML' },
+          }]),
+          cache_time: 300,
+          is_personal: true,
+        }),
+      });
       return res.status(200).json({ ok: true });
     }
 
