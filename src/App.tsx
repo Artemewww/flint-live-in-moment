@@ -467,10 +467,10 @@ export default function App() {
         alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
         return;
       }
-      // Обновляем стейт из ответа сервера, а не из локального ev —
-      // иначе telegramImage/image могут не совпадать с тем, что реально в БД.
+      // Сервер уже возвращает event в camelCase (mapEventToCamelCase на сервере),
+      // поэтому повторный mapEventToCamelCase сломает поля. Берём как есть.
       const data = await res.json().catch(() => ({} as any));
-      const saved = data?.event ? mapEventToCamelCase(data.event) : ev;
+      const saved = data?.event || ev;
       setEvents((prev) => (isNew ? [...prev, saved] : prev.map((x) => (x.id === saved.id ? saved : x))));
       window.dispatchEvent(new Event('flint:events-refetch'));
     } catch (err) {
