@@ -571,6 +571,17 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
   const inviterInside = (inv as any).status === 'approved' || (inv as any).is_core === true;
   if (!inviterInside) return false;
 
+  // Человек УЖЕ подал заявку на ручную модерацию (pending_review) — реф-ссылка НЕ
+  // должна её обходить и впускать «в левую». Максимальное одобрение: пустит только
+  // костяк кнопкой approve_. Привяжем реферера для атрибуции и выйдем pending.
+  if ((me as any)?.status === 'pending_review') {
+    if (!(me as any)?.referred_by) {
+      await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', from.id);
+      try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch { /* audit */ }
+    }
+    return false;
+  }
+
   // Реф-ссылка снимает МОДЕРАЦИЮ (доверие приглашающего), но НЕ этапы онбординга.
   // Впускаем сразу только если профиль уже заполнен (человек проходил онбординг
   // раньше). Новичка НЕ делаем approved до конца анкеты — иначе он получал бы
@@ -5679,8 +5690,11 @@ export default async function handler(req: any, res: any) {
             // Реф-ссылка впускает без модерации (доверие приглашающего), но раньше
             // ПОЛНОСТЬЮ пропускала анкету — база не знала ни имени, ни телефона,
             // ни пола пришедшего. Короткое знакомство ОБЯЗАТЕЛЬНО, approve не ждём.
-            const { data: meRef } = await supabase.from('members').select('phone').eq('telegram_id', msg.from.id).maybeSingle();
-            if (!(meRef as any)?.phone) {
+            const { data: meRef } = await supabase.from('members').select('phone,status,is_core').eq('telegram_id', msg.from.id).maybeSingle();
+            // Уже принятый участник/костяк, кликнувший ссылку (свою/чужую) по ошибке —
+            // НЕ гоним заново через онбординг: просто пропускаем к событиям ниже.
+            const alreadyIn = (meRef as any)?.is_core === true || (meRef as any)?.status === 'approved';
+            if (!alreadyIn && !(meRef as any)?.phone) {
               await setSession(msg.from.id, 'refonb_name', { evPayload: payload });
               await tg('sendMessage', {
                 chat_id: chatId, parse_mode: 'HTML',
@@ -5688,10 +5702,12 @@ export default async function handler(req: any, res: any) {
               });
               return res.status(200).json({ ok: true });
             }
-            await tg('sendMessage', {
-              chat_id: chatId, parse_mode: 'HTML',
-              text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Смотри события ниже.',
-            });
+            if (!alreadyIn) {
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Смотри события ниже.',
+              });
+            }
           }
         }
 
