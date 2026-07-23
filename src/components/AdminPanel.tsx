@@ -1542,6 +1542,45 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }, 2000);
   };
 
+  // «Забыли пароль» — вход по коду из Telegram (OTP): @ник → код в личку → ввод.
+  const [codeMode, setCodeMode] = useState(false);
+  const [codeUser, setCodeUser] = useState('');
+  const [codeVal, setCodeVal] = useState('');
+  const [codeSent, setCodeSent] = useState(false);
+  const [codeBusy, setCodeBusy] = useState(false);
+  const requestLoginCode = async () => {
+    if (!codeUser.trim()) { setLoginError('Введи свой @ник в Telegram'); return; }
+    setLoginError(''); setCodeBusy(true);
+    try {
+      const res = await fetch('/api/admin/events?action=request_login_code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: codeUser.trim() }),
+      });
+      if (res.status === 429) { setLoginError('Слишком много попыток, попробуй позже.'); return; }
+      setCodeSent(true);
+    } catch { setLoginError('Ошибка сети'); }
+    finally { setCodeBusy(false); }
+  };
+  const verifyLoginCode = async () => {
+    if (codeVal.replace(/\D/g, '').length !== 6) { setLoginError('Код — 6 цифр'); return; }
+    setLoginError(''); setCodeBusy(true);
+    try {
+      const res = await fetch('/api/admin/events?action=verify_login_code', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: codeUser.trim(), code: codeVal.trim() }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (j.ok) {
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* no-op */ }
+        setIsAuthenticated(true);
+        window.dispatchEvent(new Event('flint:events-refetch'));
+      } else {
+        setLoginError(j.error || 'Неверный код');
+      }
+    } catch { setLoginError('Ошибка сети'); }
+    finally { setCodeBusy(false); }
+  };
+
   const handleLogout = async () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
     try { await fetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
@@ -1717,6 +1756,58 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           <h2 className="font-display font-black text-xl uppercase text-center">Админ-панель</h2>
 
           <div className="space-y-3">
+            {codeMode ? (
+              <>
+                <p className="text-[11px] text-white/50 text-center">Вход по коду из Telegram — на случай, если забыл пароль.</p>
+                <input
+                  type="text"
+                  value={codeUser}
+                  onChange={(e) => { setCodeUser(e.target.value); setLoginError(''); }}
+                  placeholder="Твой @ник в Telegram"
+                  autoFocus
+                  disabled={codeSent}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-sm focus:outline-none focus:border-brand/40 disabled:opacity-60"
+                  onKeyDown={(e) => e.key === 'Enter' && !codeSent && requestLoginCode()}
+                />
+                {!codeSent ? (
+                  <button
+                    onClick={requestLoginCode}
+                    disabled={codeBusy || !codeUser.trim()}
+                    className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer border-none"
+                  >
+                    {codeBusy ? 'Отправляю…' : 'Получить код в Telegram'}
+                  </button>
+                ) : (
+                  <>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={codeVal}
+                      onChange={(e) => { setCodeVal(e.target.value.replace(/\D/g, '').slice(0, 6)); setLoginError(''); }}
+                      placeholder="6-значный код из бота"
+                      autoFocus
+                      className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-center text-lg tracking-[0.4em] font-mono focus:outline-none focus:border-brand/40"
+                      onKeyDown={(e) => e.key === 'Enter' && verifyLoginCode()}
+                    />
+                    <button
+                      onClick={verifyLoginCode}
+                      disabled={codeBusy || codeVal.length !== 6}
+                      className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer border-none"
+                    >
+                      {codeBusy ? 'Проверяю…' : 'Войти'}
+                    </button>
+                    <button onClick={() => { setCodeSent(false); setCodeVal(''); setLoginError(''); }} className="w-full text-white/40 text-[11px] cursor-pointer bg-transparent border-none">
+                      Отправить код заново
+                    </button>
+                  </>
+                )}
+                {loginError && <p className="text-[11px] text-rose-400 text-center">{loginError}</p>}
+                <button onClick={() => { setCodeMode(false); setCodeSent(false); setCodeVal(''); setLoginError(''); }} className="w-full text-white/50 text-[11px] uppercase tracking-wider cursor-pointer bg-transparent border-none">
+                  ← Назад ко входу
+                </button>
+              </>
+            ) : (
+            <>
             <input
               type="password"
               value={password}
@@ -1734,6 +1825,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               className="w-full bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer border-none"
             >
               {loggingIn ? 'Проверяю…' : 'Войти'}
+            </button>
+            <button onClick={() => { setCodeMode(true); setLoginError(''); }} className="w-full text-white/50 text-[11px] cursor-pointer bg-transparent border-none hover:text-white/80">
+              Забыли пароль? Войти по коду из Telegram
             </button>
 
             <div className="flex items-center gap-2 my-1">
@@ -1767,6 +1861,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   {webTgPolling ? 'Открыл бота — нажми «Да, это я». Вход выполнится сам.' : 'Костяку пароль не нужен — подтверди вход в боте'}
                 </p>
               </>
+            )}
+            </>
             )}
           </div>
 

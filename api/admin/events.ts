@@ -336,6 +336,58 @@ export default async function handler(req: any, res: any) {
     res.setHeader('Set-Cookie', sessionCookie());
     return res.status(200).json({ ok: true, core: true });
   }
+  // «Забыли пароль» — вход по одноразовому коду из Telegram (OTP, как у Telegram).
+  // Шаг 1: костяк вводит свой @ник → бот присылает 6-значный код ему в личку.
+  // Код виден только в его Telegram → чужой ввести не сможет. Анти-enumeration:
+  // ответ всегда одинаковый, existence @ника не раскрываем.
+  if (req.method === 'POST' && req.query?.action === 'request_login_code') {
+    const rl = await rateLimit('login', clientIp(req), 5, 15 * 60 * 1000);
+    if (!rl.allowed) { res.setHeader('Retry-After', String(rl.retryAfter)); return res.status(429).json({ error: `Слишком много попыток. Через ${Math.ceil(rl.retryAfter / 60)} мин.` }); }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const uname = String(body.username || '').replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+    const generic = { ok: true, message: 'Если такой участник из костяка есть — код отправлен ему в Telegram.' };
+    if (uname.length < 3) return res.status(200).json(generic);
+    const { data: m } = await supabase.from('members').select('telegram_id,is_core').ilike('username', uname).maybeSingle();
+    if (m && (m as any).is_core === true && Number((m as any).telegram_id) > 0) {
+      const code = String(crypto.randomInt(100000, 1000000));
+      await supabase.from('bot_sessions').upsert(
+        { telegram_id: (m as any).telegram_id, state: 'logincode', context: { code, exp: Date.now() + 5 * 60 * 1000, tries: 0 }, updated_at: new Date().toISOString() },
+        { onConflict: 'telegram_id' },
+      );
+      if (BOT_TOKEN) {
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: (m as any).telegram_id, parse_mode: 'HTML', text: `🔑 <b>Код для входа в админку:</b> <code>${code}</code>\n\nДействует 5 минут. Никому не сообщай. Если это не ты — просто проигнорируй.` }),
+          });
+        } catch { /* no-op */ }
+      }
+    }
+    return res.status(200).json(generic);
+  }
+  // Шаг 2: костяк вводит код → проверяем и выдаём куку.
+  if (req.method === 'POST' && req.query?.action === 'verify_login_code') {
+    const rl = await rateLimit('login', clientIp(req), 10, 15 * 60 * 1000);
+    if (!rl.allowed) { res.setHeader('Retry-After', String(rl.retryAfter)); return res.status(429).json({ error: `Слишком много попыток. Через ${Math.ceil(rl.retryAfter / 60)} мин.` }); }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const uname = String(body.username || '').replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+    const code = String(body.code || '').replace(/[^0-9]/g, '').slice(0, 6);
+    if (uname.length < 3 || code.length !== 6) return res.status(400).json({ error: 'Введите @ник и 6-значный код' });
+    const { data: m } = await supabase.from('members').select('telegram_id,is_core').ilike('username', uname).maybeSingle();
+    if (!m || (m as any).is_core !== true) return res.status(401).json({ error: 'Неверный код' });
+    const { data: sess } = await supabase.from('bot_sessions').select('context').eq('telegram_id', (m as any).telegram_id).eq('state', 'logincode').maybeSingle();
+    const ctx = (sess as any)?.context || {};
+    if (!sess || !ctx.code || !ctx.exp || Date.now() > Number(ctx.exp) || Number(ctx.tries || 0) >= 5) {
+      return res.status(401).json({ error: 'Код неверный или истёк. Запроси новый.' });
+    }
+    if (!safeEq(String(ctx.code), code)) {
+      await supabase.from('bot_sessions').update({ context: { ...ctx, tries: Number(ctx.tries || 0) + 1 } }).eq('telegram_id', (m as any).telegram_id).eq('state', 'logincode');
+      return res.status(401).json({ error: 'Неверный код' });
+    }
+    try { await supabase.from('bot_sessions').delete().eq('telegram_id', (m as any).telegram_id).eq('state', 'logincode'); } catch { /* no-op */ }
+    res.setHeader('Set-Cookie', sessionCookie());
+    return res.status(200).json({ ok: true, core: true });
+  }
   if (req.method === 'POST' && req.query?.action === 'logout') {
     res.setHeader('Set-Cookie', clearCookie());
     return res.status(200).json({ ok: true });
