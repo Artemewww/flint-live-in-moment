@@ -467,7 +467,11 @@ export default function App() {
         alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
         return;
       }
-      setEvents((prev) => (isNew ? [...prev, ev] : prev.map((x) => (x.id === ev.id ? ev : x))));
+      // Обновляем стейт из ответа сервера, а не из локального ev —
+      // иначе telegramImage/image могут не совпадать с тем, что реально в БД.
+      const data = await res.json().catch(() => ({} as any));
+      const saved = data?.event ? mapEventToCamelCase(data.event) : ev;
+      setEvents((prev) => (isNew ? [...prev, saved] : prev.map((x) => (x.id === saved.id ? saved : x))));
       window.dispatchEvent(new Event('flint:events-refetch'));
     } catch (err) {
       alert(`Ошибка сети при сохранении события: ${(err as Error).message}`);
