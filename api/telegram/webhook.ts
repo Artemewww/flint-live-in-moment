@@ -3557,6 +3557,10 @@ export default async function handler(req: any, res: any) {
         if (!ev) return res.status(200).json({ ok: true });
         const code = await ensureRefCode(tgId);
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
+        // Ссылка НА БОТА с этим событием: друг жмёт → бот открывает карточку СО ВСЕМИ
+        // кнопками (при обычном форварде кнопки Telegram отрезает). Несёт и реф-код.
+        const botLink = `https://t.me/${BOT_USERNAME}?start=${code ? `ref_${code}_ev_${ev.id}` : `event_${ev.id}`}`;
+        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(botLink)}&text=${encodeURIComponent(`🎉 ${ev.title} — едем вместе!`)}`;
 
         // Афиша (telegram_image) или обычная картинка. И то, и другое грузится как
         // data:-URL, который Telegram НЕ тянет напрямую → всегда шлём через прокси
@@ -3582,9 +3586,10 @@ export default async function handler(req: any, res: any) {
           (ev.price_type === 'free' || !ev.price_type
             ? `💳 Каждый платит за себя\n`
             : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`) +
-          `\n📤 Перешли эту карточку другу — с ней он сразу увидит событие.`;
+          `\n📨 Жми «Отправить другу» ниже — он откроет событие в боте со всеми кнопками.\n<i>(если просто переслать карточку, Telegram убирает кнопки — поэтому шли кнопкой.)</i>`;
 
-        // Строго 3 кнопки: Программа · Правила · Забронировать место (по просьбе владельца).
+        // Программа · Правила · Забронировать место + «Отправить другу» (ссылка на бота:
+        // при обычном форварде кнопки отваливаются, а по ссылке друг откроет карточку с ними).
         const buttons: any[] = [];
         const progRow: any[] = [];
         if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
@@ -3595,6 +3600,7 @@ export default async function handler(req: any, res: any) {
         }
         if (progRow.length > 0) buttons.push(progRow);
         buttons.push([{ text: '✅ Забронировать место', url: link }]);
+        buttons.push([{ text: '📨 Отправить другу', url: shareUrl }]);
         const markup = kb(buttons);
 
         const sentPhoto = (telegramImage || ev.image)
