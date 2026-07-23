@@ -3781,6 +3781,7 @@ function EditEventModal({ event, onClose, onSave }: {
       locationDetails: formData.locationDetails,
       coordinates: formData.coordinates,
       image: formData.image,
+      telegramImage: formData.telegramImage,
       painPoint: formData.painPoint,
       maxParticipants: formData.maxParticipants,
       participantsCount: formData.participantsCount,
