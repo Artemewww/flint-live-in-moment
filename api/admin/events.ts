@@ -310,6 +310,32 @@ export default async function handler(req: any, res: any) {
     res.setHeader('Set-Cookie', sessionCookie());
     return res.status(200).json({ ok: true, core: true });
   }
+  // Вход костяка на ВЕБЕ (обычный браузер, где нет initData): сайт открывает
+  // бота по одноразовому nonce, костяк подтверждает вход в боте (его личность
+  // берётся из аутентифицированного вебхука), бот пишет одобрение в
+  // bot_sessions(state='weblogin', context.nonce). Здесь сайт опрашивает статус:
+  // одобрено + костяк → выдаём куку. Одноразово, TTL короткий.
+  if (req.method === 'GET' && req.query?.action === 'weblogin_check') {
+    const rl = await rateLimit('login', clientIp(req), 60, 15 * 60 * 1000);
+    if (!rl.allowed) { res.setHeader('Retry-After', String(rl.retryAfter)); return res.status(429).json({ error: 'too_many' }); }
+    const nonce = String(req.query.nonce || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 64);
+    if (nonce.length < 16) return res.status(400).json({ error: 'bad nonce' });
+    const { data: sess } = await supabase
+      .from('bot_sessions').select('telegram_id,context')
+      .eq('state', 'weblogin').eq('context->>nonce', nonce).maybeSingle();
+    if (!sess) return res.status(200).json({ pending: true });
+    const ctx = (sess as any).context || {};
+    if (!ctx.exp || Date.now() > Number(ctx.exp)) {
+      try { await supabase.from('bot_sessions').delete().eq('telegram_id', (sess as any).telegram_id).eq('state', 'weblogin'); } catch { /* no-op */ }
+      return res.status(200).json({ pending: false, expired: true });
+    }
+    const { data: m } = await supabase.from('members').select('is_core').eq('telegram_id', (sess as any).telegram_id).maybeSingle();
+    if (!m || (m as any).is_core !== true) return res.status(403).json({ error: 'not_core' });
+    // Успех — одноразово гасим сессию и выдаём куку.
+    try { await supabase.from('bot_sessions').delete().eq('telegram_id', (sess as any).telegram_id).eq('state', 'weblogin'); } catch { /* no-op */ }
+    res.setHeader('Set-Cookie', sessionCookie());
+    return res.status(200).json({ ok: true, core: true });
+  }
   if (req.method === 'POST' && req.query?.action === 'logout') {
     res.setHeader('Set-Cookie', clearCookie());
     return res.status(200).json({ ok: true });

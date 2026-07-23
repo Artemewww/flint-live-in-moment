@@ -1495,6 +1495,22 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Подтверждение веб-входа костяка: пишем одобрение с nonce, сайт его заберёт.
+      if (data.startsWith('weblt_')) {
+        const nonce = data.slice('weblt_'.length).replace(/[^a-zA-Z0-9]/g, '').slice(0, 64);
+        if (!(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для костяка' });
+          return res.status(200).json({ ok: true });
+        }
+        await supabase.from('bot_sessions').upsert(
+          { telegram_id: tgId, state: 'weblogin', context: { nonce, exp: Date.now() + 120000 }, updated_at: new Date().toISOString() },
+          { onConflict: 'telegram_id' },
+        );
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Подтверждено' });
+        try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, parse_mode: 'HTML', text: '✅ <b>Вход подтверждён.</b> Вернись на сайт — вход выполнится автоматически (в течение пары секунд).' }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
       // Шаг 2: как зовут.
       if (data === 'verify_pd') {
         await supabase.from('members').update({ agreed_pd: true }).eq('telegram_id', tgId);
@@ -5536,6 +5552,23 @@ export default async function handler(req: any, res: any) {
         await clearSession(msg.from.id);
 
         let payload = text.split(' ')[1] || '';
+
+        // Вход костяка на ВЕБ-версию сайта: сайт открыл t.me/bot?start=weblogin_<nonce>.
+        // Подтверждаем ЯВНОЙ кнопкой (анти-фишинг), одобрение пишем на callback.
+        if (payload.startsWith('weblogin_')) {
+          const nonce = payload.slice('weblogin_'.length).replace(/[^a-zA-Z0-9]/g, '').slice(0, 64);
+          if (!(await isCore(msg.from.id))) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🔒 Вход в админку на сайте — только для костяка клуба.' });
+            return res.status(200).json({ ok: true });
+          }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🔐 <b>Вход в админку на сайте</b>\n\nТы открыл вход в панель организатора на сайте. Подтвердить?\n\n⚠️ Если ты НЕ открывал сайт сейчас — не подтверждай, кто-то мог прислать тебе эту ссылку.',
+            reply_markup: kb([[{ text: '✅ Да, это я — войти', callback_data: `weblt_${nonce}` }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
         let invitedIn = false;
         let invitedBy = false;   // ссылка была, но пригласивший сам не в клубе

@@ -1509,6 +1509,39 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Веб-вход через Telegram (обычный браузер, где нет initData): сайт открывает
+  // бота по одноразовому nonce, костяк подтверждает в боте, сайт опрашивает статус.
+  const [webTgPolling, setWebTgPolling] = useState(false);
+  const webTgTimer = useRef<any>(null);
+  useEffect(() => () => { if (webTgTimer.current) clearInterval(webTgTimer.current); }, []);
+  const handleWebTelegramLogin = () => {
+    setLoginError('');
+    // Криптостойкий nonce (64 hex).
+    const buf = new Uint8Array(32);
+    (window.crypto || (window as any).msCrypto).getRandomValues(buf);
+    const nonce = Array.from(buf).map((b) => b.toString(16).padStart(2, '0')).join('');
+    window.open(`https://t.me/campsflint_bot?start=weblogin_${nonce}`, '_blank', 'noopener');
+    setWebTgPolling(true);
+    let tries = 0;
+    if (webTgTimer.current) clearInterval(webTgTimer.current);
+    webTgTimer.current = setInterval(async () => {
+      tries++;
+      if (tries > 60) { clearInterval(webTgTimer.current); setWebTgPolling(false); setLoginError('Время вышло. Нажми ещё раз и подтверди в боте.'); return; }
+      try {
+        const res = await fetch(`/api/admin/events?action=weblogin_check&nonce=${nonce}`);
+        if (res.status === 403) { clearInterval(webTgTimer.current); setWebTgPolling(false); setLoginError('Ты не в костяке клуба'); return; }
+        const j = await res.json().catch(() => ({}));
+        if (j.ok) {
+          clearInterval(webTgTimer.current);
+          setWebTgPolling(false);
+          try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* no-op */ }
+          setIsAuthenticated(true);
+          window.dispatchEvent(new Event('flint:events-refetch'));
+        }
+      } catch { /* сеть — продолжаем опрос */ }
+    }, 2000);
+  };
+
   const handleLogout = async () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
     try { await fetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
@@ -1703,13 +1736,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               {loggingIn ? 'Проверяю…' : 'Войти'}
             </button>
 
-            {isInsideTelegram() && (
+            <div className="flex items-center gap-2 my-1">
+              <span className="h-px flex-1 bg-white/10" />
+              <span className="text-[9px] text-white/30 uppercase font-mono">или</span>
+              <span className="h-px flex-1 bg-white/10" />
+            </div>
+            {isInsideTelegram() ? (
               <>
-                <div className="flex items-center gap-2 my-1">
-                  <span className="h-px flex-1 bg-white/10" />
-                  <span className="text-[9px] text-white/30 uppercase font-mono">или</span>
-                  <span className="h-px flex-1 bg-white/10" />
-                </div>
                 <button
                   onClick={() => handleTelegramLogin(false)}
                   disabled={loggingIn}
@@ -1719,6 +1752,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   Войти как костяк (Telegram)
                 </button>
                 <p className="text-[10px] text-white/35 text-center">Костяку пароль не нужен — вход по Telegram-подписи</p>
+              </>
+            ) : (
+              <>
+                <button
+                  onClick={handleWebTelegramLogin}
+                  disabled={webTgPolling}
+                  className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white py-3 rounded-xl text-xs font-bold uppercase tracking-widest disabled:opacity-50 cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Shield className="w-4 h-4 text-brand" />
+                  {webTgPolling ? 'Подтверди в Telegram…' : 'Войти через Telegram'}
+                </button>
+                <p className="text-[10px] text-white/35 text-center">
+                  {webTgPolling ? 'Открыл бота — нажми «Да, это я». Вход выполнится сам.' : 'Костяку пароль не нужен — подтверди вход в боте'}
+                </p>
               </>
             )}
           </div>
