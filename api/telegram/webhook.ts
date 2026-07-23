@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
 import { handleGroupMessage } from './group-handler';
 import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
 
@@ -18,6 +19,14 @@ import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET || '';
+// Секрет для аутентификации вебхука. Без него любой мог слать боту ПОДДЕЛЬНЫЕ
+// апдейты (задать любой from.id, выдать себя за костяк, самоодобриться) — это и
+// была дыра «зашёл как хакер». TELEGRAM_WEBHOOK_SECRET в env не задан, поэтому
+// выводим секрет ДЕТЕРМИНИРОВАННО из BOT_TOKEN (он в env и у Telegram): значение
+// совпадёт с тем, что регистрируем в setWebhook(secret_token), а подделать его
+// без BOT_TOKEN нельзя. Приоритет — явный env, если владелец его задаст.
+const EFFECTIVE_WEBHOOK_SECRET = WEBHOOK_SECRET
+  || (BOT_TOKEN ? crypto.createHmac('sha256', BOT_TOKEN).update('flint-webhook-secret-v1').digest('hex') : '');
 const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 const supabase = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
@@ -1271,12 +1280,16 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
   }
-  // Telegram присылает secret-token только если webhook был зарегистрирован с ним.
-  // Если секрет в env и в Telegram рассинхронизировались, не роняем весь поток
-  // апдейтов 401-кой: лучше принять запрос и восстановить работу бота, чем
-  // терять /start и callback-кнопки до ручной перепривязки webhook.
-  if (WEBHOOK_SECRET && req.headers['x-telegram-bot-api-secret-token'] !== WEBHOOK_SECRET) {
-    console.warn('[telegram:webhook] secret token mismatch; accepting update to avoid delivery breakage');
+  // FAIL-CLOSED: принимаем только апдейты с верным secret-token от Telegram.
+  // Раньше при несовпадении лишь писали warning и ВСЁ РАВНО обрабатывали — из-за
+  // этого вебхук был по сути открытым (подделка апдейтов = вход «как хакер»).
+  // Секрет тот же, что регистрируется в setWebhook (см. EFFECTIVE_WEBHOOK_SECRET).
+  if (EFFECTIVE_WEBHOOK_SECRET) {
+    const hdr = String(req.headers['x-telegram-bot-api-secret-token'] || '');
+    const A = Buffer.from(hdr), B = Buffer.from(EFFECTIVE_WEBHOOK_SECRET);
+    if (A.length !== B.length || !crypto.timingSafeEqual(A, B)) {
+      return res.status(401).json({ ok: false });
+    }
   }
   if (!BOT_TOKEN) return res.status(200).json({ ok: true, warning: 'TELEGRAM_BOT_TOKEN не задан' });
 

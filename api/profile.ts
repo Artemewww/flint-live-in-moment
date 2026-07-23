@@ -34,6 +34,11 @@ function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 
+// Свежесть initData: без проверки auth_date перехваченная строка годна вечно
+// (replay — можно бесконечно выдавать себя за участника). Окно 24ч: mini-app
+// переоткрывается с новой подписью, легальные сессии не рвутся.
+const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;
+
 function verifyInitData(initData: string): { id: number; username?: string; first_name?: string } | null {
   if (!initData || !BOT_TOKEN) return null;
   try {
@@ -43,7 +48,12 @@ function verifyInitData(initData: string): { id: number; username?: string; firs
     params.delete('hash');
     const dcs = [...params.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
     const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
-    if (crypto.createHmac('sha256', secret).update(dcs).digest('hex') !== hash) return null;
+    const expected = crypto.createHmac('sha256', secret).update(dcs).digest('hex');
+    const a = Buffer.from(expected), b = Buffer.from(hash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    // Отсекаем старые/replay-подписи по auth_date.
+    const authDate = Number(params.get('auth_date') || 0);
+    if (!authDate || (Date.now() / 1000 - authDate) > INITDATA_MAX_AGE_SEC) return null;
     const u = JSON.parse(params.get('user') || '{}');
     return u && u.id ? u : null;
   } catch {
