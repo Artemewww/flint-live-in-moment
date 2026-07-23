@@ -44,6 +44,8 @@ export interface CommunityEvent {
   painPoint: string;
   houseQualities: HouseQuality[];
   image: string;
+  /** Вертикальная афиша для Telegram (рассылки, "Позвать друга") */
+  telegramImage?: string;
   maxParticipants?: number;
   participantsCount: number;
   telegramBotUrl?: string;

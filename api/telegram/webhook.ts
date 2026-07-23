@@ -3455,45 +3455,60 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
-      // «Позвать друга»: готовое сообщение с реф-ссылкой, кнопка «Поделиться».
+      // «Позвать друга»: готовое сообщение с реф-ссылкой, кнопки Программа/Правила/Бронь.
       if (data.startsWith('share_')) {
         const ev = await getEvent(data.slice('share_'.length));
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         if (!ev) return res.status(200).json({ ok: true });
         const code = await ensureRefCode(tgId);
-        // Ссылка на страницу-приглашение сайта: у неё og-разметка, поэтому
-        // в Telegram и Viber друг увидит большую картинку события и описание.
-        // Прямая t.me-ссылка превью не даёт.
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
-        const invite = `${ev.title} — ${dayPhrase(ev.date)} (${whenPhrase(ev.date)}). Идём вместе?`;
+        const invite = `${ev.title} — ${dayPhrase(ev.date)} (${whenPhrase(ev.date)}). Едем вместе?`;
         const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}`;
 
-        // Картинку прикладываем и в сам чат — чтобы приглашение можно было переслать.
-        const photo = ev.image && !String(ev.image).startsWith('data:')
-          ? String(ev.image)
-          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`;
-        // Карточка-приглашение: заголовок с эмодзи, дата, локация, короткое описание,
-        // и заметная кнопка «Забронировать место» (url-кнопка переживает пересылку).
-        const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
-        const rawDesc = ev.description ? String(ev.description).replace(/\s+/g, ' ').trim() : '';
-        const shortDesc = rawDesc ? rawDesc.slice(0, 160) + (rawDesc.length > 160 ? '…' : '') : '';
-        const caption =
-          `🎉 <b>${esc(ev.title)} — идём вместе!</b>\n\n` +
-          `📅 ${esc(dateLine)}\n` +
-          (ev.location ? `📍 ${esc(ev.location)}\n` : '') +
-          (ev.price_label ? `💳 ${esc(ev.price_label)}\n` : '') +
-          (shortDesc ? `\n${esc(shortDesc)}\n` : '') +
-          `\n<i>Жми «Забронировать место» — откроется событие, друг попадёт в клуб по твоему приглашению.</i>\n\n` +
-          `Ссылка (можно переслать вручную):\n<code>${esc(link)}</code>`;
-        const markup = kb([
-          [{ text: '✅ Забронировать место', url: link }],
-          [{ text: '📤 Отправить другу', url: shareUrl }],
-        ]);
+        // Вертикальная афиша для Telegram (telegram_image) или обычная картинка
+        const telegramImage = ev.telegram_image || ev.telegramImage || '';
+        const photo = telegramImage && !String(telegramImage).startsWith('data:')
+          ? String(telegramImage)
+          : (ev.image && !String(ev.image).startsWith('data:')
+            ? String(ev.image)
+            : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}`);
 
-        const sentPhoto = ev.image
+        // Короткий призыв: мощный заголовок, дата (с отсчётом), локация, цена
+        const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
+        const whenStr = whenPhrase(ev.date);
+        const whenLine = whenStr ? ` · ${whenStr}` : '';
+        const locationStr = ev.location
+          ? ev.location.toLowerCase().includes('ислочь')
+            ? 'Поляна на реке Ислочь'
+            : ev.location
+          : '';
+
+        const caption =
+          `🎉 <b>${esc(ev.title)} — едем вместе!</b>\n\n` +
+          `📅 ${esc(dateLine)}${esc(whenLine)}\n` +
+          (locationStr ? `📍 ${esc(locationStr)}\n` : '') +
+          (ev.price_type === 'free' || !ev.price_type
+            ? `💳 Каждый платит за себя\n`
+            : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`);
+
+        // Кнопки: Программа, Правила (памятка), Забронировать место, Поделиться
+        const buttons: any[] = [];
+        const progRow: any[] = [];
+        if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
+          progRow.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
+        }
+        if (ev.logistics?.prep) {
+          progRow.push({ text: '⚠️ Правила', callback_data: `prep_${ev.id}` });
+        }
+        if (progRow.length > 0) buttons.push(progRow);
+        buttons.push([{ text: '✅ Забронировать место', url: link }]);
+        buttons.push([{ text: '📤 Отправить другу', url: shareUrl }]);
+        const markup = kb(buttons);
+
+        // Отправляем с вертикальной афишей если есть, иначе с обычной картинкой
+        const sentPhoto = (telegramImage || ev.image)
           ? await tg('sendPhoto', { chat_id: chatId, photo, parse_mode: 'HTML', caption, reply_markup: markup })
           : null;
-        // Нет картинки или Telegram её не забрал — уходим на обычный текст.
         if (!sentPhoto || (sentPhoto as any).ok !== true) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: caption, reply_markup: markup });
         }

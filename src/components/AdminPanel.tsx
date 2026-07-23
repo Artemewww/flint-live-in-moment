@@ -3737,6 +3737,7 @@ function EditEventModal({ event, onClose, onSave }: {
     locationDetails: event.locationDetails || '',
     coordinates: event.coordinates || { lat: 0, lng: 0 },
     image: event.image || '',
+    telegramImage: event.telegramImage || undefined as string | undefined,
     painPoint: event.painPoint || '',
     maxParticipants: event.maxParticipants,
     participantsCount: event.participantsCount,
@@ -3752,6 +3753,7 @@ function EditEventModal({ event, onClose, onSave }: {
     houseQualities: (event.houseQualities || []) as HouseQuality[],
     notifications: ((event as any).notifications || {}) as Record<string, any>
   });
+
 
   // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
   const computedPriceLabel = () => {
@@ -3930,6 +3932,12 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
+
+          <div className="mt-2">
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Вертикальная афиша для Telegram</label>
+            <ImageUploadField value={formData.telegramImage || ''} onChange={(url) => setFormData({...formData, telegramImage: url || undefined})} />
+            <p className="text-[9px] text-white/30 mt-1">Вертикальная картинка (афиша) для рассылок в Telegram. Если не задана — используется основная.</p>
+          </div>
 
           {/* AI-генерация обложки с лоадером */}
           <button
