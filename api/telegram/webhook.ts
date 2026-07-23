@@ -727,15 +727,18 @@ async function sendHelp(chatId: number) {
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
     text:
-      'ℹ️ <b>Как это работает</b>\n\n' +
-      '1. Выбираешь событие → «Записаться».\n' +
-      '2. Отвечаешь на пару вопросов — они нужны для закупки и логистики.\n' +
-      '3. Дальше всё придёт сюда: точный адрес, программа, напоминания за 7/3/1 день.\n' +
-      '4. Нужна машина или место в ней — «🚗 Логистика и брони».\n' +
-      '5. После события бот попросит оценку — она влияет на следующие.\n\n' +
-      'Вопрос по событию — кнопка «❓ Спросить» в его карточке.\n' +
-      '/profile — баллы и твоя реф-ссылка.',
-    reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+      '📖 <b>Как всё работает в боте</b>\n\n' +
+      '<b>1. События.</b> «Все события» — список. Открываешь карточку → «✅ Записаться». Отвечаешь на пару вопросов (питание, снаряжение, транспорт) — они нужны для закупки и логистики.\n\n' +
+      '<b>2. После записи</b> всё приходит сюда: точный адрес и координаты, программа, напоминания за 7/3/1 день, изменения события.\n\n' +
+      '<b>3. 🚗 Логистика.</b> «Еду на машине» — предложить места (за это +баллы). «Нужна попутка» — встать в очередь, придёт уведомление, когда появится машина. Водитель подтверждает или высаживает с причиной.\n\n' +
+      '<b>4. 📋 Задачи и 🗳 Голосования</b> в карточке события — берёшь задачу или голосуешь за программу/локацию.\n\n' +
+      '<b>5. 📸 Фото/видео</b> события — в его карточке (только для участников).\n\n' +
+      '<b>6. ❓ Спросить / 💡 Идея</b> в карточке — вопрос или предложение организатору.\n\n' +
+      '<b>7. 👤 Профиль</b> (/profile) — баллы, статус, что бот о тебе знает (питание, снаряжение, авто, кого везёшь), реф-ссылка. Приглашай друзей — баллы за первое их событие.\n\n' +
+      '<b>8. 🆘 SOS</b> в профиле — срочный сигнал организаторам с твоим контактом.\n\n' +
+      '<b>9. 💬 Поддержка</b> — напиши, ответят сюда.\n\n' +
+      '<i>Питание и предпочтения: /diet и /preferences.</i>',
+    reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }], [{ text: '🆘 SOS', callback_data: 'sos' }]]),
   });
 }
 
@@ -1166,34 +1169,79 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
     { onConflict: 'telegram_id' }
   );
   const code = await ensureRefCode(tgId);
-  const { data: me } = await supabase.from('members').select('points,status,is_core').eq('telegram_id', tgId).maybeSingle();
+  const { data: me } = await supabase.from('members')
+    .select('points,status,is_core,first_name,last_name,gender,phone,birthday,dietary,allergies')
+    .eq('telegram_id', tgId).maybeSingle();
   const { count: invited } = await supabase.from('members').select('telegram_id', { count: 'exact', head: true }).eq('referred_by', tgId);
   const { count: visited } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('telegram_id', tgId).eq('attended', true);
+
+  // Снаряжение/транспорт — из ближайшей активной регистрации.
+  const { data: regRows } = await supabase.from('registrations')
+    .select('equipment,has_transport,transport_details,roles,event_id').eq('telegram_id', tgId).neq('status', 'cancelled')
+    .order('created_at', { ascending: false }).limit(1);
+  const reg = (regRows || [])[0] as any;
+
+  // Кого посадил в машину: активные поездки, где он водитель, + пассажиры.
+  let carLine = '';
+  try {
+    const { data: myRides } = await supabase.from('rides').select('id').eq('driver_id', tgId).eq('active', true);
+    const rideIds = (myRides || []).map((r: any) => r.id);
+    if (rideIds.length) {
+      const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').in('ride_id', rideIds);
+      const paxIds = Array.from(new Set((pax || []).map((p: any) => Number(p.passenger_id)).filter((n: number) => n > 0)));
+      if (paxIds.length) {
+        const { data: paxM } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', paxIds);
+        const names = (paxM || []).map((m: any) => m.first_name || (m.username ? '@' + m.username : 'гость')).join(', ');
+        carLine = `🚗 В твоей машине: <b>${esc(names)}</b>\n`;
+      }
+    }
+  } catch { /* no-op */ }
 
   const link = code ? `https://t.me/${BOT_USERNAME}?start=ref_${code}` : null;
   const status = (me as any)?.is_core ? 'костяк клуба'
     : (me as any)?.status === 'approved' ? 'участник клуба'
     : (me as any)?.status === 'pending_review' ? 'заявка на рассмотрении'
     : 'новичок';
+  const dietMap: Record<string, string> = { omnivore: 'всеядный', all: 'всеядный', vegetarian: 'вегетарианец', veg: 'вегетарианец', vegan: 'веган' };
+  const m: any = me || {};
+  const fullName = [m.first_name || msg.from.first_name, m.last_name].filter(Boolean).join(' ');
+  const genderStr = m.gender === 'male' ? 'М' : m.gender === 'female' ? 'Ж' : '';
+  const transportStr = reg?.has_transport ? `на авто${reg.transport_details ? ` (${reg.transport_details})` : ''}` : (reg ? 'без авто' : '');
+
+  // «О тебе» — то, что бот знает и учитывает.
+  const about: string[] = [];
+  if (genderStr) about.push(`🚻 Пол: <b>${genderStr}</b>`);
+  if (m.phone) about.push(`📞 Телефон: <code>${esc(m.phone)}</code>`);
+  if (m.birthday) about.push(`🎂 День рождения: <b>${esc(m.birthday)}</b>`);
+  if (m.dietary) about.push(`🍽 Питание: <b>${esc(dietMap[String(m.dietary)] || m.dietary)}</b>`);
+  if (m.allergies) about.push(`⚠️ Аллергии: <b>${esc(m.allergies)}</b>`);
+  if (reg?.equipment) about.push(`🎒 Снаряжение: <b>${esc(String(reg.equipment).split(',').filter(Boolean).join(', '))}</b>`);
+  if (transportStr) about.push(`🚗 Транспорт: <b>${esc(transportStr)}</b>`);
+  if (reg?.roles) about.push(`🙌 Роли: <b>${esc(String(reg.roles).split(',').filter(Boolean).join(', '))}</b>`);
 
   const rows: any[] = [];
+  rows.push([{ text: '🆘 SOS', callback_data: 'sos' }, { text: '📖 Помощь', callback_data: 'helpguide' }]);
+  const row2: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }];
   if (link) {
     const invite = 'Это «Живи в моменте» — закрытый клуб трезвых событий. Заходи по моей ссылке.';
-    rows.push([{ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` }]);
+    row2.push({ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` });
   }
+  rows.push(row2);
   rows.push([openBtn]);
 
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
     text:
-      `👤 <b>${esc(msg.from.first_name || 'Профиль')}</b>\n\n` +
-      `🏅 Баллы: <b>${(me as any)?.points || 0}</b>\n` +
-      `🚪 Статус: ${esc(status)}\n` +
+      `👤 <b>${esc(fullName || 'Профиль')}</b>\n` +
+      `🚪 Статус: ${esc(status)}\n\n` +
+      `🏅 Баллы: <b>${m.points || 0}</b>\n` +
+      `🎒 Событий посетил: <b>${visited || 0}</b>\n` +
       `🤝 Пригласил: <b>${invited || 0}</b>\n` +
-      `🎒 Событий посетил: <b>${visited || 0}</b>\n\n` +
+      carLine +
+      (about.length ? `\n<b>О тебе</b> (это учитывает бот):\n${about.join('\n')}\n` : '') +
       (link
-        ? `🔗 Твоя реф-ссылка:\n<code>${esc(link)}</code>\n\n<i>Нажми на ссылку — скопируется. Или жми «Отправить другу». Баллы придут, когда друг впервые дойдёт до события.</i>`
-        : '<i>Реф-ссылка недоступна.</i>'),
+        ? `\n🔗 Твоя реф-ссылка:\n<code>${esc(link)}</code>\n<i>Баллы придут, когда друг впервые дойдёт до события.</i>`
+        : ''),
     reply_markup: kb(rows),
   });
 }
@@ -1342,7 +1390,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -1531,6 +1579,40 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
         });
+        return res.status(200).json({ ok: true });
+      }
+
+      // Помощь / гайд по боту из профиля.
+      if (data === 'helpguide') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await sendHelp(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      // Питание из профиля.
+      if (data === 'setdiet') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await sendDietPrompt(chatId);
+        return res.status(200).json({ ok: true });
+      }
+      // SOS — экстренная помощь на событии.
+      if (data === 'sos') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🆘 <b>Экстренная помощь</b>\n\nЕсли на событии нужна срочная помощь — нажми кнопку, организаторы сразу получат сигнал с твоим именем и контактом.\n\n☎️ Угроза жизни/здоровью — сначала <b>112</b>.',
+          reply_markup: kb([[{ text: '🚨 Позвать организатора СЕЙЧАС', callback_data: 'sos_alert' }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data === 'sos_alert') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сигнал отправлен' });
+        const { data: meS } = await supabase.from('members').select('first_name,phone,username').eq('telegram_id', tgId).maybeSingle();
+        const who = `${esc((meS as any)?.first_name || cq.from.first_name || 'Участник')}${(meS as any)?.username ? ' @' + esc((meS as any).username) : ''}`;
+        const phone = (meS as any)?.phone ? `\n📞 <code>${esc((meS as any).phone)}</code>` : '';
+        if (ADMIN_CHAT_ID) {
+          try { await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🆘🆘 <b>SOS от участника!</b>\n${who}${phone}\n\nСрочно свяжись с ним.` }); } catch { /* no-op */ }
+        }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Сигнал отправлен организаторам — с тобой свяжутся. Если это угроза жизни — звони <b>112</b>.' });
         return res.status(200).json({ ok: true });
       }
 
