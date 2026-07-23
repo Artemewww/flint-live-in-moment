@@ -3557,7 +3557,6 @@ export default async function handler(req: any, res: any) {
         if (!ev) return res.status(200).json({ ok: true });
         const code = await ensureRefCode(tgId);
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
-        const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`🎉 ${ev.title} — едем вместе!`)}`;
 
         // Афиша (telegram_image) или обычная картинка. И то, и другое грузится как
         // data:-URL, который Telegram НЕ тянет напрямую → всегда шлём через прокси
@@ -3583,8 +3582,9 @@ export default async function handler(req: any, res: any) {
           (ev.price_type === 'free' || !ev.price_type
             ? `💳 Каждый платит за себя\n`
             : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`) +
-          `\n📤 Перешли эту карточку другу или нажми «поделиться» ниже.`;
+          `\n📤 Перешли эту карточку другу — с ней он сразу увидит событие.`;
 
+        // Строго 3 кнопки: Программа · Правила · Забронировать место (по просьбе владельца).
         const buttons: any[] = [];
         const progRow: any[] = [];
         if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
@@ -3595,7 +3595,6 @@ export default async function handler(req: any, res: any) {
         }
         if (progRow.length > 0) buttons.push(progRow);
         buttons.push([{ text: '✅ Забронировать место', url: link }]);
-        buttons.push([{ text: '🔗 Поделиться ссылкой', url: shareUrl }]);
         const markup = kb(buttons);
 
         const sentPhoto = (telegramImage || ev.image)
