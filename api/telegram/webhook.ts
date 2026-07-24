@@ -659,7 +659,9 @@ function mainMenu(admin = false) {
     [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
     [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
   ];
-  if (admin) rows.push([{ text: '⚙️ Панель организатора' }]);
+  // Пятая кнопка внизу: костяку — панель организатора, участнику — SOS
+  // (экстренный сигнал организаторам всегда под рукой).
+  rows.push([{ text: admin ? '⚙️ Панель организатора' : '🆘 SOS' }]);
   return {
     keyboard: rows,
     resize_keyboard: true,
@@ -1192,19 +1194,43 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
     .order('created_at', { ascending: false }).limit(1);
   const reg = (regRows || [])[0] as any;
 
-  // Кого посадил в машину: активные поездки, где он водитель, + пассажиры.
-  let carLine = '';
+  // На какие события еду + мои машины/ПАЛАТКИ (раздельно по kind!) с пассажирами.
+  // Раньше баг: брались все rides без фильтра kind → палатки считались «машиной».
+  const today = new Date().toISOString().slice(0, 10);
+  let eventsBlock = '';
+  const cancelRows: any[] = [];
   try {
-    const { data: myRides } = await supabase.from('rides').select('id').eq('driver_id', tgId).eq('active', true);
+    const { data: myRegs } = await supabase.from('registrations')
+      .select('event_id').eq('telegram_id', tgId).neq('status', 'cancelled');
+    const regEvIds = (myRegs || []).map((r: any) => r.event_id);
+    const { data: myRides } = await supabase.from('rides')
+      .select('id,event_id,kind,seats_total').eq('driver_id', tgId).eq('active', true);
     const rideIds = (myRides || []).map((r: any) => r.id);
+    const occByRide = new Map<any, string[]>();
     if (rideIds.length) {
-      const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').in('ride_id', rideIds);
-      const paxIds = Array.from(new Set((pax || []).map((p: any) => Number(p.passenger_id)).filter((n: number) => n > 0)));
-      if (paxIds.length) {
-        const { data: paxM } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', paxIds);
-        const names = (paxM || []).map((m: any) => m.first_name || (m.username ? '@' + m.username : 'гость')).join(', ');
-        carLine = `🚗 В твоей машине: <b>${esc(names)}</b>\n`;
+      const { data: bk } = await supabase.from('ride_bookings').select('ride_id,passenger_name').in('ride_id', rideIds);
+      for (const b of bk || []) {
+        const arr = occByRide.get((b as any).ride_id) || [];
+        arr.push((b as any).passenger_name || 'гость');
+        occByRide.set((b as any).ride_id, arr);
       }
+    }
+    const allEvIds = Array.from(new Set([...regEvIds, ...((myRides || []).map((r: any) => r.event_id))].filter(Boolean)));
+    if (allEvIds.length) {
+      const { data: evs } = await supabase.from('events')
+        .select('id,title,date,date_label').in('id', allEvIds).gte('date', today).order('date');
+      const lines: string[] = [];
+      for (const ev of evs || []) {
+        let block = `• <b>${esc((ev as any).title)}</b> — ${esc((ev as any).date_label || (ev as any).date)}`;
+        for (const r of (myRides || []).filter((x: any) => x.event_id === (ev as any).id)) {
+          const occ = occByRide.get((r as any).id) || [];
+          const isTent = (r as any).kind === 'tent';
+          block += `\n   ${isTent ? '⛺ Твоя палатка' : '🚗 Твоя машина'}${occ.length ? `: ${esc(occ.join(', '))}` : ' (пока никого)'}`;
+          cancelRows.push([{ text: `❌ Убрать ${isTent ? 'палатку' : 'машину'} · ${String((ev as any).title).slice(0, 16)}`, callback_data: `ridecancel_${(r as any).id}` }]);
+        }
+        lines.push(block);
+      }
+      if (lines.length) eventsBlock = `\n📅 <b>Ты едешь:</b>\n${lines.join('\n')}\n`;
     }
   } catch { /* no-op */ }
 
@@ -1230,14 +1256,16 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
   if (transportStr) about.push(`🚗 Транспорт: <b>${esc(transportStr)}</b>`);
   if (reg?.roles) about.push(`🙌 Роли: <b>${esc(String(reg.roles).split(',').filter(Boolean).join(', '))}</b>`);
 
+  // Кнопки (SOS вынесен в нижнее меню). Реф-ссылку показываем только кнопкой
+  // «Отправить другу» — без лишнего текста со ссылкой (по просьбе владельца).
   const rows: any[] = [];
-  rows.push([{ text: '🆘 SOS', callback_data: 'sos' }, { text: '📖 Помощь', callback_data: 'helpguide' }]);
-  const row2: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }];
+  const row1: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }, { text: '📖 Помощь', callback_data: 'helpguide' }];
+  rows.push(row1);
   if (link) {
     const invite = 'Это «Живи в моменте» — закрытый клуб трезвых событий. Заходи по моей ссылке.';
-    row2.push({ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` });
+    rows.push([{ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` }]);
   }
-  rows.push(row2);
+  for (const cr of cancelRows) rows.push(cr);
   rows.push([openBtn]);
 
   await tg('sendMessage', {
@@ -1248,11 +1276,8 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
       `🏅 Баллы: <b>${m.points || 0}</b>\n` +
       `🎒 Событий посетил: <b>${visited || 0}</b>\n` +
       `🤝 Пригласил: <b>${invited || 0}</b>\n` +
-      carLine +
-      (about.length ? `\n<b>О тебе</b> (это учитывает бот):\n${about.join('\n')}\n` : '') +
-      (link
-        ? `\n🔗 Твоя реф-ссылка:\n<code>${esc(link)}</code>\n<i>Баллы придут, когда друг впервые дойдёт до события.</i>`
-        : ''),
+      eventsBlock +
+      (about.length ? `\n<b>О тебе</b> (это учитывает бот):\n${about.join('\n')}\n` : ''),
     reply_markup: kb(rows),
   });
 }
@@ -5623,6 +5648,14 @@ export default async function handler(req: any, res: any) {
         }
         if (text === 'ℹ️ Помощь' || text === '❓ Помощь') {
           await sendHelp(chatId);
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '🆘 SOS') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🆘 <b>Экстренная помощь</b>\n\nЕсли на событии нужна срочная помощь — нажми кнопку, организаторы сразу получат сигнал с твоим именем и контактом.\n\n☎️ Угроза жизни/здоровью — сначала <b>112</b>.',
+            reply_markup: kb([[{ text: '🚨 Позвать организатора СЕЙЧАС', callback_data: 'sos_alert' }]]),
+          });
           return res.status(200).json({ ok: true });
         }
         if (text === '👤 Мой статус' || text === '👤 Профиль') {
