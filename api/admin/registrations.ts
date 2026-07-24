@@ -154,6 +154,42 @@ export default async function handler(req: any, res: any) {
     }
   }
 
+  // ─── Инвентарь клуба: кто чем владеет, у кого на руках, сколько держит ──────
+  if (req.method === 'GET' && req.query?.action === 'assets') {
+    try {
+      const { data } = await supabase.from('club_assets').select('*').order('category', { ascending: true });
+      const list = (data || []).map((a: any) => ({
+        id: a.id, name: a.name, category: a.category || 'прочее',
+        ownerName: a.owner_name || null, holderName: a.holder_name || null, holderId: a.holder_id || null,
+        takenAt: a.taken_at || null, qty: a.qty || 1, isShared: !!a.is_shared,
+        location: a.location || null, notes: a.notes || null,
+        daysHeld: a.taken_at ? Math.floor((Date.now() - new Date(a.taken_at).getTime()) / 86400000) : null,
+      }));
+      return res.status(200).json({ assets: list });
+    } catch (error) {
+      // Таблицы может не быть до миграции — не роняем админку.
+      return res.status(200).json({ assets: [], needsMigration: true });
+    }
+  }
+  // Правка инвентаря: держатель/владелец/заметка (+ таймстемп взятия при смене держателя).
+  if (req.method === 'PATCH' && req.query?.action === 'asset') {
+    try {
+      const id = String(req.query.assetId || '');
+      if (!id) return res.status(400).json({ error: 'Missing assetId' });
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const patch: Record<string, unknown> = { updated_at: new Date().toISOString() };
+      if (body.holderName !== undefined) { patch.holder_name = body.holderName || null; patch.taken_at = new Date().toISOString(); }
+      if (body.ownerName !== undefined) patch.owner_name = body.ownerName || null;
+      if (body.location !== undefined) patch.location = body.location || null;
+      if (body.notes !== undefined) patch.notes = body.notes || null;
+      const { error } = await supabase.from('club_assets').update(patch).eq('id', id);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   // ─── Переписка поддержки: лента «костяк ↔ участник» ────────────────────────
   // Список диалогов: по каждому собеседнику — последнее сообщение, счётчик,
   // сколько входящих без ответа. Имя тянем из members.

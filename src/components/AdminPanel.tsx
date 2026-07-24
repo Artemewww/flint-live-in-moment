@@ -1227,6 +1227,34 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Сортировка аудитории. */
   const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name'>('default');
 
+  /** Инвентарь клуба: список активов, кто держит, сколько дней. */
+  const [showAssets, setShowAssets] = useState(false);
+  const [assets, setAssets] = useState<any[] | null>(null);
+  const [assetsNeedMigration, setAssetsNeedMigration] = useState(false);
+  const loadAssets = async () => {
+    try {
+      const res = await fetch('/api/admin/registrations?action=assets');
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setAssets(j.assets || []);
+      setAssetsNeedMigration(!!j.needsMigration);
+    } catch { setActionMsg({ ok: false, text: 'Не удалось загрузить инвентарь' }); }
+  };
+  const changeAssetHolder = async (a: any) => {
+    const holderName = window.prompt(`У кого теперь «${a.name}»? Впиши имя нового держателя.`, a.holderName || '');
+    if (holderName === null) return;
+    try {
+      const res = await fetch(`/api/admin/registrations?action=asset&assetId=${encodeURIComponent(a.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ holderName: holderName.trim() }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) { setActionMsg({ ok: false, text: 'Не удалось обновить' }); return; }
+      await loadAssets();
+      setActionMsg({ ok: true, text: 'Держатель обновлён' });
+    } catch { setActionMsg({ ok: false, text: 'Ошибка сети' }); }
+  };
+
   /** Переписка поддержки: список диалогов и открытый тред. */
   const [showChats, setShowChats] = useState(false);
   const [conversations, setConversations] = useState<any[] | null>(null);
@@ -1902,6 +1930,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
               >
                 💬 Переписка →
+              </button>
+              <button
+                onClick={() => { setShowAssets(true); loadAssets(); }}
+                className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
+                🎒 Инвентарь →
               </button>
             </div>
           </div>
@@ -3361,6 +3395,67 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       {/* Модалка ввода (даты/причины/объявления) вместо системного prompt */}
       <AnimatePresence>
         {inputModal && <InputModal spec={inputModal} onClose={() => setInputModal(null)} />}
+      </AnimatePresence>
+
+      {/* Инвентарь клуба — кто чем владеет, у кого на руках, сколько держит */}
+      <AnimatePresence>
+        {showAssets && (
+          <div className="fixed inset-0 z-[80] flex items-end md:items-center justify-center md:p-4">
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={() => setShowAssets(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+              className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-2xl relative z-10 border border-white/10 flex flex-col h-[90dvh] md:max-h-[85vh] text-white"
+            >
+              <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between">
+                <div>
+                  <h3 className="font-display font-black text-lg uppercase">🎒 Инвентарь клуба</h3>
+                  <p className="text-[11px] text-white/50 font-mono">{assets ? `${assets.length} позиций` : '…'}</p>
+                </div>
+                <button onClick={() => setShowAssets(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white"><X className="w-5 h-5" /></button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+                {assets === null ? (
+                  <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
+                ) : assetsNeedMigration ? (
+                  <div className="text-center py-8 px-4">
+                    <p className="text-white/60 text-sm">Таблица инвентаря ещё не создана.</p>
+                    <p className="text-white/40 text-xs mt-2 font-mono">Накати миграцию <b>supabase/migrations/2026-club-assets.sql</b> в Supabase SQL Editor — появится весь список.</p>
+                  </div>
+                ) : assets.length === 0 ? (
+                  <p className="text-white/40 text-xs text-center py-8">Пусто. Накати миграцию с сидом или добавь позиции.</p>
+                ) : assets.map((a: any) => (
+                  <div key={a.id} className="bg-white/5 border border-white/10 rounded-xl p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-bold text-sm">{a.name}</span>
+                          {a.qty > 1 && <span className="text-[10px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded font-mono">×{a.qty}</span>}
+                          <span className="text-[9px] bg-white/5 text-white/40 px-1.5 py-0.5 rounded font-mono">{a.category}</span>
+                          {a.isShared && <span className="text-[9px] bg-amber-500/15 text-amber-400 px-1.5 py-0.5 rounded font-mono">складчина</span>}
+                        </div>
+                        <div className="text-[11px] text-white/60 font-mono mt-1">
+                          Владелец: <b className="text-white/80">{a.ownerName || '—'}</b>
+                        </div>
+                        <div className="text-[11px] text-white/60 font-mono">
+                          🖐 У кого сейчас: <b className="text-brand">{a.holderName || '—'}</b>
+                          {a.daysHeld !== null && <span className="text-white/40"> · {a.daysHeld === 0 ? 'сегодня взял' : `${a.daysHeld} дн на руках`}</span>}
+                        </div>
+                        {a.notes && <div className="text-[10px] text-white/40 mt-1 italic">{a.notes}</div>}
+                      </div>
+                      <button
+                        onClick={() => changeAssetHolder(a)}
+                        className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase bg-brand/15 text-brand hover:bg-brand/25 cursor-pointer border-none shrink-0"
+                        title="Передать / сменить держателя"
+                      >
+                        Передать
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       {/* Переписка поддержки — лента «костяк ↔ участник», ответ из админки */}
