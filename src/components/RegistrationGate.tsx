@@ -190,7 +190,8 @@ export default function RegistrationGate({
       </div>
 
       {/* Карточка шага */}
-      <div ref={scrollRef} className={`rounded-2xl border ${accent.border} ${accent.bg} p-5 space-y-4 max-h-[46vh] overflow-y-auto`}>
+      {/* На мобильном шаг скроллится вместе со всей страницей (нет вложенного скролла). */}
+      <div ref={scrollRef} className={`rounded-2xl border ${accent.border} ${accent.bg} p-4 sm:p-5 space-y-4 md:max-h-[46vh] md:overflow-y-auto`}>
         <div className="flex items-start gap-3">
           <div className={`shrink-0 w-11 h-11 rounded-xl flex items-center justify-center border ${accent.border} ${accent.text} bg-black/30`}>
             {step.icon}

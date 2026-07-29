@@ -128,8 +128,10 @@ async function rateLimit(scope: string, ident: string, max: number, windowMs: nu
 }
 
 // Колонки registrations, которые разрешено принимать из тела запроса.
+// ⚠️ status/payment_status/payment_amount/donation_amount тут БЫТЬ НЕ ДОЛЖНЫ:
+// эндпоинт публичный, и клиент мог бы сам подтвердить себе заявку и отметить
+// оплату. Их ставит только админка (api/admin/registrations.ts) и бот.
 const REG_FIELDS = [
-  'status', 'payment_status', 'payment_amount', 'donation_amount',
   'has_transport', 'transport_details', 'transport_seats', 'inventory',
   'category', 'dietary', 'guest_count', 'equipment', 'roles', 'notes',
 ];
@@ -191,20 +193,24 @@ export default async function handler(req: any, res: any) {
     //  (а) подтверждённого участника (verified initData → status approved/is_core), либо
     //  (б) новичка с ВАЛИДНЫМ реф-кодом действующего участника (фиксируем, кто привёл).
     // Свободный текст «имя друга» доступ НЕ даёт. Выключатель: GATE_ENABLED=0.
+    const refCode = String(body.refCode || body.ref || '').trim();
+    // Пригласивший (валидный участник) и статус самого заявителя нужны и ниже —
+    // после успешной анкеты реф-новичка впускаем в клуб.
+    let inviterId: number | null = null;
+    if (refCode) {
+      const { data: inv } = await supabase
+        .from('members').select('telegram_id,status,is_core').eq('ref_code', refCode).maybeSingle();
+      if (inv && ((inv as any).status === 'approved' || (inv as any).is_core)) inviterId = Number((inv as any).telegram_id);
+    }
+    let isMember = false;
+    let myStatus: string | null = null;
+    if (verified?.id) {
+      const { data: me } = await supabase
+        .from('members').select('status,is_core').eq('telegram_id', verified.id).maybeSingle();
+      myStatus = ((me as any)?.status as string) || null;
+      isMember = !!(me && ((me as any).status === 'approved' || (me as any).is_core));
+    }
     if (process.env.GATE_ENABLED !== '0') {
-      const refCode = String(body.refCode || body.ref || '').trim();
-      let inviterId: number | null = null;
-      if (refCode) {
-        const { data: inv } = await supabase
-          .from('members').select('telegram_id,status,is_core').eq('ref_code', refCode).maybeSingle();
-        if (inv && ((inv as any).status === 'approved' || (inv as any).is_core)) inviterId = Number((inv as any).telegram_id);
-      }
-      let isMember = false;
-      if (verified?.id) {
-        const { data: me } = await supabase
-          .from('members').select('status,is_core').eq('telegram_id', verified.id).maybeSingle();
-        isMember = !!(me && ((me as any).status === 'approved' || (me as any).is_core));
-      }
       if (!isMember && !inviterId) {
         return res.status(403).json({
           error: 'Клуб закрытый: записаться на событие можно только участнику клуба или по личной ссылке-приглашению действующего участника. Открой афишу через бота по реф-ссылке.',
@@ -261,6 +267,25 @@ export default async function handler(req: any, res: any) {
       }
     } catch (e) { slog('error', 'referral bind skipped', e); }
 
+    // Анкета пройдена целиком (правила клуба + программа + данные) — фиксируем
+    // пол, согласие на ПД и, для реф-новичка, ВПУСКАЕМ в клуб. Раньше это делал
+    // короткий онбординг в боте; теперь единственный путь — Mini App.
+    // ⚠️ pending_review (ручная модерация) и blocked реф-ссылкой НЕ обходятся.
+    try {
+      const patch: Record<string, unknown> = {};
+      if (body.category === 'male' || body.category === 'female') patch.gender = body.category;
+      if (body.agreedPd === true) patch.agreed_pd = true;
+      const canApprove = verified?.id && inviterId && !isMember
+        && myStatus !== 'blocked' && myStatus !== 'pending_review';
+      if (canApprove) {
+        patch.status = 'approved';
+        patch.approved_by = inviterId;
+      }
+      if (Object.keys(patch).length) {
+        await supabase.from('members').update(patch).eq('telegram_id', member.telegram_id);
+      }
+    } catch (e) { slog('error', 'member profile patch skipped', e); }
+
     // 2) Анти-дубль: одна активная заявка на событие от одного человека.
     const { data: existingReg } = await supabase
       .from('registrations')
@@ -290,6 +315,12 @@ export default async function handler(req: any, res: any) {
       source: source || 'website',
     };
     for (const f of REG_FIELDS) if (body[f] !== undefined) registration[f] = body[f];
+    // «Откуда узнал о клубе» — свободный текст анкеты. Отдельной колонки в members
+    // нет, поэтому кладём в заметку заявки: костяк видит это в карточке участника.
+    if (body.sourceHint) {
+      const hint = `Откуда узнал: ${String(body.sourceHint).slice(0, 300)}`;
+      registration.notes = registration.notes ? `${registration.notes}\n${hint}` : hint;
+    }
 
     const { data: created, error: regError } = await supabase
       .from('registrations')
@@ -330,22 +361,26 @@ export default async function handler(req: any, res: any) {
       }
     } catch { /* синхронизация rides не критична для заявки */ }
 
-    // 2b) Регистрация из mini app (verified) → бот сразу присылает анкету:
-    // транспорт-кнопки stateless (rt:), дальше цепочка сама ведёт
-    // (места → марка/цвет → еда → гости). Единый флоу с бот-регистрацией.
+    // 2b) Подтверждение в бот. Транспорт спрашиваем ТОЛЬКО если анкета его не
+    // прислала: с единым флоу через Mini App человек уже выбрал способ добраться,
+    // и повторный вопрос затирал его ответ.
     if (BOT_TOKEN && verified?.id) {
+      const transportAnswered = body.has_transport !== undefined
+        || (typeof body.transport_details === 'string' && body.transport_details.trim() !== '');
       try {
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: verified.id, parse_mode: 'HTML',
-            text: `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nПара быстрых уточнений для организаторов — 🚗 как добираешься?`,
-            reply_markup: { inline_keyboard: [
+            text: transportAnswered
+              ? `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nАнкета получена целиком — организаторы видят твою логистику и предпочтения. Детали события и напоминания придут сюда.`
+              : `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nПара быстрых уточнений для организаторов — 🚗 как добираешься?`,
+            ...(transportAnswered ? {} : { reply_markup: { inline_keyboard: [
               [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${eventId}:car` }],
               [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${eventId}:carfull` }],
               [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${eventId}:seek` }],
               [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${eventId}:self` }],
-            ] },
+            ] } }),
           }),
         });
       } catch { /* анкета догонится кроном-доборщиком */ }

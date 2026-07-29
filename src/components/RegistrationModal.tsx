@@ -17,10 +17,12 @@ interface RegistrationModalProps {
 const insideTg = isInsideTelegram();
 
 export default function RegistrationModal({ event, isMember = false, onClose, onSuccess }: RegistrationModalProps) {
-  // Внутри Telegram личность известна сразу → сразу 'detected'.
-  // В обычном браузере честно показываем ручную форму.
-  const [sessionState, setSessionState] = useState<'scanning' | 'detected' | 'manual'>(
-    insideTg ? 'scanning' : 'manual'
+  // Внутри Telegram личность известна сразу (initData) — имя и ник подставляем,
+  // но анкету человек проходит ту же, что и в браузере.
+  // 'scanning' — ждём личность из Telegram; 'form' — единая анкета участника
+  // (одна и та же в Mini App и в браузере, чтобы этапы не расходились).
+  const [sessionState, setSessionState] = useState<'scanning' | 'form'>(
+    insideTg ? 'scanning' : 'form'
   );
   const [tgUsername, setTgUsername] = useState('');
   const [fullName, setFullName] = useState('');
@@ -72,8 +74,11 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         setTgUsername(u.username || `id${u.id}`);
         setFullName([u.first_name, u.last_name].filter(Boolean).join(' '));
       }
-      // Небольшая пауза для плавного появления «подтверждено».
-      const timer = setTimeout(() => setSessionState('detected'), 600);
+      // Небольшая пауза для плавного появления «подтверждено», дальше — ЕДИНАЯ
+      // анкета (та же, что в браузере). Отдельного короткого пути для Mini App
+      // больше нет: раньше он спрашивал только имя и пригласившего, из-за чего
+      // телефон, логистика, пол, питание и гости терялись.
+      const timer = setTimeout(() => setSessionState('form'), 600);
       return () => clearTimeout(timer);
     }
   }, []);
@@ -82,6 +87,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     setIsSubmitting(true);
     setError('');
 
+    const isDriver = formData.transportMode === 'car';
+    // Колонки registrations передаём в snake_case — их принимает белый список
+    // REG_FIELDS в /api/register. Раньше анкета собирала логистику, пол, питание
+    // и гостей, но НЕ отправляла их — данные терялись на клиенте.
     const result = await submitRegistration({
       eventId: event.id,
       eventTitle: event.title,
@@ -91,6 +100,19 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       inviter: inviter.trim(),
       source: insideTg ? 'telegram-mini-app' : 'website',
       accessCode: isClosedEvent ? accessCode.trim() : undefined,
+      has_transport: isDriver,
+      transport_details: isDriver
+        ? formData.transportDetails.trim()
+        : formData.transportMode === 'seek' ? 'Ищет попутку' : 'Без авто',
+      transport_seats: isDriver ? formData.transportSeats : 0,
+      inventory: formData.inventory.trim() || undefined,
+      category: formData.category,
+      dietary: formData.dietary,
+      guest_count: formData.guestCount || 0,
+      equipment: formData.equipment.trim() || undefined,
+      roles: formData.roles.trim() || undefined,
+      agreedPd: consentGiven,
+      sourceHint: formData.source.trim() || undefined,
     });
 
     // Закрытое событие с неверным кодом — сервер вернул отказ. Не показываем «успех».
@@ -136,21 +158,12 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     haptic('success');
   };
 
-  const handleApplyAutoMatch = () => {
-    if (!isMember && !inviter.trim()) {
-      setError('Сообщество закрытое. Обязательно укажите, кто вас пригласил (Имя / никнейм друга или инвайт-код)');
-      haptic('error');
-      return;
-    }
-    if (isClosedEvent && !accessCode.trim()) {
-      setError('Это закрытое событие — введите код доступа');
-      haptic('error');
-      return;
-    }
-    finishSuccess(fullName || 'Гость', tgUsername, phone);
-  };
-
-  const handleManualSubmit = (e: React.FormEvent) => {
+  /**
+   * ЕДИНАЯ отправка анкеты — и из Mini App, и из браузера. Проверки одинаковые,
+   * различается только идентификатор: внутри Telegram он подтверждён подписью
+   * initData, вне — производный от телефона (отрицательный id, без коллизий).
+   */
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     if (!fullName.trim()) return setError('Пожалуйста, введите Ваше имя');
@@ -159,9 +172,13 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
     if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
     if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
+    if (!consentGiven) return setError('Нужно согласие на обработку персональных данных');
 
-    // Вне Telegram идентификатор — телефон с префиксом (уходит в отрицательный id, без коллизий с реальными TG).
-    finishSuccess(fullName, `web-${phone.replace(/\D/g, '')}`, phone);
+    finishSuccess(
+      fullName,
+      insideTg && tgUsername ? tgUsername : `web-${phone.replace(/\D/g, '')}`,
+      phone,
+    );
   };
 
   // Copy referral link to share with friends
@@ -174,7 +191,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 shadow-2xl" id="reg-modal-root">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center md:p-4 shadow-2xl" id="reg-modal-root">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -191,10 +208,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 15 }}
         id="reg-modal-card"
-        className="bg-[#121212] rounded-3xl w-full max-w-lg overflow-hidden relative z-10 border border-white/10 flex flex-col text-white my-auto"
+        className="bg-[#121212] md:rounded-3xl w-full max-w-lg overflow-hidden relative z-10 md:border md:border-white/10 flex flex-col text-white h-[100dvh] md:h-auto md:my-auto"
       >
         {/* Header decoration */}
-        <div className="p-6 border-b border-white/10 flex justify-between items-start bg-[#181818]">
+        <div className="p-4 sm:p-6 border-b border-white/10 flex justify-between items-start bg-[#181818] shrink-0">
           <div className="space-y-1">
             <span className="text-[9px] uppercase font-mono font-bold tracking-widest text-[#000] bg-[#E6FD3A] px-2.5 py-1 rounded-full inline-block">
               Telegram Verification & Closed Entry
@@ -216,7 +233,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         </div>
 
         {/* Modal Scrollable Canvas */}
-        <div className="p-6 overflow-y-auto max-h-[75vh]" id="modal-scroll-area">
+        <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] overflow-y-auto flex-1 min-h-0 md:flex-none md:max-h-[75vh]" id="modal-scroll-area">
           {!isDone && !gatePassed ? (
             <RegistrationGate event={event} onAccept={() => setGatePassed(true)} onClose={onClose} />
           ) : !isDone ? (
@@ -246,119 +263,25 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                   </div>
                 )}
 
-                {sessionState === 'detected' && (
-                  <div className="space-y-4 font-sans text-center">
-                    <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-brand/10 border border-brand/20 text-brand">
-                      <Bot className="w-6 h-6 animate-pulse text-[#E6FD3A]" />
-                    </div>
-                    
-                    <div className="space-y-1">
-                      <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A] block font-black">Telegram-сессия верифицирована!</span>
-                      <h4 className="font-display font-black text-white text-base uppercase">@{tgUsername}</h4>
-                    </div>
-
-                    {/* REFERRAL INPUT FIELD — участнику клуба не показываем: система его уже знает */}
-                    {!isMember && (
-                    <div className="text-left bg-black/40 p-4 rounded-2xl border border-white/10 space-y-3">
-                      <div>
-                        <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5 flex items-center justify-between">
-                          <span>Кто пригласил вас в Клуб? *</span>
-                          <span className="text-white/40 font-normal">Обязательно</span>
-                        </label>
-                        <input
-                          type="text"
-                          value={inviter}
-                          onChange={(e) => setInviter(e.target.value)}
-                          placeholder="Имя друга, никнейм в TG или код приглашения"
-                          className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-[#E6FD3A] focus:ring-1 focus:ring-[#E6FD3A]/30 outline-none text-xs transition-all bg-[#121212] text-white font-mono"
-                          required
-                        />
-                        <span className="text-[9px] text-white/40 font-mono block mt-1 uppercase">
-                          Без указания пригласившего лица заявка отсеивается ботом.
-                        </span>
+                {sessionState === 'form' && (
+                  <form onSubmit={handleSubmit} className="space-y-4 text-left font-sans">
+                    {insideTg && tgUsername ? (
+                      /* Личность из Telegram подтверждена подписью initData — телеграм
+                         и имя не спрашиваем, но остальные этапы анкеты те же. */
+                      <div className="bg-brand/5 border border-brand/20 rounded-xl p-3 flex items-center gap-2.5">
+                        <Bot className="w-4 h-4 text-brand shrink-0" />
+                        <div className="min-w-0">
+                          <span className="text-[9px] uppercase font-mono tracking-widest text-brand block font-black">
+                            Telegram-сессия верифицирована
+                          </span>
+                          <span className="text-xs font-bold text-white font-mono">@{tgUsername}</span>
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A]/60 block font-black border-b border-white/5 pb-2">
+                        Анкета участника
+                      </span>
                     )}
-
-                    {isClosedEvent && (
-                      <div className="text-left bg-black/40 p-4 rounded-2xl border border-[#E6FD3A]/20 space-y-2">
-                        <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5">
-                          🔒 Код доступа к закрытому событию *
-                        </label>
-                        <input
-                          type="text"
-                          value={accessCode}
-                          onChange={(e) => setAccessCode(e.target.value)}
-                          placeholder="Кодовое слово из приглашения"
-                          autoComplete="off"
-                          className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-[#E6FD3A] focus:ring-1 focus:ring-[#E6FD3A]/30 outline-none text-xs transition-all bg-[#121212] text-white font-mono"
-                        />
-                      </div>
-                    )}
-
-                    <div className="text-left">
-                      <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50 mb-1.5">
-                        Ваше имя
-                      </label>
-                      <input
-                        type="text"
-                        value={fullName}
-                        onChange={(e) => setFullName(e.target.value)}
-                        placeholder="Как к вам обращаться"
-                        className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#121212] text-white font-sans"
-                      />
-                    </div>
-
-                    <div className="bg-black/20 py-2.5 px-4 rounded-xl text-left text-xs text-white/60 space-y-1">
-                      <div className="flex justify-between py-1 items-center">
-                        <span>Аккаунт Telegram</span>
-                        <span className="font-bold text-brand font-mono">@{tgUsername}</span>
-                      </div>
-                    </div>
-
-                    {error && (
-                      <div className="text-[10px] bg-rose-500/10 border border-rose-500/20 text-rose-400 p-2.5 rounded-xl font-mono text-left uppercase tracking-wide leading-normal">
-                        ⚠️ {error}
-                      </div>
-                    )}
-
-                    {/* ACTIONS */}
-                    <div className="space-y-2 pt-1">
-                      <button
-                        type="button"
-                        onClick={handleApplyAutoMatch}
-                        disabled={isSubmitting}
-                        className="w-full bg-brand hover:bg-brand-hover text-black py-3.5 px-6 rounded-xl text-xs sm:text-sm font-black uppercase tracking-widest transition-all cursor-pointer flex items-center justify-center gap-2 border-none active:scale-98 shadow-md shadow-brand/10"
-                      >
-                        {isSubmitting ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin text-black" />
-                            Проверка приглашения...
-                          </>
-                        ) : (
-                          <>
-                            <Send className="w-4 h-4 fill-black text-black" />
-                            Подтвердить участие через Telegram
-                          </>
-                        )}
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setSessionState('manual')}
-                        className="text-[10px] text-white/40 hover:text-white transition-all underline font-mono uppercase bg-transparent border-none cursor-pointer"
-                      >
-                        Регистрация вручную (другой контакт)
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {sessionState === 'manual' && (
-                  <form onSubmit={handleManualSubmit} className="space-y-4 text-left font-sans">
-                    <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A]/60 block font-black border-b border-white/5 pb-2">
-                      Реестр ручной инвайт-регистрации
-                    </span>
 
                     {!insideTg && (
                       <div className="bg-brand/5 border border-brand/20 rounded-xl p-3 flex items-start gap-2 text-[10px] text-white/70 font-sans leading-normal">
@@ -666,16 +589,6 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                     )}
 
                     <div className="pt-2 flex gap-3 text-xs font-mono">
-                      {insideTg && (
-                        <button
-                          type="button"
-                          onClick={() => setSessionState('detected')}
-                          className="flex-1 border border-white/10 py-3 rounded-xl text-white/60 hover:text-white hover:bg-white/5 transition-all text-center uppercase tracking-wider cursor-pointer bg-transparent"
-                        >
-                          Назад
-                        </button>
-                      )}
-
                       <button
                         type="submit"
                         disabled={isSubmitting}
@@ -781,7 +694,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                   className="w-full bg-brand hover:bg-brand-hover text-black font-black py-4 px-6 rounded-xl text-xs transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand/15 cursor-pointer uppercase tracking-widest border-none text-center"
                 >
                   <Send className="w-4 h-4 fill-black text-black" />
-                  Подтвердить регистрацию в боте
+                  Открыть бота — логистика и напоминания
                 </a>
                 
                 <button

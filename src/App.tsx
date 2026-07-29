@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
-import { getInitData } from './telegram';
+import { getInitData, getStartParam } from './telegram';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
@@ -237,6 +237,30 @@ export default function App() {
       });
     // Перезапрашиваем после прохождения гейта и по событию рефетча (логин админа).
   }, [gatePassed, eventsReloadTick]);
+
+  // Deep-link `?ev=<id>` из бота: кнопка «Заполнить анкету» открывает Mini App
+  // сразу на нужном событии. Бот своей записи больше не ведёт — все этапы здесь.
+  // Срабатывает один раз, как только события загрузились.
+  const evDeepLinkDone = useRef(false);
+  useEffect(() => {
+    if (evDeepLinkDone.current || events.length === 0) return;
+    let evId = '';
+    try {
+      const p = new URLSearchParams(window.location.search);
+      evId = p.get('ev') || '';
+    } catch { /* нет window.location — не критично */ }
+    if (!evId) {
+      // Ссылка вида t.me/bot/app?startapp=ev_<id> тоже ведёт на карточку события.
+      const sp = getStartParam();
+      const m = sp.match(/(?:^|_)ev_([\w-]+)/);
+      if (m) evId = m[1];
+    }
+    if (!evId) return;
+    const ev = events.find((e) => e.id === evId);
+    if (!ev) return;
+    evDeepLinkDone.current = true;
+    setActiveDetailEvent(ev);
+  }, [events]);
 
   // Статус в клубе: одобрен ли участник. Нужно, чтобы не показывать «верификацию»
   // тем, кто уже внутри (пришёл по реф-ссылке и принят костяком).
@@ -560,8 +584,12 @@ export default function App() {
     );
   }
 
+  // `relative` на #app-root обязателен: без него декоративные glow-блобы (absolute,
+  // w-96) позиционируются от initial containing block и НЕ клипаются overflow-x —
+  // из-за этого страница «уезжала» вправо на мобильном (body.scrollWidth 478 при
+  // ширине экрана 375).
   return (
-    <div id="app-root" className="min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-brand/35 selection:text-white pb-12 antialiased overflow-x-hidden">
+    <div id="app-root" className="relative min-h-screen bg-[#0A0A0A] text-white font-sans selection:bg-brand/35 selection:text-white pb-12 antialiased overflow-x-clip">
       {/* Dynamic Glow Accents */}
       <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand/5 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute top-1/4 right-1/4 w-80 h-80 bg-brand/5 rounded-full blur-3xl pointer-events-none animate-pulse" />

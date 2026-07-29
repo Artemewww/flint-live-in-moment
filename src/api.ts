@@ -15,6 +15,21 @@ export interface RegisterPayload {
   source: 'website' | 'telegram-mini-app';
   /** Код доступа к закрытому событию (проверяется на сервере). */
   accessCode?: string;
+  // Анкета участника. Имена в snake_case — это колонки registrations,
+  // их принимает белый список REG_FIELDS в /api/register.
+  has_transport?: boolean;
+  transport_details?: string;
+  transport_seats?: number;
+  inventory?: string;
+  category?: 'male' | 'female';
+  dietary?: 'omnivore' | 'vegetarian' | 'vegan';
+  guest_count?: number;
+  equipment?: string;
+  roles?: string;
+  /** Согласие на обработку персональных данных (пишется в members.agreed_pd). */
+  agreedPd?: boolean;
+  /** «Откуда узнал о клубе» — свободный текст из анкеты. */
+  sourceHint?: string;
 }
 
 export interface RegisterResult {

@@ -25,8 +25,11 @@ export default function GateScreen({ onPass, onAdmin }: { onPass: () => void; on
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  // Состояние для формы заявки
-  const [showApplyForm, setShowApplyForm] = useState(false);
+  // Состояние для формы заявки. `?apply=1` — deep-link из бота («Подать заявку»):
+  // бот больше не ведёт свой диалог заявки, а открывает эту форму в Mini App.
+  const [showApplyForm, setShowApplyForm] = useState(() => {
+    try { return new URLSearchParams(window.location.search).get('apply') === '1'; } catch { return false; }
+  });
   const [applyName, setApplyName] = useState('');
   const [applyLastName, setApplyLastName] = useState('');
   const [applyPhone, setApplyPhone] = useState('');

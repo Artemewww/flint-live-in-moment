@@ -75,6 +75,18 @@ function siteUrl(req: any): string {
   return `https://${host}`;
 }
 
+/**
+ * Кнопка «открыть Mini App» с параметрами deep-link.
+ * ЕДИНАЯ точка входа в регистрацию: и заявка в клуб, и запись на событие идут
+ * через Mini App, а не через чат-диалог бота. Раньше бот вёл свой короткий
+ * сценарий (имя → телефон → пол), из-за чего пришедшие по реф-ссылке проходили
+ * МЕНЬШЕ этапов, чем те же люди в мини-приложении, и данные расходились.
+ */
+function appBtn(text: string, site: string, params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return { text, web_app: { url: qs ? `${site}/?${qs}` : site } };
+}
+
 async function getEvent(id: string) {
   const { data } = await supabase.from('events').select('*').eq('id', id).single();
   return data;
@@ -1504,16 +1516,17 @@ export default async function handler(req: any, res: any) {
         });
       };
 
-      // Заявка в клуб, шаг 1: согласие на обработку персональных данных.
+      // Заявка в клуб → анкета в Mini App (единый путь для всех).
       if (data === 'verify_start' || data === 'verify_consent') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
           text:
-            '📋 <b>Шаг 1 из 3 — согласие на обработку данных</b>\n\n' +
-            'Нам нужны имя, телефон и предпочтения, чтобы собрать логистику и закупку. ' +
-            'Данные видит только костяк клуба, третьим лицам не передаём (законодательство РБ).',
-          reply_markup: kb([[{ text: '✅ Согласен, продолжить', callback_data: 'verify_pd' }]]),
+            '📋 <b>Заявка в клуб</b>\n\n' +
+            'Открой анкету — она откроется прямо здесь, в Telegram. Спросим имя, телефон и откуда ты о нас узнал, ' +
+            'плюс согласие на обработку данных (их видит только костяк клуба, третьим лицам не передаём — законодательство РБ).\n\n' +
+            'Костяк рассмотрит заявку и ответит сюда.',
+          reply_markup: kb([[appBtn('📋 Заполнить заявку', site, { apply: '1' })]]),
         });
         return res.status(200).json({ ok: true });
       }
@@ -1918,7 +1931,10 @@ export default async function handler(req: any, res: any) {
         await askTransport(ev);
       };
 
-      // Старт записи с карточки события.
+      // Старт записи с карточки события → ТОЛЬКО в Mini App.
+      // Свой диалог записи бот больше не ведёт: этапы (кодекс клуба, программа,
+      // согласие ПД, логистика, пол, питание, гости) есть в мини-приложении, и
+      // они обязательны для всех — иначе часть людей проходила короткий путь.
       if (data.startsWith('reg_')) {
         if (gateOn() && !(await isApproved(tgId))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала пройди верификацию — нажми /start' });
@@ -1930,18 +1946,14 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        // Явный первый шаг — согласие на обработку ПД (РБ), если ещё не давал.
-        const mem = await memberOf(tgId) as any;
-        const agreed = mem && mem.agreed_pd;
-        if (!agreed) {
-          await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML',
-            text: '📋 <b>Согласие на обработку персональных данных</b>\n\nДля участия нужно согласие на обработку твоих персональных данных (имя, контакт, предпочтения) организаторами — в соответствии с законодательством РБ. Данные используются только для организации события.',
-            reply_markup: kb([[{ text: '✅ Согласен, продолжить', callback_data: `pd_${ev.id}` }]]),
-          });
-          return res.status(200).json({ ok: true });
-        }
-        await askRules(ev);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text:
+            `📝 <b>Запись на «${esc(ev.title)}»</b>\n\n` +
+            'Открой анкету — она откроется прямо здесь, в Telegram. Пройдёшь кодекс клуба, программу события и заполнишь данные для логистики.\n\n' +
+            'Это 2–3 минуты, и все участники проходят одинаковые шаги.',
+          reply_markup: kb([[appBtn('📝 Заполнить анкету', site, { ev: String(ev.id) })]]),
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -5727,10 +5739,17 @@ export default async function handler(req: any, res: any) {
             // НЕ гоним заново через онбординг: просто пропускаем к событиям ниже.
             const alreadyIn = (meRef as any)?.is_core === true || (meRef as any)?.status === 'approved';
             if (!alreadyIn && !(meRef as any)?.phone) {
-              await setSession(msg.from.id, 'refonb_name', { evPayload: payload });
+              // Онбординг новичка — ТОЛЬКО в Mini App. Раньше бот вёл здесь свой
+              // короткий диалог (имя → телефон → пол), и пришедшие по ссылке
+              // проходили меньше этапов, чем те, кто открывал мини-приложение.
+              const evId = String(payload).startsWith('event_') ? String(payload).slice('event_'.length) : '';
               await tg('sendMessage', {
                 chat_id: chatId, parse_mode: 'HTML',
-                text: '🎉 <b>Добро пожаловать в клуб!</b>\n\nТы пришёл по приглашению участника — двери открыты. Давай коротко познакомимся (это займёт минуту) — как тебя зовут? Имя и фамилия.',
+                text:
+                  '🎉 <b>Добро пожаловать в клуб!</b>\n\n' +
+                  'Ты пришёл по приглашению участника — двери открыты. Осталось заполнить анкету: ' +
+                  'кодекс клуба, знакомство и данные для логистики. Это 2–3 минуты, и проходят это все одинаково.',
+                reply_markup: kb([[appBtn('🚀 Заполнить анкету', site, { ref: code, ...(evId ? { ev: evId } : {}) })]]),
               });
               return res.status(200).json({ ok: true });
             }
@@ -5779,10 +5798,9 @@ export default async function handler(req: any, res: any) {
                 'Сюда попадают по приглашению участника. Если тебе давали ссылку — открой её ещё раз, она впустит сразу.\n\n' +
                 'Ссылки нет? Подай заявку — костяк познакомится и решит.\n\n' +
                 '<b>Что будет дальше:</b>\n' +
-                '1️⃣ Согласие на обработку данных\n' +
-                '2️⃣ Как тебя зовут и телефон для связи\n' +
-                '3️⃣ Откуда ты о нас узнал\n' +
-                '4️⃣ Ответ костяка — придёт сюда',
+                '1️⃣ Анкета откроется здесь же, в Telegram (мини-приложение)\n' +
+                '2️⃣ Имя, телефон, откуда узнал + согласие на обработку данных\n' +
+                '3️⃣ Ответ костяка — придёт сюда',
               reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }]]),
             });
           }

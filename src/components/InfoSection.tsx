@@ -82,9 +82,11 @@ export default function InfoSection({
 
   return (
     <div id="info-section-container" className="block w-full">
-      <div 
-        id="featured-hero-card" 
-        className="w-full relative min-h-[500px] rounded-3xl overflow-hidden border border-white/10 flex flex-col justify-between p-5 sm:p-8 md:p-10 shadow-2xl bg-[#111]"
+      {/* На мобильном герой-карточка во всю ширину экрана (без рамок и боковых
+          отступов) — фото читается целиком. -mx-4 компенсирует px-4 у <main>. */}
+      <div
+        id="featured-hero-card"
+        className="relative min-h-[500px] -mx-4 w-[calc(100%+2rem)] sm:mx-0 sm:w-full rounded-none sm:rounded-3xl overflow-hidden border-y sm:border border-white/10 flex flex-col justify-between p-5 sm:p-8 md:p-10 shadow-2xl bg-[#111]"
       >
         {/* Background artwork */}
         <div className="absolute inset-0 z-0">

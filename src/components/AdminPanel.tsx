@@ -1984,7 +1984,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">
           {/* Список событий. На мобильном прячется, когда открыто конкретное событие. */}
-          <div className={`w-full md:w-80 shrink-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 md:max-h-none ${selectedEvent ? 'hidden md:block' : 'block'}`}>
+          {/* На мобильном колонка обязана быть flex-элементом с min-h-0, иначе
+              shrink-0 + overflow-hidden родителя обрезали список и он НЕ скроллился. */}
+          <div className={`w-full md:w-80 flex-1 md:flex-none md:shrink-0 min-h-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 md:max-h-none ${selectedEvent ? 'hidden md:block' : 'block'}`}>
             <div className="flex items-center justify-between mb-4">
               <span className="text-white/40 text-[10px] uppercase font-mono">Мероприятия: {events.length}</span>
               <div className="flex gap-1">
@@ -2094,8 +2096,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             );})}
           </div>
 
-          {/* Event Details Panel */}
-          <div className="flex-1 overflow-y-auto p-4 md:p-6 min-h-0">
+          {/* Event Details Panel. На мобильном без выбранного события панель-заглушку
+              скрываем — иначе она отбирала половину высоты у списка мероприятий. */}
+          <div className={`flex-1 overflow-y-auto p-4 md:p-6 min-h-0 ${selectedEvent ? 'block' : 'hidden md:block'}`}>
             {!selectedEvent ? (
               (() => {
                 const today = new Date().toISOString().slice(0, 10);

@@ -151,7 +151,7 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
   const daysInMonth = getDaysInMonth(selectedMonth);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" id="birthday-calendar-root">
+    <div className="fixed inset-0 z-50 flex items-center justify-center md:p-4" id="birthday-calendar-root">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -167,7 +167,7 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 30 }}
         transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-2xl shadow-2xl relative z-10 border border-white/10 flex flex-col max-h-[90vh] text-white"
+        className="bg-[#121212] md:rounded-3xl w-full max-w-2xl shadow-2xl relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white"
       >
         {/* Close Button */}
         <button
@@ -177,7 +177,7 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
           <X className="w-5 h-5" />
         </button>
 
-        <div className="overflow-y-auto w-full flex-grow scrollbar-none p-6 space-y-6">
+        <div className="overflow-y-auto w-full flex-grow scrollbar-none p-4 sm:p-6 space-y-6">
           {/* Header */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
@@ -355,7 +355,7 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
         </div>
 
         {/* Footer */}
-        <div className="p-6 border-t border-white/10 bg-[#161616]">
+        <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6 border-t border-white/10 bg-[#161616]">
           <button
             type="button"
             onClick={onClose}

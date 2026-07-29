@@ -178,7 +178,7 @@ export default function EventDetailModal({
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" id="event-detail-modal-root">
+    <div className="fixed inset-0 z-50 flex items-center justify-center md:p-4" id="event-detail-modal-root">
       {/* Backdrop */}
       <motion.div
         initial={{ opacity: 0 }}
@@ -195,7 +195,7 @@ export default function EventDetailModal({
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 30 }}
         transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden relative z-10 border border-white/10 flex flex-col max-h-[90vh] text-white"
+        className="bg-[#121212] md:rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white"
         id="detail-card-panel"
       >
         {/* Floating Close Button */}
@@ -211,17 +211,17 @@ export default function EventDetailModal({
         {/* Scrollable Container */}
         <div className="overflow-y-auto w-full flex-grow scrollbar-none" id="detail-scroll-container">
           
-          {/* Cover Hero Banner */}
-          <div className="relative h-64 sm:h-80 w-full bg-black">
-            <img 
-              src={event.image} 
+          {/* Cover Hero Banner — во всю ширину экрана, без рамок (пожелание владельца) */}
+          <div className="relative h-[42vh] min-h-[15rem] sm:h-80 w-full bg-black">
+            <img
+              src={event.image}
               alt={event.title}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-cover brightness-[0.4] select-none pointer-events-none"
+              className="w-full h-full object-cover brightness-[0.55] select-none pointer-events-none"
             />
             {/* Ambient gradients */}
             <div className="absolute inset-0 bg-gradient-to-t from-[#121212] via-[#121212]/30 to-black/50" />
-            <div className="absolute bottom-6 left-6 right-6 space-y-2">
+            <div className="absolute bottom-5 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 space-y-2">
               <span className={`
                 px-3 py-1 rounded-full text-[10px] font-bold font-mono uppercase tracking-widest inline-flex items-center gap-1.5 bg-black/75 border
                 ${event.type === 'male' ? 'border-indigo-500/30 text-indigo-300' :
@@ -257,8 +257,8 @@ export default function EventDetailModal({
             </div>
           </div>
 
-          {/* Grid of Essential Parameters */}
-          <div className="p-6 space-y-6">
+          {/* Grid of Essential Parameters. На мобильном узкие отступы — больше места контенту. */}
+          <div className="p-4 sm:p-6 space-y-6">
             
             {/* Time / Price / Location Info Blocks */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
@@ -551,7 +551,7 @@ export default function EventDetailModal({
         </div>
 
         {/* Footer Registration Action Area */}
-        <div className="p-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
+        <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
           {phase === 'past' ? (
             /* Past event - feedback and share */
             <div className="flex flex-col sm:flex-row gap-2.5 items-stretch w-full">
