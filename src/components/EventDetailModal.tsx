@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2
+  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
@@ -237,6 +237,13 @@ export default function EventDetailModal({
                   event.type === 'mixed' ? 'Смешанный Круг' :
                   event.type === 'intellectual' ? 'Интеллектуальный Клуб' : 'Активный Выезд'}
               </span>
+
+              {event.format && event.format !== 'offline' && (
+                <span className="px-3 py-1 rounded-full text-[10px] font-bold font-mono uppercase tracking-widest inline-flex items-center gap-1.5 bg-black/75 border border-sky-500/30 text-sky-300 ml-2">
+                  {event.format === 'online' ? <Monitor className="w-3 h-3" /> : <Wifi className="w-3 h-3" />}
+                  {event.format === 'online' ? 'Онлайн' : 'Гибрид'}
+                </span>
+              )}
 
               {isLocked && (
                 <span className="px-3 py-1 rounded-full text-[10px] font-bold font-mono uppercase tracking-widest inline-flex items-center gap-1.5 bg-black/75 border border-brand/40 text-brand ml-2">
