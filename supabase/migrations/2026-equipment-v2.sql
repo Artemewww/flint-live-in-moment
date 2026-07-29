@@ -1,5 +1,6 @@
 -- Снаряжение v2: стоимость, фото, состояние, контроль
 -- Каждый предмет имеет владельца, стоимость, фото, комплектность
+-- ВНИМАНИЕ: ДО этой миграции должна быть выполнена 2026-equipment-transfers.sql
 
 -- Расширяем member_equipment: добавляем поля стоимости, фото, состояния
 alter table member_equipment add column if not exists price numeric(10,2) default 0; -- рыночная стоимость
@@ -19,16 +20,32 @@ alter table club_equipment add column if not exists access_level text default 'a
 alter table club_equipment add column if not exists investors jsonb default '[]';
 alter table club_equipment add column if not exists description text;
 
--- Расширяем equipment_transfers: фото ДО, состояние ДО, подпись
-alter table equipment_transfers add column if not exists photo_before text; -- фото перед передачей
-alter table equipment_transfers add column if not exists condition_before text; -- состояние перед передачей
-alter table equipment_transfers add column if not exists completeness_before jsonb default '[]'; -- комплектность перед передачей
-alter table equipment_transfers add column if not exists photo_after text; -- фото после возврата
-alter table equipment_transfers add column if not exists condition_after text; -- состояние после возврата
-alter table equipment_transfers add column if not exists completeness_after jsonb default '[]';
-alter table equipment_transfers add column if not exists compensation_amount numeric(10,2) default 0; -- сумма компенсации при утере
-alter table equipment_transfers add column if not exists compensation_paid boolean default false;
-alter table equipment_transfers add column if not exists notes text; -- примечания к передаче
+-- Сначала создаём equipment_transfers если ещё не существует
+create table if not exists equipment_transfers (
+  id bigserial primary key,
+  equipment_id bigint not null,
+  from_telegram_id bigint not null,
+  to_telegram_id bigint not null,
+  item_name text not null,
+  quantity int default 1,
+  status text default 'pending',
+  photo_before text,
+  condition_before text default 'perfect',
+  completeness_before jsonb default '[]',
+  photo_after text,
+  condition_after text,
+  completeness_after jsonb default '[]',
+  compensation_amount numeric(10,2) default 0,
+  compensation_paid boolean default false,
+  notes text,
+  created_at timestamptz default now(),
+  confirmed_at timestamptz,
+  declined_at timestamptz
+);
+
+create index if not exists idx_eq_transfers_from on equipment_transfers(from_telegram_id);
+create index if not exists idx_eq_transfers_to on equipment_transfers(to_telegram_id);
+create index if not exists idx_eq_transfers_status on equipment_transfers(status);
 
 -- История перемещений предмета (аудит)
 create table if not exists equipment_audit (
