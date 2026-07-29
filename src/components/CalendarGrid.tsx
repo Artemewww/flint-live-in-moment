@@ -143,18 +143,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
   /** Короткое название события для тултипа. */
   const getShortEventLabel = (evt: CommunityEvent): string => {
-    const id = evt.id;
-    if (id === 'banya-flint-weekly') return 'Баня';
-    if (id === 'kettlebell-walk-weekly') return 'Гири';
-    if (id === 'existential-cinema') return 'Кино';
-    if (id === 'reading-smysly') return 'Книга';
-    if (id === 'forest-hiking-isloch') return 'Поход';
-    if (id === 'orator-art-practice') return 'Спич';
-    if (id === 'poker-no-smoke') return 'Покер';
-    if (id === 'isloch-challenges-male') return 'Лагерь';
-    if (id === 'braslav-family-zen') return 'Слет';
-    if (id === 'conscious-fasting' || id.startsWith('conscious-fasting')) return 'Голод';
-    const short = evt.title || '';
+    const short = evt.title || evt.id || '';
     if (short.length <= 18) return short;
     return short.slice(0, 16) + '…';
   };

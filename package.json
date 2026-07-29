@@ -3,14 +3,14 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-"scripts": {
-  "dev": "vite --port=3000 --host=0.0.0.0",
-  "build": "vite build",
-  "preview": "vite preview",
-  "clean": "rm -rf dist server.js",
-  "lint": "tsc --noEmit",
-  "start:bot": "node bot.legacy/src/index.js"
-},
+  "scripts": {
+    "dev": "vite --port=3000 --host=0.0.0.0",
+    "build": "vite build",
+    "preview": "vite preview",
+    "clean": "rm -rf dist server.js",
+    "lint": "tsc --noEmit",
+    "start:bot": "node bot.legacy/src/index.js"
+  },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.110.1",
@@ -21,6 +21,7 @@
     "google-spreadsheet": "^5.3.0",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
+    "pg": "^8.22.0",
     "react": "^19.0.1",
     "react-dom": "^19.0.1",
     "vite": "^6.2.3"
@@ -31,6 +32,7 @@
     "@vercel/node": "^5.8.22",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "supabase": "^2.110.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2"
