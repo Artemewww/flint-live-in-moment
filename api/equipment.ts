@@ -152,7 +152,76 @@ export default async function handler(req: any, res: any) {
       return res.json(data || []);
     }
 
-    return res.status(400).json({ error: 'Unknown action. Use: search, search-club, add, transfer, confirm-transfer, pending-transfers' });
+    // ─── Питание ────────────────────────────────────────────────────────────
+    // Раньше это был отдельный api/food.ts, но на Vercel Hobby лимит — 12
+    // serverless-функций, и он был исчерпан (деплой падал). Роутер тот же:
+    // авторизация и разбор ?action= общие, поэтому питание живёт здесь.
+
+    // Категории с продуктами
+    if (action === 'food-categories') {
+      const { data: categories, error: catError } = await supabase
+        .from('food_categories')
+        .select('*')
+        .order('sort_order', { ascending: true });
+      if (catError) return res.status(500).json({ error: catError.message });
+
+      const { data: products, error: prodError } = await supabase
+        .from('food_products')
+        .select('*')
+        .order('sort_order', { ascending: true });
+      if (prodError) return res.status(500).json({ error: prodError.message });
+
+      const result = (categories || []).map((cat: any) => ({
+        ...cat,
+        products: (products || []).filter((p: any) => p.category_slug === cat.slug),
+      }));
+      return res.json(result);
+    }
+
+    // Выборы участника
+    if (action === 'food-selections') {
+      const { event_id, telegram_id } = req.query || {};
+      if (!event_id || !telegram_id) return res.status(400).json({ error: 'event_id and telegram_id required' });
+
+      const { data, error } = await supabase
+        .from('food_selections')
+        .select('product_id, quantity, custom_note')
+        .eq('event_id', event_id)
+        .eq('telegram_id', Number(telegram_id));
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json(data || []);
+    }
+
+    // Переключить выбор продукта
+    if (action === 'food-toggle' && req.method === 'POST') {
+      const { event_id, telegram_id, product_id, selected } = req.body || {};
+      if (!event_id || !telegram_id || !product_id) {
+        return res.status(400).json({ error: 'event_id, telegram_id, product_id required' });
+      }
+
+      if (selected) {
+        const { error } = await supabase.from('food_selections').upsert({
+          event_id,
+          telegram_id: Number(telegram_id),
+          product_id: Number(product_id),
+          quantity: 1,
+        }, { onConflict: 'event_id,telegram_id,product_id' });
+        if (error) return res.status(500).json({ error: error.message });
+      } else {
+        const { error } = await supabase.from('food_selections')
+          .delete()
+          .eq('event_id', event_id)
+          .eq('telegram_id', Number(telegram_id))
+          .eq('product_id', Number(product_id));
+        if (error) return res.status(500).json({ error: error.message });
+      }
+      return res.json({ ok: true });
+    }
+
+    return res.status(400).json({
+      error: 'Unknown action. Use: search, search-club, add, transfer, confirm-transfer, '
+        + 'pending-transfers, food-categories, food-selections, food-toggle',
+    });
   } catch (err: any) {
     console.error('Equipment API error:', err);
     return res.status(500).json({ error: err.message });

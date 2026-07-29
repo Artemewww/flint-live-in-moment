@@ -48,7 +48,7 @@ Vercel → проект **flint-live-in-moment** → **Settings → Environment 
 После Redeploy откройте в браузере (подставив свой секрет):
 
 ```
-https://flint-live-in-moment.vercel.app/api/telegram/setup?key=<TELEGRAM_WEBHOOK_SECRET>
+https://flint-live-in-moment.vercel.app/api/telegram/webhook?setup=1&key=<TELEGRAM_WEBHOOK_SECRET>
 ```
 
 Этот вызов автоматически:

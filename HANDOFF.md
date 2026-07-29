@@ -94,7 +94,7 @@ cd bot && npm start
 VPS с polling-ботом (папка `bot/`, `scripts/deploy.sh`) — легаси-путь: пока установлен
 webhook, polling через getUpdates заблокирован Telegram (ошибка 409). Если процесс
 на VPS ещё крутится, его можно остановить (`pm2 stop flint-bot`), чтобы не жёг ресурсы.
-Вернуться на polling: удалить webhook (`api/telegram/setup.ts` / deleteWebhook) и
+Вернуться на polling: удалить webhook (`api/telegram/webhook.ts?setup=1` / deleteWebhook) и
 запустить бота на VPS через `scripts/deploy.sh`.
 
 ### 2. Почистить битых пользователей в БД — УЖЕ СДЕЛАНО
@@ -149,7 +149,7 @@ clean();
 4. `api/admin/registrations.ts` — заявки, участники, баллы
 5. `api/admin/broadcast.ts` — рассылка в Telegram
 6. `api/telegram/webhook.ts` — webhook для бота
-7. `api/telegram/setup.ts` — установка webhook
+7. `api/telegram/webhook.ts?setup=1` — установка webhook (был отдельный setup.ts; убран из-за лимита 12 функций Hobby)
 8. `api/ai.ts` — ИИ-генерация (Gemini)
 9. `api/profile.ts` — **универсальный** (питание, предпочтения, роли, чаты, погода, расписание, метрики)
 10. `api/cron/reminders.ts` — автоматические напоминания

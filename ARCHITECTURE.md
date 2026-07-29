@@ -96,7 +96,7 @@
 4. `api/admin/registrations.ts` — заявки, участники, ручное начисление баллов
 5. `api/admin/broadcast.ts` — рассылка в Telegram
 6. `api/telegram/webhook.ts` — webhook для бота
-7. `api/telegram/setup.ts` — установка webhook
+7. `api/telegram/webhook.ts?setup=1` — установка webhook (был отдельный setup.ts; убран из-за лимита 12 функций Hobby)
 8. `api/ai.ts` — ИИ-генерация (Gemini)
 9. `api/profile.ts` — **универсальный** (питание, предпочтения, роли, чаты, погода, расписание, метрики, интеграции)
 10. `api/cron/reminders.ts` — автоматические напоминания

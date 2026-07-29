@@ -39,13 +39,13 @@ export default function FoodSelectionPanel({ eventId, telegramId }: { eventId?: 
     setLoading(true);
     try {
       // Load categories with products
-      const catRes = await fetch('/api/food?action=categories');
+      const catRes = await fetch('/api/equipment?action=food-categories');
       const catData = await catRes.json();
       if (Array.isArray(catData)) setCategories(catData);
 
       // Load existing selections
       if (eventId && telegramId) {
-        const selRes = await fetch(`/api/food?action=selections&event_id=${eventId}&telegram_id=${telegramId}`);
+        const selRes = await fetch(`/api/equipment?action=food-selections&event_id=${eventId}&telegram_id=${telegramId}`);
         const selData = await selRes.json();
         if (Array.isArray(selData)) setSelections(selData);
       }
@@ -70,7 +70,7 @@ export default function FoodSelectionPanel({ eventId, telegramId }: { eventId?: 
 
     // Save to server
     if (eventId && telegramId) {
-      await fetch('/api/food?action=toggle', {
+      await fetch('/api/equipment?action=food-toggle', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

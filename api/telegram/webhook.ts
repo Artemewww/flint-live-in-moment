@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
-import { handleGroupMessage } from './group-handler';
-import { parseEquipment, parseCoordinates, parseTime } from './ai-helpers';
+import { handleGroupMessage } from '../_lib/group-handler';
+import { parseEquipment, parseCoordinates, parseTime } from '../_lib/ai-helpers';
 
 /**
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
@@ -1383,8 +1383,49 @@ function daysKb(evId: string, days: { date: string; label: string }[], selected:
   return { inline_keyboard: rows };
 }
 
+/**
+ * Одноразовая настройка бота. Открыть в браузере:
+ *   https://<домен>/api/telegram/webhook?setup=1&key=<ADMIN_TOKEN или TELEGRAM_WEBHOOK_SECRET>
+ * Регистрирует вебхук на этот же путь (С СЕКРЕТОМ) + кнопку Mini App.
+ *
+ * Раньше это был отдельный api/telegram/setup.ts, но на Vercel Hobby лимит —
+ * 12 serverless-функций, и он был исчерпан (деплой падал 14 коммитов подряд).
+ * ⚠️ Секрет берём из того же источника, что проверяет вебхук (env → БД), иначе
+ * повторный запуск снял бы секрет и бот начал бы отвергать ВСЕ апдейты (401).
+ */
+async function runSetup(req: any, res: any) {
+  const key = String(req.query?.key || '');
+  const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
+  // Пустой key не должен совпасть с незаданным env — иначе эндпоинт открыт всем.
+  const okAdmin = !!ADMIN_TOKEN && key === ADMIN_TOKEN;
+  const okHook = !!WEBHOOK_SECRET && key === WEBHOOK_SECRET;
+  if (!okAdmin && !okHook) {
+    return res.status(401).json({ ok: false, error: 'Неверный ?key= (укажите ADMIN_TOKEN или TELEGRAM_WEBHOOK_SECRET)' });
+  }
+  if (!BOT_TOKEN) return res.status(500).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан в env' });
+
+  const site = siteUrl(req);
+  const webhookUrl = `${site}/api/telegram/webhook`;
+  const secret = WEBHOOK_SECRET || (await webhookSecret());
+
+  const setWebhook = await tg('setWebhook', {
+    url: webhookUrl,
+    ...(secret ? { secret_token: secret } : {}),
+    allowed_updates: ['message', 'callback_query'],
+    // НЕ дропаем ожидающие апдейты на случайном повторном запуске.
+    drop_pending_updates: false,
+  });
+  const menu = await tg('setChatMenuButton', {
+    menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } },
+  });
+  const me = await tg('getMe', {});
+
+  return res.status(200).json({ ok: true, webhookUrl, secretRegistered: !!secret, setWebhook, menu, bot: me?.result });
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
+    if (req.query?.setup) return runSetup(req, res);
     return res.status(200).json({ ok: true, info: 'Flint bot webhook (@campsflint_bot)' });
   }
   // FAIL-CLOSED: принимаем только апдейты с верным secret-token. Раньше при
@@ -5431,7 +5472,7 @@ export default async function handler(req: any, res: any) {
           // Сначала пробуем ИИ — он лучше всего разбирает свободный текст
           let items: Array<{title: string; amount: number}> = [];
           try {
-            const { parseExpenseAI } = await import('./ai-helpers');
+            const { parseExpenseAI } = await import('../_lib/ai-helpers');
             const aiItems = await parseExpenseAI(raw);
             if (aiItems && aiItems.length > 0) {
               items = aiItems;
