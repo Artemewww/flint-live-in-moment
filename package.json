@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "start:bot": "node bot.legacy/src/index.js"
+    "start:bot": "node bot.legacy/src/index.js",
+    "test": "jest"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -36,5 +37,12 @@
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/__tests__/**/*.test.ts"
+    ]
   }
 }
