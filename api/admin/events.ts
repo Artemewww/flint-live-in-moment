@@ -284,8 +284,8 @@ export default async function handler(req: any, res: any) {
   // Вход/выход админки. Пароль сверяется на сервере и обменивается на
   // подписанную httpOnly-куку — в браузер секрет не попадает.
   if (req.method === 'POST' && req.query?.action === 'login') {
-    // Анти-брутфорс: не больше 8 попыток за 15 минут с одного IP.
-    const rl = await rateLimit('login', clientIp(req), 8, 15 * 60 * 1000);
+    // Анти-брутфорс: не больше 3 попыток в час с одного IP.
+    const rl = await rateLimit('login', clientIp(req), 3, 60 * 60 * 1000);
     if (!rl.allowed) {
       res.setHeader('Retry-After', String(rl.retryAfter));
       return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${Math.ceil(rl.retryAfter / 60)} мин.` });

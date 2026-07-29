@@ -1,5 +1,12 @@
 require('dotenv').config();
 const { Bot } = require('grammy');
+
+// Функция для отправки сообщений в группу
+function sendMessageToGroup(chatId, message) {
+  bot.sendMessage(chatId, message)
+    .then(() => console.log(`Сообщение успешно отправлено в группу ${chatId}`))
+    .catch(err => console.error(`Ошибка при отправке сообщения в группу ${chatId}:`, err));
+}
 const { handleStart } = require('./handlers/start');
 const { handleEvents } = require('./handlers/events');
 const { handleRegistration } = require('./handlers/registration');
@@ -13,6 +20,78 @@ const { setupNotifications } = require('./notifications');
 
 // Инициализация бота
 const bot = new Bot(process.env.BOT_TOKEN);
+
+// Функция для расчета взаиморасчетов и отправки сообщений в группу
+async function calculateAndSendMessage(eventId, groupId) {
+  // Пример данных для расчета взаиморасчетов
+  const participants = [
+    { name: 'Лиза', paid: 74, debt: 34.25 },
+    { name: 'Александр', paid: 63, refund: 28.75 },
+    { name: 'Артём', debt: 34.25 },
+    { name: 'Андрей', debt: 34.25 }
+  ];
+
+  const category1 = {
+    name: 'Общая еда',
+    total: 137,
+    participants: participants.slice(0, 4)
+  };
+
+  const category2 = {
+    name: 'Оплата Алексею',
+    total: 75,
+    participants: [
+      { name: 'Лиза', debt: 25 },
+      { name: 'Андрей', debt: 25 },
+      { name: 'Артём', refund: 50 }
+    ]
+  };
+
+  const summary = `
+1. Категория «${category1.name}» (${category1.total} BYN):
+   - Лиза: заплатила ${category1.participants[0].paid} BYN, должна вернуть ${category1.participants[0].debt.toFixed(2)} BYN
+   - Александр: заплатил ${category1.participants[1].paid} BYN, должен получить ${category1.participants[1].refund.toFixed(2)} BYN
+   - Артём: должен заплатить ${category1.participants[2].debt.toFixed(2)} BYN
+   - Андрей: должен заплатить ${category1.participants[3].debt.toFixed(2)} BYN
+
+2. Категория «${category2.name}» (${category2.total} BYN):
+   - Лиза: должна Артёму ${category2.participants[0].debt.toFixed(2)} BYN
+   - Андрей: должен Артёму ${category2.participants[1].debt.toFixed(2)} BYN
+   - Артём: должен получить ${category2.participants[2].refund.toFixed(2)} BYN (от Лизы и Андрея)
+
+3. Итоговый взаиморасчет:
+   - Лиза: должна получить ${category1.participants[0].refund.toFixed(2)} BYN (общая еда)
+   - Лиза: должна Артёму ${category2.participants[0].debt.toFixed(2)} BYN
+   - Итого: Лиза должна получить на руки ${(category1.participants[0].refund - category2.participants[0].debt).toFixed(2)} BYN
+
+   - Артём: должен заплатить ${category1.participants[2].debt.toFixed(2)} BYN (общая еда)
+   - Артём: должен получить ${category2.participants[2].refund.toFixed(2)} BYN (от Лизы и Андрея)
+   - Итого: Артём должен получить на руки ${(category2.participants[2].refund - category1.participants[2].debt).toFixed(2)} BYN
+
+   - Александр: должен получить ${category1.participants[1].refund.toFixed(2)} BYN (общая еда)
+   - Итог: Александр должен получить на руки ${category1.participants[1].refund.toFixed(2)} BYN
+
+   - Андрей: должен заплатить ${category1.participants[3].debt.toFixed(2)} BYN (общая еда)
+   - Андрей: должен Артёму ${category2.participants[1].debt.toFixed(2)} BYN
+   - Итого: Андрей должен отдать ${(category1.participants[3].debt + category2.participants[1].debt).toFixed(2)} BYN
+
+💡 Как перевести деньги проще всего:
+Единственный, кто остался в минусе — это Андрей. Сумма его долга (${(category1.participants[3].debt + category2.participants[1].debt).toFixed(2)} BYN) ровно закрывает все выплаты:
+Андрей переводит Лизе: ${(category1.participants[0].refund - category2.participants[0].debt).toFixed(2)} BYN
+Андрей переводит Артёму: ${(category2.participants[2].refund - category1.participants[2].debt).toFixed(2)} BYN
+Андрей переводит Александру: ${category1.participants[1].refund.toFixed(2)} BYN`;
+
+  // Отправляем сообщение в группу
+  try {
+    await tg('sendMessage', {
+      chat_id: groupId,
+      parse_mode: 'HTML',
+      text: summary
+    });
+  } catch (err) {
+    console.error('Ошибка при отправке сообщения в группу:', err);
+  }
+}
 
 // Middleware для логирования
 bot.use(async (ctx, next) => {

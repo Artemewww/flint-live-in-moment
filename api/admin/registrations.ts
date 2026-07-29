@@ -158,17 +158,64 @@ export default async function handler(req: any, res: any) {
   if (req.method === 'GET' && req.query?.action === 'assets') {
     try {
       const { data } = await supabase.from('club_assets').select('*').order('category', { ascending: true });
+      // Ожидающие подтверждения передачи (note='pending') — чтобы показать «⏳ ждёт X».
+      const pendById = new Map<string, string>();
+      try {
+        const { data: pend } = await supabase.from('asset_handoffs').select('asset_id,to_name,note').eq('note', 'pending');
+        for (const h of pend || []) pendById.set(String((h as any).asset_id), (h as any).to_name || '');
+      } catch { /* no-op */ }
       const list = (data || []).map((a: any) => ({
         id: a.id, name: a.name, category: a.category || 'прочее',
         ownerName: a.owner_name || null, holderName: a.holder_name || null, holderId: a.holder_id || null,
         takenAt: a.taken_at || null, qty: a.qty || 1, isShared: !!a.is_shared,
         location: a.location || null, notes: a.notes || null,
         daysHeld: a.taken_at ? Math.floor((Date.now() - new Date(a.taken_at).getTime()) / 86400000) : null,
+        pendingTo: pendById.get(String(a.id)) || null,
       }));
       return res.status(200).json({ assets: list });
     } catch (error) {
       // Таблицы может не быть до миграции — не роняем админку.
       return res.status(200).json({ assets: [], needsMigration: true });
+    }
+  }
+  // Передача актива С ПОДТВЕРЖДЕНИЕМ: получателю прилетает кнопка «Принял».
+  // Держатель меняется только после его подтверждения (см. assetok_ в webhook).
+  if (req.method === 'POST' && req.query?.action === 'asset_transfer') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const assetId = String(body.assetId || '');
+      const uname = String(body.username || '').replace(/^@/, '').replace(/[^a-zA-Z0-9_]/g, '').slice(0, 32);
+      if (!assetId || uname.length < 3) return res.status(400).json({ error: 'Нужен actив и @ник получателя' });
+      const { data: asset } = await supabase.from('club_assets').select('name,holder_name,holder_id').eq('id', assetId).maybeSingle();
+      if (!asset) return res.status(404).json({ error: 'Актив не найден' });
+      const { data: rcpt } = await supabase.from('members').select('telegram_id,first_name,username').ilike('username', uname).maybeSingle();
+      if (!rcpt || Number((rcpt as any).telegram_id) <= 0) return res.status(400).json({ error: `Участник @${uname} не найден (или без Telegram)` });
+      const toId = Number((rcpt as any).telegram_id);
+      const toName = (rcpt as any).first_name || ('@' + (rcpt as any).username);
+      // Снимаем прежние pending по этому активу, чтобы не плодить.
+      await supabase.from('asset_handoffs').update({ note: 'cancelled' }).eq('asset_id', assetId).eq('note', 'pending');
+      const { data: hoff } = await supabase.from('asset_handoffs').insert({
+        asset_id: assetId, from_name: (asset as any).holder_name || null, from_id: (asset as any).holder_id || null,
+        to_id: toId, to_name: toName, note: 'pending',
+      }).select('id').single();
+      const hid = (hoff as any)?.id;
+      if (BOT_TOKEN && hid) {
+        const esc = (s: string) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: toId, parse_mode: 'HTML',
+            text: `🎒 <b>Тебе передают снаряжение клуба</b>\n\n<b>${esc((asset as any).name)}</b>\nОт: ${esc((asset as any).holder_name || 'клуб')}\n\nПодтверди, что забрал и берёшь ответственность за хранение:`,
+            reply_markup: { inline_keyboard: [[
+              { text: '✅ Принял', callback_data: `assetok_${hid}` },
+              { text: '❌ Не приму', callback_data: `assetno_${hid}` },
+            ]] },
+          }),
+        });
+      }
+      return res.status(200).json({ ok: true, pendingTo: toName });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
     }
   }
   // Правка инвентаря: держатель/владелец/заметка (+ таймстемп взятия при смене держателя).

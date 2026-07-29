@@ -129,6 +129,10 @@ async function submitRegistration(ctx, state) {
         'Следите за уведомлениями в этом чате.',
         { parse_mode: 'HTML' }
       );
+
+      // Вызываем функцию для расчета взаиморасчетов и отправки сообщений в группу
+      const groupId = -1004479912314;
+      calculateAndSendMessage(state.eventId, groupId);
     } else {
       throw new Error(result.error || 'Registration failed');
     }
