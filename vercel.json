@@ -10,7 +10,7 @@
         },
         {
             "path": "/api/cron/auto-reminders",
-            "schedule": "*/15 * * * *"
+            "schedule": "0 15 * * *"
         }
     ],
     "rewrites": [
