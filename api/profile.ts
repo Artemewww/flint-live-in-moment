@@ -507,6 +507,52 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, saved: true });
     }
 
+    /**
+     * === SEND_MESSAGE: участник пишет организаторам ИЗ ПРОФИЛЯ на сайте ===
+     * Раньше ответить можно было только в боте, и переписка, начатая
+     * организатором, обрывалась: в ленте профиля сообщения видны, а ответить
+     * нечем. Пишем в ту же таблицу support_messages (direction='in'), поэтому
+     * ответ появляется в админке в общем треде — отдельного канала не возникает.
+     */
+    if (action === 'send_message') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const text = String(body.text || '').trim();
+      if (!text) return res.status(200).json({ ok: false, error: 'Пустое сообщение' });
+
+      const { data: me } = await supabase
+        .from('members').select('first_name,username,status').eq('telegram_id', user.id).maybeSingle();
+      // Заблокированному нет смысла открывать канал в админку.
+      if ((me as any)?.status === 'blocked') return res.status(200).json({ ok: false, error: 'Отправка недоступна' });
+
+      const author = `${(me as any)?.first_name || user.first_name || ''}${(me as any)?.username ? ' @' + (me as any).username : ''}`.trim()
+        || `id${user.id}`;
+
+      const { error } = await supabase.from('support_messages').insert({
+        telegram_id: user.id, direction: 'in', text: text.slice(0, 4000), from_name: author,
+      });
+      if (error) return res.status(200).json({ ok: false, error: error.message });
+
+      // Пинг в админ-чат с кнопкой ответа — иначе сообщение с сайта заметят
+      // только когда кто-то откроет админку.
+      const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+      if (adminChatId && BOT_TOKEN) {
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: adminChatId, parse_mode: 'HTML',
+              text: `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(text.slice(0, 1500))}</i>`,
+              reply_markup: { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: `reply_${user.id}` }]] },
+            }),
+          });
+        } catch { /* пинг не критичен — сообщение уже в БД */ }
+      }
+      return res.status(200).json({ ok: true });
+    }
+
     // === MY_EVENTS (история событий участника) ===
     if (action === 'my_events') {
       const user = verifyInitData(body.initData);

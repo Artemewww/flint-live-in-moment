@@ -147,6 +147,20 @@ export default function App() {
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [registeringEvent, setRegisteringEvent] = useState<CommunityEvent | null>(null);
   const [showMyRegistrationsModal, setShowMyRegistrationsModal] = useState<boolean>(false);
+  /**
+   * «Мои участия» — только по НЕ прошедшим событиям. Прошедшие висели там с
+   * плашкой «Активен» и предложением удалить регистрацию, хотя человек уже
+   * съездил. История прошедших живёт в профиле (вкладка «События») и в архиве
+   * афиши. `registeredEventIds` при этом НЕ фильтруем: факт записи на прошедшее
+   * событие нужен для проверок «уже записан».
+   */
+  const activeRegistrations = React.useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    return userRegistrations.filter((reg) => {
+      const ev = events.find((e) => e.id === reg.eventId);
+      return !!ev && (ev.dateEnd || ev.date) >= today;
+    });
+  }, [userRegistrations, events]);
   const [showManifestoModal, setShowManifestoModal] = useState<boolean>(false);
   const [showPhilosophyModal, setShowPhilosophyModal] = useState<boolean>(false);
   const [activeDetailEvent, setActiveDetailEvent] = useState<CommunityEvent | null>(null);
@@ -676,7 +690,7 @@ export default function App() {
             </button>
 
             {/* Persistent registrations manager */}
-            {registeredEventIds.length > 0 && (
+            {activeRegistrations.length > 0 && (
               <button
                 onClick={() => setShowMyRegistrationsModal(true)}
                 className="bg-[#151515] hover:bg-[#1C1C1C] border border-white/10 text-white px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer relative group h-10"
@@ -685,7 +699,7 @@ export default function App() {
                 <UserCheck className="w-4 h-4 text-brand" />
                 <span>Мои Участия</span>
                 <span className="bg-brand text-black font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center">
-                  {registeredEventIds.length}
+                  {activeRegistrations.length}
                 </span>
                 
                 <span className="absolute -top-1 -right-1 flex h-2 w-2">
@@ -755,10 +769,10 @@ export default function App() {
                   className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
                 >
                   <Trophy className="w-4 h-4 text-brand" />
-                  Профиль{registeredEventIds.length > 0 ? ` (${registeredEventIds.length})` : ''}
+                  Профиль{activeRegistrations.length > 0 ? ` (${activeRegistrations.length})` : ''}
                 </button>
 
-                {registeredEventIds.length > 0 && (
+                {activeRegistrations.length > 0 && (
                   <button
                     onClick={() => { setShowMyRegistrationsModal(true); setMobileMenuOpen(false); }}
                     className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-[#151515] hover:bg-white/10 cursor-pointer flex items-center gap-3 font-mono"
@@ -766,7 +780,7 @@ export default function App() {
                     <UserCheck className="w-4 h-4 text-brand" />
                     Мои Участия
                     <span className="bg-brand text-black font-black text-[10px] w-5 h-5 rounded-full flex items-center justify-center ml-auto">
-                      {registeredEventIds.length}
+                      {activeRegistrations.length}
                     </span>
                   </button>
                 )}
@@ -1000,7 +1014,12 @@ export default function App() {
             </div>
 
             <div className="space-y-3 max-h-60 overflow-y-auto pr-1" id="saved-regs-details">
-              {userRegistrations.map((reg, idx) => {
+              {activeRegistrations.length === 0 && (
+                <p className="text-[11px] text-white/40 font-mono text-center py-6">
+                  Актуальных участий нет. Прошедшие смотри в профиле → «События».
+                </p>
+              )}
+              {activeRegistrations.map((reg, idx) => {
                 const targetEvent = events.find(e => e.id === reg.eventId);
                 if (!targetEvent) return null;
                 return (

@@ -24,12 +24,15 @@ export default function InfoSection({
   // Находим ближайшее предстоящее событие (первое не прошедшее)
   // Сначала ищем открытые, потом locked (скоро открытие), потом все подряд
   const today = getToday();
+  // Не прошедшее = ещё не закончился последний день (dateEnd), иначе идущий
+  // многодневный выезд пропадал с главной на своём же втором дне.
+  const notPast = (e: CommunityEvent) => (e.dateEnd || e.date) >= today;
   const featuredEvent = events && events.length > 0
     ? (events
-        .filter(e => e.date >= today && e.status === 'open')
+        .filter(e => notPast(e) && e.status === 'open')
         .sort((a, b) => a.date.localeCompare(b.date))[0]
       || events
-        .filter(e => e.date >= today)
+        .filter(notPast)
         .sort((a, b) => a.date.localeCompare(b.date))[0]
       || events[0])
     : null;

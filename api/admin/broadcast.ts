@@ -83,12 +83,34 @@ export default async function handler(req: any, res: any) {
     // Событие — для дефолтного текста.
     const { data: event } = await supabase.from('events').select('*').eq('id', eventId).single();
 
-    // audience='all' — всем одобрённым членам клуба (анонс нового события);
-    // иначе (по умолчанию) — только записанным на это событие.
+    /**
+     * audience='all'    — всем одобрённым членам клуба (анонс нового события);
+     * audience='picked' — ТОЛЬКО выбранным в админке (персональное приглашение
+     *                     на новое событие: закрытый состав, мужское, по интересам);
+     * по умолчанию      — записанным на это событие.
+     */
     const toAll = body.audience === 'all';
+    const toPicked = body.audience === 'picked';
     let ids: number[];
     let total: number;
-    if (toAll) {
+    if (toPicked) {
+      // Список приходит с клиента, поэтому пересекаем его с реальной базой:
+      // шлём только одобренным, не заблокированным и не отключившим бота.
+      const wanted = Array.from(new Set(
+        (Array.isArray(body.telegramIds) ? body.telegramIds : [])
+          .map((v: unknown) => Number(v))
+          .filter((id: number) => Number.isFinite(id) && id > 0)
+      ));
+      if (!wanted.length) return res.status(400).json({ error: 'Не выбран ни один участник' });
+      const { data: members } = await supabase
+        .from('members')
+        .select('telegram_id, status, bot_active')
+        .in('telegram_id', wanted);
+      ids = (members || [])
+        .filter((m: any) => m.status === 'approved' && m.bot_active !== false)
+        .map((m: any) => Number(m.telegram_id));
+      total = wanted.length;
+    } else if (toAll) {
       const { data: members } = await supabase
         .from('members')
         .select('telegram_id, status, bot_active')
@@ -126,19 +148,43 @@ export default async function handler(req: any, res: any) {
         ok: false,
         sent: 0,
         total,
-        message: toAll
-          ? 'В базе нет одобрённых членов с Telegram chat_id.'
-          : 'Некому слать: ни у одного участника нет Telegram chat_id (регистрации только с сайта). Рассылка возможна тем, кто записался через бота.',
+        message: toPicked
+          ? 'Никому не ушло: выбранные не одобрены в клубе или отключили бота.'
+          : toAll
+            ? 'В базе нет одобрённых членов с Telegram chat_id.'
+            : 'Некому слать: ни у одного участника нет Telegram chat_id (регистрации только с сайта). Рассылка возможна тем, кто записался через бота.',
       });
     }
 
+    const inviteText =
+      `✉️ <b>Тебя приглашают: ${esc(event?.title || 'событие FLINT')}</b>\n\n` +
+      (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
+      (event?.location ? `📍 ${esc(event.location)}\n` : '') +
+      (event?.price_label ? `💰 ${esc(event.price_label)}\n` : '') +
+      `\nОткрой карточку и запишись — место держим за тобой.`;
+
     const text =
       body.message ||
-      (`🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
-        (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
-        (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-        (event?.price_label ? `\n💰 ${esc(event.price_label)}\n` : '') +
-        `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
+      (toPicked
+        ? inviteText
+        : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
+          (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
+          (event?.location ? `📍 ${esc(event.location)}\n` : '') +
+          (event?.price_label ? `\n💰 ${esc(event.price_label)}\n` : '') +
+          `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
+
+    // Приглашение ведёт в Mini App сразу на карточку события (deep-link ?ev=),
+    // потому что регистрация в клубе идёт ТОЛЬКО через Mini App, не через чат.
+    const site = `https://${req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app'}`;
+    const markup = toPicked
+      ? { inline_keyboard: [
+          [{ text: '👀 Открыть и записаться', web_app: { url: `${site}/?ev=${encodeURIComponent(eventId)}` } }],
+          [{ text: '✍️ Ответить', callback_data: 'usreply' }],
+        ] }
+      : { inline_keyboard: [
+          [{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }],
+          [{ text: '✍️ Ответить', callback_data: 'usreply' }],
+        ] };
 
     const results = await Promise.allSettled(
       ids.map((chatId) =>
@@ -150,8 +196,9 @@ export default async function handler(req: any, res: any) {
             text,
             parse_mode: 'HTML',
             disable_web_page_preview: true,
-            // Кнопка подтверждения прочтения: тап → отметка админам в группе.
-            reply_markup: { inline_keyboard: [[{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }]] },
+            // Подтверждение прочтения + возможность ответить на рассылку:
+            // раньше вопрос по рассылке было некуда задать прямо из неё.
+            reply_markup: markup,
           }),
         })
           .then((r) => r.json())

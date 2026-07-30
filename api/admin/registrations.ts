@@ -333,6 +333,9 @@ export default async function handler(req: any, res: any) {
         body: JSON.stringify({
           chat_id: tid, parse_mode: 'HTML',
           text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
+          // Без этой кнопки переписка односторонняя: участник получал ответ и
+          // не мог ответить, не вспомнив про /start → «Написать в поддержку».
+          reply_markup: { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: 'usreply' }]] },
         }),
       });
       const tgj = await r.json().catch(() => ({ ok: false }));

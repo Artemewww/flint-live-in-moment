@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft } from 'lucide-react';
+import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
 import { CommunityEvent, HouseQuality, UserProfile } from '../types';
 import { getInitData, isInsideTelegram } from '../telegram';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
@@ -847,10 +847,15 @@ function daysInBot(iso?: string): number {
 }
 
 /** Короткая метка отсчёта для админки: «сегодня», «завтра», «через 5 дн.», «прошло». */
-function countdownLabel(date?: string): string {
+function countdownLabel(date?: string, dateEnd?: string): string {
   const n = daysUntil(date);
   if (n === null) return '';
-  if (n < 0) return 'прошло';
+  // Идущее многодневное: старт уже прошёл, но последний день ещё не наступил.
+  // Без учёта dateEnd такое событие подписывалось «прошло», хотя люди на месте.
+  if (n < 0) {
+    const end = daysUntil(dateEnd || date);
+    return end !== null && end >= 0 ? 'идёт' : 'прошло';
+  }
   if (n === 0) return 'сегодня';
   if (n === 1) return 'завтра';
   return `через ${n} дн.`;
@@ -1194,6 +1199,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [loggingIn, setLoggingIn] = useState(false);
   const [editingEvent, setEditingEvent] = useState<CommunityEvent | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
+  /** Прошедшие события скрыты за «Архивом»: в рабочем списке только актуальные. */
+  const [showArchived, setShowArchived] = useState(false);
+  /**
+   * Архивным считаем событие, у которого прошёл ПОСЛЕДНИЙ день (dateEnd), —
+   * по одному `date` многодневный выезд уезжал бы в архив на своём же втором дне.
+   */
+  const archiveSplit = React.useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    const past: CommunityEvent[] = [], active: CommunityEvent[] = [];
+    for (const e of events) ((e.dateEnd || e.date) < today ? past : active).push(e);
+    return { past, active };
+  }, [events]);
+  const activeEvents = archiveSplit.active;
+  const archivedEvents = archiveSplit.past;
   const [broadcasting, setBroadcasting] = useState<string | null>(null);
   const [broadcastResult, setBroadcastResult] = useState<{eventId: string, success: boolean, message: string} | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<CommunityEvent | null>(null);
@@ -1255,12 +1274,89 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     } catch { setActionMsg({ ok: false, text: 'Ошибка сети' }); }
   };
 
+  /**
+   * Персональные приглашения на событие. Раньше единственной рассылкой был
+   * анонс «всем одобрённым» — на закрытый состав (мужское, по интересам,
+   * ограниченные места) приглашать точечно было нечем.
+   */
+  const [invitingEvent, setInvitingEvent] = useState<CommunityEvent | null>(null);
+  const [inviteIds, setInviteIds] = useState<string[]>([]);
+  const [inviteQuery, setInviteQuery] = useState('');
+  const [inviteSending, setInviteSending] = useState(false);
+
+  /** Открыть выбор приглашённых: подтягиваем аудиторию, если ещё не загружена. */
+  const openInvite = (event: CommunityEvent) => {
+    setInvitingEvent(event);
+    setInviteIds([]);
+    setInviteQuery('');
+    if (!audience) loadAudience();
+  };
+
+  /**
+   * Кого вообще можно пригласить: одобренные члены клуба с настоящим Telegram id
+   * (веб-заявки без бота имеют отрицательный хеш — им доставить нечем).
+   */
+  const inviteCandidates = React.useMemo(() => {
+    const q = inviteQuery.trim().toLowerCase();
+    return ((audience?.members || []) as any[])
+      .filter((m) => m.status === 'approved' && Number(m.telegramId) > 0)
+      .filter((m) => !q
+        || String(m.firstName || '').toLowerCase().includes(q)
+        || String(m.username || '').toLowerCase().includes(q));
+  }, [audience, inviteQuery]);
+
+  const sendInvites = async () => {
+    if (!invitingEvent || inviteIds.length === 0 || inviteSending) return;
+    setInviteSending(true);
+    try {
+      const res = await fetch('/api/admin/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          eventId: invitingEvent.id,
+          audience: 'picked',
+          telegramIds: inviteIds.map(Number),
+        }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      if (j.ok) {
+        setActionMsg({ ok: true, text: `Приглашения отправлены: ${j.sent} из ${j.total}${j.blocked ? ` · ${j.blocked} заблокировали бота` : ''}` });
+        setInvitingEvent(null);
+      } else {
+        setActionMsg({ ok: false, text: j.message || j.error || 'Не удалось отправить приглашения' });
+      }
+    } catch {
+      setActionMsg({ ok: false, text: 'Нет связи с сервером' });
+    }
+    setInviteSending(false);
+  };
+
   /** Переписка поддержки: список диалогов и открытый тред. */
   const [showChats, setShowChats] = useState(false);
   const [conversations, setConversations] = useState<any[] | null>(null);
   const [activeThread, setActiveThread] = useState<any | null>(null);
   const [replyText, setReplyText] = useState('');
   const [replySending, setReplySending] = useState(false);
+  const replyRef = useRef<HTMLTextAreaElement | null>(null);
+
+  /**
+   * «Ответить» на КОНКРЕТНОЕ сообщение: цитата + фокус в поле ответа. Одного
+   * поля внизу треда не хватало — при длинной переписке было непонятно, на
+   * какое сообщение отвечает костяк, а участник видел ответ без контекста.
+   */
+  const quoteMessage = (m: any) => {
+    const raw = String(m?.text || '');
+    const quote = raw.split('\n').slice(0, 3).join(' ').slice(0, 140);
+    setReplyText(`> ${quote}${raw.length > 140 ? '…' : ''}\n\n`);
+    // Фокус — сразу (узел textarea не пересоздаётся), каретка — после того как
+    // React закоммитит новое значение, иначе она встанет по старой длине.
+    replyRef.current?.focus();
+    requestAnimationFrame(() => {
+      const el = replyRef.current;
+      if (el) el.setSelectionRange(el.value.length, el.value.length);
+    });
+  };
 
   /** Открыть вкладку участников с готовым фильтром (клик по карточке статистики). */
   const openParticipants = (filter: typeof partFilter, attended = false) => {
@@ -1988,7 +2084,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               shrink-0 + overflow-hidden родителя обрезали список и он НЕ скроллился. */}
           <div className={`w-full md:w-80 flex-1 md:flex-none md:shrink-0 min-h-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 md:max-h-none ${selectedEvent ? 'hidden md:block' : 'block'}`}>
             <div className="flex items-center justify-between mb-4">
-              <span className="text-white/40 text-[10px] uppercase font-mono">Мероприятия: {events.length}</span>
+              <span className="text-white/40 text-[10px] uppercase font-mono">
+                {showArchived ? `Архив: ${archivedEvents.length}` : `Активные: ${activeEvents.length}`}
+              </span>
               <div className="flex gap-1">
                 <button
                   onClick={() => setShowTemplates(true)}
@@ -2007,8 +2105,28 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </div>
             </div>
 
-            {sortByNearest(events).map(event => {
-              const cd = countdownLabel(event.date);
+            {/* Прошедшие события уходят в архив и не мешают работе по текущим.
+                Удалять их нельзя — на них висят регистрации, расходы и отзывы. */}
+            {archivedEvents.length > 0 && (
+              <button
+                onClick={() => setShowArchived((v) => !v)}
+                className={`w-full mb-1 px-3 py-2 rounded-xl text-[10px] font-mono uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer border transition-all ${
+                  showArchived ? 'bg-brand/10 border-brand/30 text-brand' : 'bg-white/5 border-white/10 text-white/50 hover:text-white'
+                }`}
+              >
+                <Archive className="w-3.5 h-3.5" />
+                {showArchived ? '← К активным' : `Архив (${archivedEvents.length})`}
+              </button>
+            )}
+
+            {(showArchived ? archivedEvents : activeEvents).length === 0 && (
+              <p className="text-white/35 text-[11px] font-mono text-center py-6">
+                {showArchived ? 'Архив пуст.' : 'Активных мероприятий нет — создай новое кнопкой «+».'}
+              </p>
+            )}
+
+            {sortByNearest(showArchived ? archivedEvents : activeEvents).map(event => {
+              const cd = countdownLabel(event.date, event.dateEnd);
               const soon = (daysUntil(event.date) ?? 99) <= 3 && (daysUntil(event.date) ?? -1) >= 0;
               return (
               <div
@@ -2162,10 +2280,19 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     <h3 className="font-display font-black text-xl uppercase mb-1">{selectedEvent.title}</h3>
                     <p className="text-xs text-white/60">
                       {selectedEvent.dateLabel}{selectedEvent.location ? ` • ${selectedEvent.location}` : ''}
-                      {countdownLabel(selectedEvent.date) && <span className="text-brand"> · {countdownLabel(selectedEvent.date)}</span>}
+                      {countdownLabel(selectedEvent.date, selectedEvent.dateEnd) && <span className="text-brand"> · {countdownLabel(selectedEvent.date, selectedEvent.dateEnd)}</span>}
                     </p>
                   </div>
                   <div className="flex gap-2">
+                    {/* Точечное приглашение — не только при создании события:
+                        добрать людей нужно и позже, когда мест не хватило. */}
+                    <button
+                      onClick={() => openInvite(selectedEvent)}
+                      className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase flex items-center gap-2 cursor-pointer"
+                    >
+                      <Mail className="w-4 h-4 text-brand" />
+                      Пригласить
+                    </button>
                     <button
                       onClick={() => broadcastEvent(selectedEvent)}
                       disabled={broadcasting === selectedEvent.id}
@@ -3534,19 +3661,29 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     ) : activeThread.messages.length === 0 ? (
                       <p className="text-white/40 text-xs text-center py-8">Сообщений нет.</p>
                     ) : activeThread.messages.map((m: any) => (
-                      <div key={m.id} className={`flex ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 ${m.direction === 'out' ? 'bg-brand text-black rounded-br-sm' : 'bg-white/10 text-white rounded-bl-sm'}`}>
+                      <div key={m.id} className={`flex items-end gap-1.5 ${m.direction === 'out' ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[80%] rounded-2xl px-3.5 py-2 ${m.direction === 'out' ? 'bg-brand text-black rounded-br-sm order-2' : 'bg-white/10 text-white rounded-bl-sm'}`}>
                           <p className="text-sm whitespace-pre-wrap break-words">{m.text}</p>
                           <span className={`text-[9px] font-mono block mt-1 ${m.direction === 'out' ? 'text-black/50' : 'text-white/40'}`}>
                             {m.from_name ? `${m.from_name} · ` : ''}{fmtMsgTime(m.created_at)}
                           </span>
                         </div>
+                        {/* Ответ на любое сообщение в ленте, включая свои
+                            (бывает нужно дополнить сказанное). */}
+                        <button
+                          onClick={() => quoteMessage(m)}
+                          title="Ответить на это сообщение"
+                          className={`shrink-0 p-1.5 rounded-lg bg-white/5 hover:bg-white/15 text-white/50 hover:text-white cursor-pointer border-none ${m.direction === 'out' ? 'order-1' : ''}`}
+                        >
+                          <CornerUpLeft className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
                   </div>
                   {/* Ответ */}
                   <div className="p-3 md:p-4 border-t border-white/10 flex items-end gap-2">
                     <textarea
+                      ref={replyRef}
                       value={replyText}
                       onChange={(e) => setReplyText(e.target.value)}
                       onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendReply(); } }}
@@ -3801,8 +3938,107 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             onAdd={(newEvent) => {
               onAddEvent(newEvent);
               setShowAddForm(false);
+              // Сразу предлагаем позвать людей: событие без участников никому не
+              // видно, а вспомнить про приглашения потом — отдельный шаг, который
+              // владелец и просил убрать.
+              openInvite(newEvent);
             }}
           />
+        )}
+      </AnimatePresence>
+
+      {/* Выбор приглашённых на событие */}
+      <AnimatePresence>
+        {invitingEvent && (
+          <div className="fixed inset-0 z-[85] flex items-end md:items-center justify-center md:p-4">
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={() => setInvitingEvent(null)} />
+            <motion.div
+              initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+              className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-lg relative z-10 border border-white/10 flex flex-col h-[90dvh] md:max-h-[85vh] text-white"
+            >
+              <div className="p-4 md:p-6 border-b border-white/10 flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h3 className="font-display font-black text-lg uppercase truncate">Кого пригласить</h3>
+                  <p className="text-[11px] text-white/50 font-mono truncate">{invitingEvent.title}</p>
+                </div>
+                <button onClick={() => setInvitingEvent(null)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 pb-2 space-y-2 shrink-0">
+                <input
+                  value={inviteQuery}
+                  onChange={(e) => setInviteQuery(e.target.value)}
+                  placeholder="Поиск по имени или @нику…"
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 outline-none focus:border-brand"
+                />
+                {(() => {
+                  const list = inviteCandidates;
+                  const allPicked = list.length > 0 && list.every((m) => inviteIds.includes(m.telegramId));
+                  return (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] text-white/40 font-mono uppercase">
+                        выбрано {inviteIds.length} из {list.length}
+                      </span>
+                      <button
+                        onClick={() => setInviteIds(allPicked ? [] : list.map((m) => m.telegramId))}
+                        disabled={list.length === 0}
+                        className="text-[10px] px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-white/70 font-bold uppercase cursor-pointer border-none disabled:opacity-40"
+                      >
+                        {allPicked ? 'Снять всех' : 'Выбрать всех'}
+                      </button>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="flex-1 overflow-y-auto px-4 space-y-1.5 min-h-0">
+                {audience === null ? (
+                  <p className="text-white/40 text-xs text-center py-8">Загрузка аудитории…</p>
+                ) : inviteCandidates.length === 0 ? (
+                  <p className="text-white/40 text-xs text-center py-8">
+                    Некого приглашать: нет одобрённых участников с Telegram (или все отфильтрованы поиском).
+                  </p>
+                ) : inviteCandidates.map((m: any) => {
+                  const picked = inviteIds.includes(m.telegramId);
+                  return (
+                    <button
+                      key={m.telegramId}
+                      onClick={() => setInviteIds((s) => picked ? s.filter((id) => id !== m.telegramId) : [...s, m.telegramId])}
+                      className={`w-full text-left rounded-xl p-3 cursor-pointer border transition-all flex items-center gap-3 ${
+                        picked ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/10 hover:bg-white/10'
+                      }`}
+                    >
+                      {picked ? <CheckSquare className="w-4 h-4 text-brand shrink-0" /> : <Square className="w-4 h-4 text-white/30 shrink-0" />}
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm font-bold truncate">{m.firstName || `id ${m.telegramId}`}</span>
+                        <span className="block text-[10px] text-white/40 font-mono truncate">
+                          {m.username ? '@' + m.username : `id ${m.telegramId}`}
+                          {m.isCore ? ' · костяк' : ''}
+                          {m.botActive === false ? ' · бот остановлен' : ''}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="p-4 border-t border-white/10 shrink-0">
+                <button
+                  onClick={sendInvites}
+                  disabled={inviteSending || inviteIds.length === 0}
+                  className="w-full bg-brand hover:bg-brand-hover text-black font-black py-3 rounded-xl uppercase text-xs tracking-wider cursor-pointer border-none disabled:opacity-40 flex items-center justify-center gap-2"
+                >
+                  <Mail className="w-4 h-4" />
+                  {inviteSending ? 'Отправляем…' : `Пригласить (${inviteIds.length})`}
+                </button>
+                <p className="text-[9px] text-white/30 font-mono mt-2 text-center">
+                  Уйдёт личное сообщение в бот с кнопкой записи. Заблокированным и остановившим бота не шлётся.
+                </p>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

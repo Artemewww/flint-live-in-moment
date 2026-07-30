@@ -1,8 +1,8 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Bell, Trophy, Star, Flame, Zap, Target, Award, Users, Copy, Check, AlertTriangle,
   Calendar, MapPin, CreditCard, Truck, Package, UtensilsCrossed, Settings as SettingsIcon,
-  ChevronRight, Loader2, ShieldCheck, Clock, ArrowRightLeft, Save,
+  Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply,
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic } from '../telegram';
 import EquipmentPanel from './EquipmentPanel';
@@ -55,6 +55,13 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+
+  /** Ответ организаторам прямо из ленты уведомлений. */
+  const [msgText, setMsgText] = useState('');
+  const [msgSending, setMsgSending] = useState(false);
+  const [msgNote, setMsgNote] = useState('');
+  const [showAllNotif, setShowAllNotif] = useState(false);
+  const msgRef = useRef<HTMLTextAreaElement | null>(null);
 
   const load = async () => {
     const initData = getInitData();
@@ -122,6 +129,41 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
     { id: 'inviter', name: 'Проводник', desc: 'Привести друга', icon: Target, unlocked: (p?.referralsCount || 0) >= 1 },
     { id: 'level5', name: 'Эксперт', desc: 'Достичь 5 уровня', icon: Award, unlocked: level >= 5 },
   ];
+
+  /** Отправить организаторам. Пишется в тот же тред, что и переписка в боте. */
+  const sendMessage = async () => {
+    const text = msgText.trim();
+    if (!text) return;
+    setMsgSending(true); setMsgNote('');
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'send_message', initData: getInitData(), text }),
+      });
+      const j = await res.json();
+      if (j.ok) {
+        setMsgText(''); setMsgNote('Отправлено — ответ придёт в бот и сюда'); haptic('success');
+        load(); // подтягиваем своё сообщение в ленту, чтобы было видно, что ушло
+      } else { setMsgNote(j.error || 'Не удалось отправить'); haptic('error'); }
+    } catch { setMsgNote('Нет связи с сервером'); haptic('error'); }
+    setMsgSending(false);
+  };
+
+  /** «Ответить» на конкретное сообщение: цитата + фокус в поле. */
+  const quoteReply = (n: any) => {
+    const quote = String(n.text || '').split('\n').slice(0, 3).join(' ').slice(0, 120);
+    setMsgText(`> ${quote}${String(n.text || '').length > 120 ? '…' : ''}\n\n`);
+    haptic('success');
+    // Фокус — сразу (узел не пересоздаётся), каретка — после коммита React,
+    // иначе она встанет по старой длине значения.
+    msgRef.current?.focus();
+    msgRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    requestAnimationFrame(() => {
+      const len = msgRef.current?.value.length ?? 0;
+      msgRef.current?.setSelectionRange(len, len);
+    });
+  };
 
   const copyRef = async () => {
     if (!p?.refLink) return;
@@ -299,11 +341,11 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
                     </h3>
                     {notifications.length === 0 ? (
                       <p className="text-[11px] text-white/35 font-mono bg-white/5 border border-white/10 rounded-2xl p-4">
-                        Пока ничего. Здесь появятся сообщения от организаторов.
+                        Пока ничего. Здесь появятся сообщения от организаторов — и ответить можно прямо отсюда.
                       </p>
                     ) : (
                       <div className="space-y-2">
-                        {notifications.slice(0, 5).map((n) => (
+                        {(showAllNotif ? notifications : notifications.slice(0, 5)).map((n) => (
                           <div key={n.id} className={`rounded-2xl border p-3.5 ${
                             n.kind === 'from_club' ? 'bg-white/5 border-white/10' : 'bg-brand/5 border-brand/20'
                           }`}>
@@ -314,13 +356,52 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
                               <span className="text-[9px] font-mono text-white/30 shrink-0">{fmtWhen(n.at)}</span>
                             </div>
                             <p className="text-[12px] text-white/80 leading-snug whitespace-pre-wrap break-words">{n.text}</p>
+                            {/* Ответ на КАЖДОЕ сообщение организаторов, а не только
+                                на последнее — иначе непонятно, на что отвечаешь. */}
+                            {n.kind === 'from_club' && (
+                              <button
+                                type="button" onClick={() => quoteReply(n)}
+                                className="mt-2 inline-flex items-center gap-1 text-[9px] font-mono uppercase tracking-widest text-brand bg-brand/10 hover:bg-brand/20 border border-brand/25 rounded-lg px-2 py-1 cursor-pointer"
+                              >
+                                <Reply className="w-3 h-3" /> Ответить
+                              </button>
+                            )}
                           </div>
                         ))}
                         {notifications.length > 5 && (
-                          <p className="text-[10px] text-white/35 font-mono text-center">и ещё {notifications.length - 5}</p>
+                          <button
+                            type="button" onClick={() => setShowAllNotif((v) => !v)}
+                            className="w-full text-[10px] text-white/45 font-mono bg-transparent border-none cursor-pointer py-1 hover:text-white/70"
+                          >
+                            {showAllNotif ? 'Свернуть' : `Показать все (${notifications.length})`}
+                          </button>
                         )}
                       </div>
                     )}
+
+                    {/* Написать организаторам. Уходит в тот же тред, что и
+                        переписка в боте — отдельного канала не появляется. */}
+                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3 space-y-2">
+                      <textarea
+                        ref={msgRef}
+                        value={msgText}
+                        onChange={(e) => setMsgText(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); sendMessage(); } }}
+                        rows={2}
+                        placeholder="Написать организаторам…"
+                        className="w-full bg-black/30 border border-white/10 rounded-xl p-2.5 text-white text-[12px] placeholder:text-white/25 outline-none focus:border-brand/40 resize-none"
+                      />
+                      <div className="flex items-center justify-between gap-2">
+                        <span className={`text-[9px] font-mono ${/Отправлено/.test(msgNote) ? 'text-brand' : 'text-rose-400'}`}>{msgNote}</span>
+                        <button
+                          type="button" onClick={sendMessage} disabled={msgSending || !msgText.trim()}
+                          className="shrink-0 bg-brand hover:bg-brand-hover text-black rounded-xl px-3.5 py-2 text-[10px] font-black uppercase tracking-widest cursor-pointer border-none flex items-center gap-1.5 disabled:opacity-40"
+                        >
+                          {msgSending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+                          Отправить
+                        </button>
+                      </div>
+                    </div>
                   </section>
 
                   {/* ПРИОРИТЕТ 4 — статистика и награды */}

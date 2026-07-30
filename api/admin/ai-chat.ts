@@ -6,6 +6,9 @@ const supabase = createClient(
 );
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || '';
+// НИКОГДА не хардкодить версионную модель: gemini-2.0-flash-exp уже удалили из
+// API (404), и это тихо ломало ИИ-функции. Только -latest или значение из env.
+const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
 
 function authorized(req: any): boolean {
   const token = String(req.headers.authorization || '').replace('Bearer ', '');
@@ -62,7 +65,7 @@ export default async function handler(req: any, res: any) {
 6. {"intent": "question", "answer": "наводящий вопрос администратору"} — если не хватает данных
 7. {"intent": "unknown", "answer": "вежливый ответ"} — если не удалось определить`;
 
-    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`, {
+    const geminiRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

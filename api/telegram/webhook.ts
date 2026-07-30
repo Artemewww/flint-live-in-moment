@@ -619,6 +619,13 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 
+/**
+ * Кнопка ответа под сообщением ОТ организатора участнику. Обязательна на каждом
+ * таком сообщении: без неё переписка односторонняя — участник видит ответ, но
+ * ответить ему нечем (см. колбэк 'usreply').
+ */
+const REPLY_ROW = [{ text: '✍️ Ответить', callback_data: 'usreply' }];
+
 // Причины высадки пассажира: короткий код → человекочитаемая формулировка,
 // которую увидит высаженный. «other» — водитель пишет свою причину текстом.
 const DROP_REASON: Record<string, string> = {
@@ -1479,7 +1486,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -1668,6 +1675,22 @@ export default async function handler(req: any, res: any) {
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * «✍️ Ответить» под сообщением ОТ организатора. Раньше ответить было
+       * нечем: участник получал ответ костяка без кнопок и должен был сам
+       * догадаться зайти в /start → «Написать в поддержку» — переписка
+       * обрывалась на первом же ответе. Технически это тот же support_text.
+       */
+      if (data === 'usreply') {
+        await setSession(tgId, 'support_text', {});
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '✍️ Напиши ответ одним сообщением — передам организаторам.',
         });
         return res.status(200).json({ ok: true });
       }
@@ -5020,6 +5043,7 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', {
               chat_id: targetId, parse_mode: 'HTML',
               text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
+              reply_markup: kb([REPLY_ROW]),
             });
             await logSupport(Number(targetId), 'out', text, msg.from.first_name || 'Организатор');
             await tg('sendMessage', { chat_id: chatId, text: '✅ Ответ отправлен.' });

@@ -26,9 +26,12 @@ export default function EventFeed({
   // Динамическая дата «сегодня» — прошедшие события скрыты по умолчанию
   const today = getToday();
 
-  // Только актуальные события в основной ленте
-  const upcomingEvents = events.filter(e => e.date >= today);
-  const pastEvents = events.filter(e => e.date < today);
+  // Только актуальные события в основной ленте. Прошедшим считается событие,
+  // у которого закончился ПОСЛЕДНИЙ день: по одному `date` многодневный выезд
+  // уезжал в архив уже на второй день, пока люди ещё на месте.
+  const lastDay = (e: CommunityEvent) => e.dateEnd || e.date;
+  const upcomingEvents = events.filter(e => lastDay(e) >= today);
+  const pastEvents = events.filter(e => lastDay(e) < today);
 
   // Применяем фильтр по типу
   const filteredEvents = activeFilter === 'all' 
