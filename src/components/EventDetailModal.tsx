@@ -152,6 +152,8 @@ export default function EventDetailModal({
   const [interestSending, setInterestSending] = useState(false);
   /** Полный чек-лист клуба — по кнопке, чтобы не растягивать карточку по умолчанию. */
   const [showChecklist, setShowChecklist] = useState(false);
+  /** Онлайн-событие: часть блоков (сборы, маршрут, чек-лист) для него бессмысленна. */
+  const isOnline = event.notifications?._format === 'online';
   const handleInterest = async () => {
     if (interestSending || interestSent) return;
     setInterestSending(true);
@@ -448,7 +450,9 @@ export default function EventDetailModal({
               </div>
             )}
 
-            {/* Что взять с собой */}
+            {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек
+                дома, брать с собой нечего — и чек-лист кемпинга тем более. */}
+            {!isOnline && (
             <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2.5">
               <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
                 <Check className="w-3.5 h-3.5" /> Что взять с собой
@@ -472,8 +476,9 @@ export default function EventDetailModal({
                 {showChecklist ? 'Скрыть полный чек-лист' : 'Полный чек-лист для кемпинга'}
               </button>
             </div>
+            )}
 
-            {showChecklist && (
+            {!isOnline && showChecklist && (
               <div className="bg-white/[0.03] border border-white/10 p-3 rounded-2xl">
                 <CampingChecklist defaultOpen />
               </div>

@@ -752,6 +752,10 @@ async function dropPassenger(rideId: number, paxId: number, reason: string, driv
  * Флага нет — поведение по типу события, как раньше.
  */
 function featureOn(ev: any, key: 'food' | 'rides' | 'tents'): boolean {
+  // Онлайн-событие перекрывает всё: добираться некуда, ночевать негде, готовить
+  // вместе нельзя. Проверка идёт ДО явных флагов — иначе легаси-событие,
+  // переведённое в онлайн, продолжало бы спрашивать про машины и палатки.
+  if (ev?.notifications?._format === 'online') return false;
   const v = ev?.notifications?.[`feat_${key}`];
   if (typeof v === 'boolean') return v;
   if (key === 'food') return ['active', 'male', 'mixed'].includes(ev?.type);

@@ -68,7 +68,13 @@ export interface CommunityEvent {
    * Напоминания (reminder7d/3d/1d/3h/1h) + флаги функций события
    * (feat_food/feat_rides/feat_tents — вкл/выкл разделов в боте).
    */
-  notifications: Record<string, boolean | undefined>;
+  /**
+   * Флаги события в одном jsonb: напоминания (reminder*), включённые блоки
+   * (feat_food/feat_rides/feat_tents) и служебные значения — `_format`
+   * ('offline'|'online'|'hybrid'), `_heatCount`. Строки допустимы намеренно:
+   * заводить колонку под каждый флаг = миграция на каждый чих.
+   */
+  notifications: Record<string, boolean | string | number | undefined>;
   programVoting?: {
     enabled: boolean;
     deadline: string;

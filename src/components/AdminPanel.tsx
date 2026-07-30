@@ -4202,16 +4202,58 @@ function FeatureToggles({ value, type, onChange }: {
   type: string;
   onChange: (v: Record<string, any>) => void;
 }) {
-  const defFood = ['active', 'male', 'mixed'].includes(type);
-  const defLogi = type !== 'intellectual';
+  // Формат события задаёт, какие блоки вообще имеют смысл: онлайну не нужны
+  // машины, палатки и совместная готовка. Хранится в notifications._format
+  // (jsonb, без миграции — тот же приём, что с feat_* и _heatCount).
+  const format: string = value?._format || 'offline';
+  const online = format === 'online';
+  const defFood = !online && ['active', 'male', 'mixed'].includes(type);
+  const defLogi = !online && type !== 'intellectual';
   const items = [
     { key: 'feat_food', label: '🍽 Готовка и меню', def: defFood },
     { key: 'feat_rides', label: '🚗 Машины и попутки', def: defLogi },
     { key: 'feat_tents', label: '⛺ Палатки', def: defLogi },
   ];
+  const FORMATS = [
+    { k: 'offline', l: '📍 Вживую' },
+    { k: 'online', l: '💻 Онлайн' },
+    { k: 'hybrid', l: '🔀 Гибрид' },
+  ];
   return (
     <div>
+      <label className="text-[11px] uppercase tracking-widest text-white/40 block mb-2">Формат</label>
+      <div className="flex flex-wrap gap-2 mb-3">
+        {FORMATS.map((f) => (
+          <button
+            key={f.k}
+            type="button"
+            onClick={() => {
+              const next: Record<string, any> = { ...value, _format: f.k };
+              if (f.k === 'online') {
+                // Онлайн гасит логистику: держать её включённой у созвона —
+                // источник мусорных вопросов участникам.
+                next.feat_rides = false; next.feat_tents = false; next.feat_food = false;
+              } else if (online) {
+                // Возврат из онлайна СБРАСЫВАЕТ флаги к умолчаниям по типу.
+                // Иначе выключенные «из-за онлайна» блоки молча оставались бы
+                // выключенными у выездного события — организатор считает, что
+                // логистика есть, а её нет.
+                delete next.feat_rides; delete next.feat_tents; delete next.feat_food;
+              }
+              onChange(next);
+            }}
+            className={`px-3 py-2 rounded-xl border text-xs font-mono transition-colors cursor-pointer ${format === f.k ? 'border-[#E6FD3A]/60 text-[#E6FD3A] bg-[#E6FD3A]/10' : 'border-white/10 text-white/40 bg-transparent'}`}
+          >
+            {f.l}
+          </button>
+        ))}
+      </div>
       <label className="text-[11px] uppercase tracking-widest text-white/40 block mb-2">Функции события</label>
+      {online && (
+        <p className="text-[10px] text-white/35 font-mono mb-2">
+          Онлайн: логистика и готовка отключены — участникам никуда не ехать.
+        </p>
+      )}
       <div className="flex flex-wrap gap-2">
         {items.map((it) => {
           const on = typeof value?.[it.key] === 'boolean' ? value[it.key] : it.def;
@@ -4794,9 +4836,24 @@ function AddEventModal({ onClose, onAdd }: {
       houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : formData.houseQualities,
       image: d.image || formData.image,
     };
+    /**
+     * Адаптивная структура: ИИ по сути идеи решает формат (офлайн/онлайн/гибрид)
+     * и какие блоки нужны. Онлайн-встрече не нужны машины, палатки и готовка —
+     * раньше это выключалось руками, а чаще не выключалось вовсе, и участники
+     * получали логистику по зуму. Организатор может переключить любой тумблер
+     * после генерации — решение ИИ это подсказка, а не запрет.
+     */
+    if (d.format || d.features) {
+      updates.notifications = {
+        ...(formData.notifications || {}),
+        ...(d.features || {}),
+        ...(d.format ? { _format: d.format } : {}),
+      };
+    }
     setFormData((f) => ({ ...f, ...updates }));
 
-    if (d.location && d.location !== formData.location) {
+    // У онлайна нет физической локации — геокодить «Zoom» бессмысленно.
+    if (d.format !== 'online' && d.location && d.location !== formData.location) {
       await geocodeLocation(d.location);
     }
   };
@@ -4924,7 +4981,9 @@ function AddEventModal({ onClose, onAdd }: {
                   {formData.location && (
                     <p className="text-[10px] text-white/50 font-mono flex items-center gap-1">
                       📍 {formData.location}
-                      {formData.distanceFromMinsk && !isMinsk && formData.distanceFromMinsk > 5 && (
+                      {/* Условие обязано быть булевым: при distanceFromMinsk === 0
+                          JSX печатал сам ноль, и в превью выходило «Zoom0». */}
+                      {!isMinsk && (formData.distanceFromMinsk ?? 0) > 5 && (
                         <span className="text-brand"> · {formData.distanceFromMinsk} км</span>
                       )}
                     </p>

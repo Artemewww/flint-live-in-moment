@@ -321,7 +321,15 @@ export default async function handler(req: any, res: any) {
         `- entryThreshold: условия прохода через « • » (напр. «100% трезвость • уважение • …»);\n` +
         `- houseQualities: подмножество ключей качеств, которые развивает событие, из: ` +
         `foundation (Предназначение), wall (Воля), roof (Совесть), decor (Творчество), heat (Любовь), life (Счастье);\n` +
-        `- maxParticipants: реалистичное число участников (5–30).`;
+        `- maxParticipants: реалистичное число участников (5–30);\n` +
+        `- format: 'offline' (встречаемся вживую), 'online' (созвон/зум, никто никуда не едет) ` +
+        `или 'hybrid' (часть онлайн, часть вживую). Определи по сути идеи: голодание/марафон/разбор ` +
+        `по видеосвязи — это online, выезд/баня/поход — offline;\n` +
+        `- needsFood: true, если на событии совместная еда/готовка (для выездов почти всегда true, ` +
+        `для онлайна — false);\n` +
+        `- needsRides: true, если участникам надо ДОБИРАТЬСЯ до места (машины, попутки). ` +
+        `Для online всегда false;\n` +
+        `- needsTents: true, только если событие с ночёвкой в палатках. Для однодневных и online — false.`;
       const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
@@ -343,8 +351,12 @@ export default async function handler(req: any, res: any) {
             items: { type: Type.STRING, enum: ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] },
           },
           maxParticipants: { type: Type.NUMBER },
+          format: { type: Type.STRING, enum: ['offline', 'online', 'hybrid'] },
+          needsFood: { type: Type.BOOLEAN },
+          needsRides: { type: Type.BOOLEAN },
+          needsTents: { type: Type.BOOLEAN },
         },
-        required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants'],
+        required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
       });
       const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
       const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
@@ -364,6 +376,24 @@ export default async function handler(req: any, res: any) {
         entryThreshold: p.entryThreshold || '',
         houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],
         maxParticipants: Number(p.maxParticipants) || 15,
+      };
+      /**
+       * Адаптивная структура: блоки события зависят от его сути, а не от типа.
+       * Онлайн-встрече не нужны машины, палатки и совместная готовка — раньше
+       * организатор выключал их руками (а чаще забывал, и участники получали
+       * логистику по зуму).
+       *
+       * Онлайн жёстко перекрывает ответ модели: даже если она поставит
+       * needsRides=true, добираться никуда не надо — это противоречие в её
+       * ответе, а не пожелание организатора.
+       */
+      const format = ['offline', 'online', 'hybrid'].includes(p.format) ? p.format : 'offline';
+      const online = format === 'online';
+      draft.format = format;
+      draft.features = {
+        feat_food: online ? false : p.needsFood !== false,
+        feat_rides: online ? false : p.needsRides !== false,
+        feat_tents: online ? false : p.needsTents === true,
       };
       return res.status(200).json({ draft, model: usedModel });
     }
