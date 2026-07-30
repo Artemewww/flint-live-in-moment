@@ -14,7 +14,7 @@ import CalendarGrid from './components/CalendarGrid';
 import VerificationModal from './components/VerificationModal';
 import BirthdayCalendar from './components/BirthdayCalendar';
 import FeedbackModal from './components/FeedbackModal';
-import UserStats from './components/UserStats';
+import ProfileScreen from './components/ProfileScreen';
 import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
 import GateScreen from './components/GateScreen';
@@ -653,17 +653,16 @@ export default function App() {
               <span>Дни Рождения</span>
             </button>
 
-            {/* User Stats button */}
-            {registeredEventIds.length > 0 && (
-              <button
-                onClick={() => setShowUserStats(true)}
-                className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
-                id="show-user-stats-btn"
-              >
-                <Trophy className="w-4 h-4 text-brand" />
-                <span>Мой Прогресс</span>
-              </button>
-            )}
+            {/* Профиль участника — доступен всегда: внутри настройки,
+                уведомления, снаряжение и питание, а не только прогресс. */}
+            <button
+              onClick={() => setShowUserStats(true)}
+              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+              id="show-user-stats-btn"
+            >
+              <Trophy className="w-4 h-4 text-brand" />
+              <span>Профиль</span>
+            </button>
 
             {/* Admin Panel button - всегда виден */}
             <button
@@ -751,15 +750,13 @@ export default function App() {
                   Админ-панель
                 </button>
 
-                {registeredEventIds.length > 0 && (
-                  <button
-                    onClick={() => { setShowUserStats(true); setMobileMenuOpen(false); }}
-                    className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
-                  >
-                    <Trophy className="w-4 h-4 text-brand" />
-                    Мой Прогресс ({registeredEventIds.length})
-                  </button>
-                )}
+                <button
+                  onClick={() => { setShowUserStats(true); setMobileMenuOpen(false); }}
+                  className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                >
+                  <Trophy className="w-4 h-4 text-brand" />
+                  Профиль{registeredEventIds.length > 0 ? ` (${registeredEventIds.length})` : ''}
+                </button>
 
                 {registeredEventIds.length > 0 && (
                   <button
@@ -1108,11 +1105,7 @@ export default function App() {
 
       {/* USER STATS MODAL */}
       {showUserStats && (
-        <UserStats
-          registrations={userRegistrations}
-          events={events}
-          onClose={() => setShowUserStats(false)}
-        />
+        <ProfileScreen onClose={() => setShowUserStats(false)} />
       )}
 
       {/* EVENT POSTER MODAL */}

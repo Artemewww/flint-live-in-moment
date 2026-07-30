@@ -34,16 +34,50 @@ function esc(s: any): string {
 // (d033626), но для legacy/гонок фильтруем централизованно на слое отправки:
 // заполняется один раз в начале handler, короткозамыкает оба пути (tg/send).
 let blockedIds = new Set<number>();
+
+/**
+ * Кто отключил себе категорию уведомлений (профиль → Настройки, пишется в
+ * members.prefs.notify). Без этой проверки тумблеры в профиле были бы
+ * декорацией. Отсутствие ключа = согласие, поэтому в set попадают только
+ * явные `false`.
+ */
+type NotifyCategory = 'events' | 'payments' | 'logistics' | 'digest';
+const mutedBy: Record<NotifyCategory, Set<number>> = {
+  events: new Set(), payments: new Set(), logistics: new Set(), digest: new Set(),
+};
+
+/** Один проход по members: и блокировки, и настройки уведомлений. */
 async function loadBlockedIds(): Promise<void> {
+  for (const s of Object.values(mutedBy)) s.clear();
   try {
-    const { data } = await supabase.from('members').select('telegram_id').eq('status', 'blocked');
-    blockedIds = new Set((data || []).map((m: any) => Number(m.telegram_id)).filter((n: number) => Number.isFinite(n)));
+    const { data } = await supabase.from('members').select('telegram_id,status,prefs');
+    blockedIds = new Set(
+      (data || [])
+        .filter((m: any) => m.status === 'blocked')
+        .map((m: any) => Number(m.telegram_id))
+        .filter((n: number) => Number.isFinite(n)),
+    );
+    for (const m of data || []) {
+      const id = Number((m as any).telegram_id);
+      if (!Number.isFinite(id)) continue;
+      const notify = (m as any).prefs?.notify;
+      if (!notify) continue;
+      for (const cat of Object.keys(mutedBy) as NotifyCategory[]) {
+        if (notify[cat] === false) mutedBy[cat].add(id);
+      }
+    }
   } catch { blockedIds = new Set(); }
 }
 /** Личное сообщение забаненному — не слать. Групповые (отрицательный chat_id) не трогаем. */
 function isBlockedChat(chatId: unknown): boolean {
   const n = Number(chatId);
   return Number.isFinite(n) && n > 0 && blockedIds.has(n);
+}
+/** Отписан ли человек от этой категории. Групповые чаты и админ-чат — всегда нет. */
+function isMuted(chatId: unknown, category?: NotifyCategory): boolean {
+  if (!category) return false;
+  const n = Number(chatId);
+  return Number.isFinite(n) && n > 0 && mutedBy[category].has(n);
 }
 
 async function tg(method: string, payload: unknown) {
@@ -60,8 +94,8 @@ async function tg(method: string, payload: unknown) {
   }
 }
 
-async function send(chatId: number, text: string, replyMarkup?: unknown): Promise<boolean> {
-  if (isBlockedChat(chatId)) return false;
+async function send(chatId: number, text: string, replyMarkup?: unknown, category?: NotifyCategory): Promise<boolean> {
+  if (isBlockedChat(chatId) || isMuted(chatId, category)) return false;
   try {
     const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
       method: 'POST',
@@ -289,7 +323,8 @@ export default async function handler(req: any, res: any) {
           await send(Number(r.telegram_id),
             hasVotes
               ? `⌛ <b>Голосование завершено по времени</b>\n«${esc((p as any).question)}»\n\nЛидер: <b>${esc(list[winIdx])}</b> (${counts[winIdx]} голос(ов)).`
-              : `⌛ Голосование «${esc((p as any).question)}» закрыто по времени — голосов не было.`);
+              : `⌛ Голосование «${esc((p as any).question)}» закрыто по времени — голосов не было.`,
+            undefined, 'events');
         }
         report.pollsClosed++;
       }
@@ -341,7 +376,7 @@ export default async function handler(req: any, res: any) {
               `📋 <b>Дополни профиль — «${esc((ev as any).title)}»</b>\n\n` +
                 `До выезда 3 дня, а организаторам по тебе не хватает:\n${gaps.join('\n')}\n\n` +
                 `Это 1 минута — жми кнопки ниже.`,
-              { inline_keyboard: buttons }
+              { inline_keyboard: buttons }, 'logistics',
             );
           }
         }
@@ -358,7 +393,7 @@ export default async function handler(req: any, res: any) {
             const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
             await send(Number(adminChat), `🛒 <b>Закупка утверждена</b> — «${esc((ev as any).title)}»\nЗа: ${approved.length} из ${all.length} (>50%). Можно запускать закупщика из админки.`);
             for (const id of all) {
-              await send(id, `🛒 Закупка на «<b>${esc((ev as any).title)}</b>» утверждена командой (${approved.length}/${all.length} за). Спасибо!`);
+              await send(id, `🛒 Закупка на «<b>${esc((ev as any).title)}</b>» утверждена командой (${approved.length}/${all.length} за). Спасибо!`, undefined, 'payments');
             }
           } else {
             // Кворума нет — пингуем только тех, кто ещё не ответил.
@@ -370,7 +405,7 @@ export default async function handler(req: any, res: any) {
                 { inline_keyboard: [
                   [{ text: '✅ Согласен с закупкой', callback_data: `shopok_${(ev as any).id}` }],
                   [{ text: '✏️ Есть замечания', callback_data: `shopno_${(ev as any).id}` }],
-                ] }
+                ] }, 'payments',
               );
             }
           }
@@ -389,7 +424,7 @@ export default async function handler(req: any, res: any) {
             { inline_keyboard: [[
               { text: '✅ Еду', callback_data: `rsvpy_${(ev as any).id}` },
               { text: '❌ Не смогу', callback_data: `rsvpn_${(ev as any).id}` },
-            ]] }
+            ]] }, 'events',
           );
           if (ok) report.eventReminders++;
 
@@ -405,7 +440,7 @@ export default async function handler(req: any, res: any) {
               { inline_keyboard: [
                 [{ text: `✅ Да, все ${gc} со мной`, callback_data: `gconf_${(ev as any).id}` }],
                 [{ text: '✏️ Изменить число', callback_data: `gedit_${(ev as any).id}` }],
-              ] }
+              ] }, 'events',
             );
           }
 
@@ -418,7 +453,7 @@ export default async function handler(req: any, res: any) {
               chatId,
               `💳 <b>Оплата участия — «${esc((ev as any).title)}»</b>\n\n` +
                 `Твоё участие ещё не оплачено. Оплати заранее, чтобы место осталось за тобой — жми кнопку ниже.`,
-              { inline_keyboard: [[{ text: '💳 Оплатить участие', callback_data: `pay_${(ev as any).id}` }]] }
+              { inline_keyboard: [[{ text: '💳 Оплатить участие', callback_data: `pay_${(ev as any).id}` }]] }, 'payments',
             );
             if (sent) report.paymentReminders++;
           }
@@ -439,7 +474,7 @@ export default async function handler(req: any, res: any) {
               await send(
                 chatId,
                 `🚗 <b>Список машин с местами на «${esc((ev as any).title)}»:</b>\n\n${ridesList}\n\nНажми кнопку ниже — займёшь место!`,
-                { inline_keyboard: [[{ text: '👀 Занять место в машине', callback_data: `rides_${(ev as any).id}` }]] }
+                { inline_keyboard: [[{ text: '👀 Занять место в машине', callback_data: `rides_${(ev as any).id}` }]] }, 'logistics',
               );
             }
           }
@@ -466,7 +501,7 @@ export default async function handler(req: any, res: any) {
                 [{ text: '✅ Собираюсь', callback_data: `ack_${(ev as any).id}` }],
                 // Памятка (правила места, безопасность) — если организатор её заполнил.
                 ...((ev as any).logistics?.prep ? [[{ text: '🎒 Как готовиться', callback_data: `prep_${(ev as any).id}` }]] : []),
-              ] }
+              ] }, 'events',
             );
           }
         }
@@ -574,7 +609,7 @@ export default async function handler(req: any, res: any) {
 
             for (const r of realIds(regs || [])) {
               const chatId = Number(r.telegram_id);
-              const sent = await send(chatId, fullMsg);
+              const sent = await send(chatId, fullMsg, undefined, 'events');
               if (sent) report.menuBroadcasts++;
             }
           }
@@ -602,7 +637,8 @@ export default async function handler(req: any, res: any) {
         const ok = await send(
           Number(r.telegram_id),
           `🌅 <b>Сегодня — ${esc((ev as any).title)}!</b>\n\n🧭 <b>План дня</b>\n${lines}\n\nДо встречи!`,
-          route ? { inline_keyboard: [[{ text: '🧭 Маршрут в Яндексе', url: route }]] } : undefined
+          route ? { inline_keyboard: [[{ text: '🧭 Маршрут в Яндексе', url: route }]] } : undefined,
+          'events',
         );
         if (ok) report.eventReminders++;
       }
@@ -649,7 +685,8 @@ export default async function handler(req: any, res: any) {
               // Сбор медиа в галерею события — обработчик media_ живёт в вебхуке.
               [{ text: '📸 Прислать фото/видео', callback_data: `media_${(ev as any).id}` }],
             ],
-          }
+          },
+          'digest',
         );
         if (ok) {
           report.feedbackRequests++;
@@ -662,7 +699,7 @@ export default async function handler(req: any, res: any) {
           ]);
           const rateMsg = `🍽 <b>Как тебе еда на «${esc((ev as any).title)}»?</b>\n\n` +
             `Оцени блюда, чтобы мы улучшали меню:`;
-          const rateOk = await send(chatId, rateMsg, { inline_keyboard: dishButtons });
+          const rateOk = await send(chatId, rateMsg, { inline_keyboard: dishButtons }, 'digest');
           if (rateOk) report.feedbackRequests++;
         }
 
@@ -706,7 +743,7 @@ export default async function handler(req: any, res: any) {
             for (const r of realIds(regs || [])) {
               const ok = await send(Number(r.telegram_id), msg, {
                 inline_keyboard: [[{ text: '📤 Позвать друга', callback_data: `share_${(ev as any).id}` }]],
-              });
+              }, 'events');
               if (ok) (report as any).heatPings = ((report as any).heatPings || 0) + 1;
             }
           }

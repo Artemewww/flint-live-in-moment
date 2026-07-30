@@ -298,6 +298,215 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    /**
+     * === PROFILE_FULL: всё для личного кабинета одним запросом ===
+     * Профиль в Mini App открывается по одному тапу, поэтому собираем данные
+     * здесь, а не пятью запросами с клиента (на мобильной сети это заметно).
+     * Новый ФАЙЛ в api/** добавлять нельзя — лимит Hobby 12 функций.
+     */
+    if (action === 'profile_full') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const { data: me } = await supabase
+        .from('members')
+        .select('telegram_id,first_name,username,phone,status,is_core,role,points,gender,dietary,prefs,ref_code,agreed_pd,created_at')
+        .eq('telegram_id', user.id)
+        .maybeSingle();
+
+      // Регистрации + события (двумя запросами: PostgREST-алиасы в embed легко
+      // сломать, а падение join'а тихо отдаёт пустой список).
+      const { data: regs } = await supabase
+        .from('registrations')
+        .select('id,event_id,status,payment_status,payment_amount,attended,guest_count,'
+          + 'has_transport,transport_details,transport_seats,dietary,category,equipment,roles,registered_at')
+        .eq('telegram_id', user.id)
+        .neq('status', 'cancelled')
+        .order('registered_at', { ascending: false });
+
+      const evIds = [...new Set((regs || []).map((r: any) => r.event_id).filter(Boolean))];
+      let evMap: Record<string, any> = {};
+      if (evIds.length) {
+        const { data: evs } = await supabase
+          .from('events')
+          .select('id,title,date,date_end,location,status,type,price_amount,price_label,image')
+          .in('id', evIds);
+        for (const e of evs || []) evMap[(e as any).id] = e;
+      }
+
+      const today = new Date().toISOString().slice(0, 10);
+      const myEvents = (regs || []).map((r: any) => {
+        const ev = evMap[r.event_id] || {};
+        const end = ev.date_end || ev.date || '';
+        return {
+          regId: r.id,
+          eventId: r.event_id,
+          title: ev.title || r.event_id,
+          date: ev.date || null,
+          dateEnd: ev.date_end || null,
+          location: ev.location || null,
+          image: ev.image || null,
+          type: ev.type || null,
+          eventStatus: ev.status || null,
+          priceAmount: ev.price_amount ?? null,
+          priceLabel: ev.price_label || null,
+          regStatus: r.status || 'pending',
+          paymentStatus: r.payment_status || 'pending',
+          paymentAmount: r.payment_amount ?? 0,
+          attended: !!r.attended,
+          guestCount: r.guest_count || 0,
+          hasTransport: !!r.has_transport,
+          transportDetails: r.transport_details || null,
+          transportSeats: r.transport_seats || 0,
+          dietary: r.dietary || null,
+          roles: r.roles || null,
+          equipment: r.equipment || null,
+          registeredAt: r.registered_at || null,
+          upcoming: !!end && end >= today,
+        };
+      });
+
+      // Снаряжение участника + клубное на руках + незакрытые передачи.
+      const { data: myGear } = await supabase
+        .from('member_equipment')
+        .select('id,item,quantity,category,condition,price,photo_url')
+        .eq('telegram_id', user.id)
+        .order('item');
+
+      let transfers: any[] = [];
+      try {
+        const { data: tr } = await supabase
+          .from('equipment_transfers')
+          .select('id,item_name,quantity,status,from_telegram_id,to_telegram_id,created_at')
+          .or(`from_telegram_id.eq.${user.id},to_telegram_id.eq.${user.id}`)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false });
+        transfers = tr || [];
+      } catch { /* таблицы может не быть до миграции */ }
+
+      // Питание: что человек выбрал по событиям (с названиями продуктов).
+      let food: any[] = [];
+      try {
+        const { data: sel } = await supabase
+          .from('food_selections')
+          .select('event_id,product_id,quantity,custom_note')
+          .eq('telegram_id', user.id);
+        const pids = [...new Set((sel || []).map((s: any) => s.product_id))];
+        let pMap: Record<number, any> = {};
+        if (pids.length) {
+          const { data: prods } = await supabase
+            .from('food_products').select('id,name_ru,emoji,unit').in('id', pids);
+          for (const p of prods || []) pMap[(p as any).id] = p;
+        }
+        food = (sel || []).map((s: any) => ({
+          eventId: s.event_id,
+          eventTitle: evMap[s.event_id]?.title || s.event_id,
+          quantity: s.quantity || 1,
+          note: s.custom_note || null,
+          name: pMap[s.product_id]?.name_ru || `#${s.product_id}`,
+          emoji: pMap[s.product_id]?.emoji || '🍽',
+          unit: pMap[s.product_id]?.unit || '',
+        }));
+      } catch { /* таблиц может не быть */ }
+
+      /**
+       * Уведомления. Своей таблицы нет, поэтому берём РЕАЛЬНО отправленные
+       * человеку сообщения из support_messages (direction='out') — их пишет
+       * бот. Плюс ниже клиент добавляет вычисляемые «требует внимания»
+       * (неоплачено / незаполнено), чтобы лента не была пустой у новичка.
+       */
+      let notifications: any[] = [];
+      try {
+        const { data: msgs } = await supabase
+          .from('support_messages')
+          .select('id,direction,text,from_name,created_at')
+          .eq('telegram_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(30);
+        notifications = (msgs || []).map((m: any) => ({
+          id: m.id,
+          kind: m.direction === 'out' ? 'from_club' : 'from_me',
+          text: m.text,
+          author: m.from_name || null,
+          at: m.created_at,
+        }));
+      } catch { /* таблицы может не быть до миграции */ }
+
+      const { count: referralsCount } = await supabase
+        .from('members')
+        .select('telegram_id', { count: 'exact', head: true })
+        .eq('referred_by', user.id);
+
+      const refCode = (me as any)?.ref_code || null;
+      const attended = myEvents.filter((e) => e.attended).length;
+
+      return res.status(200).json({
+        ok: true,
+        profile: {
+          telegramId: user.id,
+          firstName: (me as any)?.first_name || user.first_name || '',
+          username: (me as any)?.username || user.username || '',
+          phone: (me as any)?.phone || '',
+          status: (me as any)?.status || 'pending',
+          isCore: !!(me as any)?.is_core,
+          role: (me as any)?.role || 'member',
+          points: (me as any)?.points || 0,
+          gender: (me as any)?.gender || null,
+          dietary: (me as any)?.dietary || null,
+          agreedPd: !!(me as any)?.agreed_pd,
+          prefs: (me as any)?.prefs || {},
+          memberSince: (me as any)?.created_at || null,
+          refCode,
+          refLink: refCode ? `https://t.me/${BOT_USERNAME}?start=ref_${refCode}` : null,
+          referralsCount: referralsCount || 0,
+          attended,
+          signedUp: myEvents.length,
+        },
+        events: myEvents,
+        equipment: myGear || [],
+        transfers,
+        food,
+        notifications,
+      });
+    }
+
+    /**
+     * === SAVE_SETTINGS: правка своего профиля из личного кабинета ===
+     * Белый список полей — иначе через этот же роут можно было бы поднять себе
+     * status/points/is_core.
+     */
+    if (action === 'save_settings') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const patch: Record<string, unknown> = {};
+      if (typeof body.firstName === 'string' && body.firstName.trim()) {
+        patch.first_name = body.firstName.trim().slice(0, 100);
+      }
+      if (typeof body.phone === 'string') patch.phone = body.phone.trim().slice(0, 40) || null;
+      if (body.gender === 'male' || body.gender === 'female') patch.gender = body.gender;
+      if (['omnivore', 'vegetarian', 'vegan'].includes(body.dietary)) patch.dietary = body.dietary;
+
+      // Настройки уведомлений живут в members.prefs (jsonb) — без миграции.
+      if (body.notifyPrefs && typeof body.notifyPrefs === 'object') {
+        const { data: cur } = await supabase
+          .from('members').select('prefs').eq('telegram_id', user.id).maybeSingle();
+        const prefs: any = (cur as any)?.prefs || {};
+        const allowed = ['events', 'payments', 'logistics', 'digest'];
+        prefs.notify = prefs.notify || {};
+        for (const k of allowed) {
+          if (typeof body.notifyPrefs[k] === 'boolean') prefs.notify[k] = body.notifyPrefs[k];
+        }
+        patch.prefs = prefs;
+      }
+
+      if (!Object.keys(patch).length) return res.status(200).json({ ok: true, saved: false });
+
+      const { error } = await supabase.from('members').update(patch).eq('telegram_id', user.id);
+      if (error) return res.status(200).json({ ok: false, error: error.message });
+      return res.status(200).json({ ok: true, saved: true });
+    }
+
     // === MY_EVENTS (история событий участника) ===
     if (action === 'my_events') {
       const user = verifyInitData(body.initData);
