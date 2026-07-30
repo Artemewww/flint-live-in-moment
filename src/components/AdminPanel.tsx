@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
 import { CommunityEvent, HouseQuality, UserProfile } from '../types';
@@ -1467,8 +1468,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       });
       if (res.status === 401) { handleLogout(); return; }
       if (!res.ok) { setActionMsg({ ok: false, text: 'Не удалось изменить права участника' }); return; }
+      const j = await res.json().catch(() => ({}));
       await loadAudience();
-      setActionMsg({ ok: true, text: 'Права участника обновлены' });
+      /**
+       * Про группы говорим отдельно и честно. Если бот не админ в чате, Telegram
+       * откажет — и забаненный ОСТАНЕТСЯ в группе события. Молчать об этом
+       * нельзя: организатор будет думать, что человек изолирован.
+       */
+      const gk = j?.groupKick;
+      if (gk && gk.groups > 0 && gk.failed?.length) {
+        setActionMsg({
+          ok: false,
+          text: `Права обновлены, но в ${gk.failed.length} из ${gk.groups} групп не сработало — человек мог остаться в чате. Проверь, что бот админ группы. (${gk.failed[0]})`,
+        });
+      } else if (gk && gk.kicked > 0) {
+        setActionMsg({ ok: true, text: `Права обновлены · группы события: ${gk.kicked} из ${gk.groups}` });
+      } else {
+        setActionMsg({ ok: true, text: 'Права участника обновлены' });
+      }
     } catch {
       setActionMsg({ ok: false, text: 'Ошибка сети' });
     }
@@ -1528,9 +1545,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
-  // Тост гаснет сам — чтобы не копился поверх интерфейса.
+  /**
+   * Успех гаснет сам, ОШИБКА — нет. «Человек мог остаться в группе», «рассылка
+   * не ушла» и подобное организатор обязан увидеть и осознанно закрыть: за 4
+   * секунды такое сообщение легко пропустить, а последствия молчаливые.
+   */
   useEffect(() => {
-    if (!actionMsg) return;
+    if (!actionMsg || !actionMsg.ok) return;
     const t = setTimeout(() => setActionMsg(null), 4000);
     return () => clearTimeout(t);
   }, [actionMsg]);
@@ -2080,11 +2101,31 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         </div>
 
         {/* Результат последнего действия — иначе кнопки «молчат» и непонятно, сработали ли */}
-        {actionMsg && (
-          <div className={`px-6 py-2 text-xs flex items-center gap-2 border-b ${actionMsg.ok ? 'bg-brand/10 text-brand border-brand/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/20'}`}>
-            {actionMsg.ok ? <CheckCircle className="w-4 h-4 shrink-0" /> : <XCircle className="w-4 h-4 shrink-0" />}
-            <span>{actionMsg.text}</span>
-          </div>
+        {/* Результат действия — ПОВЕРХ всех оверлеев (аудитория/переписка/
+            приглашения идут на z-[80..85]). Раньше баннер жил в теле панели и
+            прятался под открытой модалкой: сообщение «человек мог остаться в
+            группе» не доходило до организатора вообще.
+            Портал в body обязателен: сама панель создаёт стекинг-контекст, и
+            внутри него никакой z-index не поднимает тост над бэкдропом модалки
+            (проверено — перекрывал `absolute inset-0 bg-black/95`). */}
+        {actionMsg && createPortal(
+          <div className="fixed inset-x-0 top-0 z-[95] flex justify-center px-3 pt-3 pointer-events-none">
+            <div className={`pointer-events-auto max-w-2xl w-full px-4 py-2.5 rounded-xl text-xs flex items-start gap-2 border shadow-2xl backdrop-blur ${actionMsg.ok ? 'bg-[#14210a]/95 text-brand border-brand/30' : 'bg-[#2a0d12]/95 text-rose-300 border-rose-500/40'}`}>
+              {actionMsg.ok ? <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" /> : <XCircle className="w-4 h-4 shrink-0 mt-0.5" />}
+              <span className="leading-snug flex-1">{actionMsg.text}</span>
+              {/* Ошибку закрывает только человек — см. таймер выше. */}
+              {!actionMsg.ok && (
+                <button
+                  onClick={() => setActionMsg(null)}
+                  className="shrink-0 p-0.5 rounded bg-white/10 hover:bg-white/20 border-none cursor-pointer text-rose-200"
+                  title="Понятно, закрыть"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          </div>,
+          document.body,
         )}
 
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">

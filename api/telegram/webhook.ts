@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { handleGroupMessage } from '../_lib/group-handler';
 import { parseEquipment, parseCoordinates, parseTime } from '../_lib/ai-helpers';
 import { CAMPING_CHECKLIST, CAMPING_TIPS, checklistTotal } from '../_lib/camping-checklist';
+import { setGroupBan as banInEventGroups } from '../_lib/group-ban';
 
 /**
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
@@ -637,6 +638,10 @@ function kb(rows: any[]) { return { inline_keyboard: rows }; }
  * ответить ему нечем (см. колбэк 'usreply').
  */
 const REPLY_ROW = [{ text: '✍️ Ответить', callback_data: 'usreply' }];
+
+/** Бан/разбан в группах событий — общий хелпер (см. api/_lib/group-ban.ts). */
+const setGroupBan = (telegramId: number, ban: boolean) =>
+  banInEventGroups(supabase, BOT_TOKEN, telegramId, ban);
 
 /**
  * Доставка сообщения костяку. КРИТИЧНО: раньше всё уходило в единственный
@@ -1982,16 +1987,25 @@ export default async function handler(req: any, res: any) {
         const approve = data.startsWith('approve_');
         const targetId = Number(data.split('_')[1]);
         await supabase.from('members').update({ status: approve ? 'approved' : 'blocked', approved_by: cq.from.id }).eq('telegram_id', targetId);
+        let kickNote = '';
         if (!approve) {
           // Блокировка = полная изоляция: отменяем регистрации (иначе рассылки
-          // по registrations доходят до заблокированного) и убираем кнопку афиши.
+          // по registrations доходят до заблокированного), убираем кнопку афиши
+          // и ВЫКИДЫВАЕМ из Telegram-групп событий — иначе человек продолжает
+          // читать переписку и локации, и это остаётся незамеченным.
           try { await supabase.from('registrations').update({ status: 'cancelled' }).eq('telegram_id', targetId).neq('status', 'cancelled'); } catch { /* no-op */ }
           try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'default' } }); } catch { /* no-op */ }
+          const kick = await setGroupBan(targetId, true);
+          if (kick.failed.length) {
+            kickNote = `\n\n⚠️ Из ${kick.failed.length} из ${kick.groups} групп выкинуть НЕ удалось — человек мог остаться в чате. Сделай бота админом группы.`;
+          } else if (kick.kicked > 0) {
+            kickNote = `\n\n🚪 Выкинут из групп событий: ${kick.kicked}.`;
+          }
         }
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: approve ? 'Принят ✅' : 'Отклонён' });
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text: `${approve ? '✅ Принят в клуб' : '❌ Отклонён'} (id ${targetId}) — решил ${esc(cq.from.first_name || 'костяк')}`,
+          text: `${approve ? '✅ Принят в клуб' : '❌ Отклонён'} (id ${targetId}) — решил ${esc(cq.from.first_name || 'костяк')}${kickNote}`,
         });
         try {
           if (approve) {

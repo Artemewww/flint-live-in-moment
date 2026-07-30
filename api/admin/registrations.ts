@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
+import { setGroupBan as banInEventGroups } from '../_lib/group-ban';
 
 
 const supabase = createClient(
@@ -14,6 +15,13 @@ function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
   const line: any = { t: new Date().toISOString(), level, scope: 'admin/registrations', msg };
   if (err !== undefined) line.err = err?.message || String(err);
   (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+}
+
+/** Бан/разбан в группах событий — общий хелпер (см. api/_lib/group-ban.ts). */
+async function setGroupBan(telegramId: number, ban: boolean) {
+  const r = await banInEventGroups(supabase, BOT_TOKEN, telegramId, ban);
+  if (r.failed.length) slog('warn', `group ${ban ? 'ban' : 'unban'}: часть групп не отработала`, { failed: r.failed });
+  return r;
 }
 
 /** Начисление баллов участнику (read+update, без RPC). Best-effort. */
@@ -379,6 +387,7 @@ export default async function handler(req: any, res: any) {
       // Блокировка = полная изоляция: отменяем активные регистрации (иначе
       // рассылки/напоминания бьют по registrations и доходят до заблокированного)
       // и убираем кнопку афиши из его бота.
+      let groupKick: { groups: number; kicked: number; failed: string[] } | null = null;
       if (body.status === 'blocked') {
         try {
           await supabase.from('registrations').update({ status: 'cancelled' })
@@ -393,8 +402,17 @@ export default async function handler(req: any, res: any) {
             });
           } catch { /* no-op */ }
         }
+        // Последняя дыра в «бан = полная изоляция»: отменённые регистрации и
+        // снятое меню не выкидывают человека из Telegram-ГРУПП событий — он
+        // продолжал читать переписку и локации. Выкидываем из всех активных.
+        groupKick = await setGroupBan(Number(telegramId), true);
       }
-      return res.status(200).json({ success: true });
+      // Разблокировка обязана снимать и бан в группах, иначе человек формально
+      // в клубе, но вернуться в чаты не может — и это молча.
+      if (body.status && body.status !== 'blocked') {
+        groupKick = await setGroupBan(Number(telegramId), false);
+      }
+      return res.status(200).json({ success: true, groupKick });
     } catch (error) {
       return res.status(500).json({ error: (error as Error).message });
     }
