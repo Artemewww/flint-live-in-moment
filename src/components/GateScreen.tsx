@@ -19,21 +19,44 @@ function extractRefCode(raw: string): string {
   return s.replace(/^ref_/, '');
 }
 
-export default function GateScreen({ onPass, onAdmin }: { onPass: () => void; onAdmin?: () => void }) {
+/**
+ * `applyOnly` — экран открыт РАДИ АНКЕТЫ, а не ради кода: человек уже прошёл
+ * визуальный шлюз (по реф-ссылке), но членом клуба ещё не стал, и сервер не
+ * отдаёт ему афишу. Раньше он упирался в «Только для участников» со ссылкой
+ * «Вступить через бот» — анкеты там не было вообще, и путь обрывался.
+ * В этом режиме автопроверку кода не запускаем (она уже проходила и снова
+ * позвала бы onPass), а сразу показываем форму заявки.
+ */
+export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () => void; onAdmin?: () => void; applyOnly?: boolean }) {
   const [input, setInput] = useState('');
-  const [checking, setChecking] = useState(true);
+  const [checking, setChecking] = useState(!applyOnly);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
   // Состояние для формы заявки. `?apply=1` — deep-link из бота («Подать заявку»):
   // бот больше не ведёт свой диалог заявки, а открывает эту форму в Mini App.
   const [showApplyForm, setShowApplyForm] = useState(() => {
+    if (applyOnly) return true;
     try { return new URLSearchParams(window.location.search).get('apply') === '1'; } catch { return false; }
   });
   const [applyName, setApplyName] = useState('');
   const [applyLastName, setApplyLastName] = useState('');
   const [applyPhone, setApplyPhone] = useState('');
-  const [applySource, setApplySource] = useState('');
+  /**
+   * «Откуда узнал» — если человек пришёл по ссылке-приглашению, ответ уже
+   * известен, и спрашивать его второй раз незачем: подставляем код и
+   * показываем поле только тем, кто пришёл сам по себе.
+   */
+  const knownRef = (() => {
+    try {
+      const p = new URLSearchParams(window.location.search).get('ref');
+      if (p) return p;
+      const saved = localStorage.getItem('flint_ref');
+      if (saved) return saved;
+    } catch { /* нет window/localStorage */ }
+    return extractRefCode(getStartParam());
+  })();
+  const [applySource, setApplySource] = useState(knownRef ? `по ссылке-приглашению (код ${knownRef})` : '');
   const [applying, setApplying] = useState(false);
   const [applyError, setApplyError] = useState('');
   const [applySuccess, setApplySuccess] = useState(false);
@@ -75,6 +98,7 @@ export default function GateScreen({ onPass, onAdmin }: { onPass: () => void; on
 
   // Автопроверка: реф из URL/Telegram start_param или членство внутри Telegram.
   useEffect(() => {
+    if (applyOnly) return; // код уже проверен, экран открыт ради анкеты
     (async () => {
       const urlRef = new URLSearchParams(window.location.search).get('ref') || '';
       const startRef = extractRefCode(getStartParam());
@@ -312,12 +336,18 @@ export default function GateScreen({ onPass, onAdmin }: { onPass: () => void; on
                 className="w-full bg-white/5 border border-white/10 focus:border-brand/40 rounded-xl p-3.5 text-white text-sm outline-none transition-colors placeholder:text-white/25"
               />
 
-              <input
-                value={applySource}
-                onChange={(e) => setApplySource(e.target.value)}
-                placeholder="Откуда узнали о клубе? (необязательно)"
-                className="w-full bg-white/5 border border-white/10 focus:border-brand/40 rounded-xl p-3.5 text-white text-sm outline-none transition-colors placeholder:text-white/25"
-              />
+              {knownRef ? (
+                <p className="text-[11px] text-white/45 font-mono bg-white/5 border border-white/10 rounded-xl p-3">
+                  Пришёл по ссылке-приглашению — кто позвал, мы уже знаем.
+                </p>
+              ) : (
+                <input
+                  value={applySource}
+                  onChange={(e) => setApplySource(e.target.value)}
+                  placeholder="Откуда узнали о клубе? (необязательно)"
+                  className="w-full bg-white/5 border border-white/10 focus:border-brand/40 rounded-xl p-3.5 text-white text-sm outline-none transition-colors placeholder:text-white/25"
+                />
+              )}
 
               {applyError && <p className="text-[11px] text-red-400">{applyError}</p>}
 

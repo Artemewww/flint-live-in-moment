@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone
+  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
 import ProgramVoting from './ProgramVoting';
+import CampingChecklist from './CampingChecklist';
 import { getEventGuide } from '../eventGuide';
 
 // --- .ics (self-contained, data-URI) ---
@@ -149,6 +150,8 @@ export default function EventDetailModal({
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
   const [interestSent, setInterestSent] = useState(false);
   const [interestSending, setInterestSending] = useState(false);
+  /** Полный чек-лист клуба — по кнопке, чтобы не растягивать карточку по умолчанию. */
+  const [showChecklist, setShowChecklist] = useState(false);
   const handleInterest = async () => {
     if (interestSending || interestSent) return;
     setInterestSending(true);
@@ -458,7 +461,23 @@ export default function EventDetailModal({
                 ))}
               </div>
               <p className="text-[9px] text-white/40 font-mono uppercase tracking-wider pt-1">По-дружески и по желанию — без обязаловки. Главное: 100% трезвость и открытость.</p>
+              {/* Полный чек-лист клуба: список выше — короткая выжимка под
+                  конкретное событие, а собираться люди хотят по полному. */}
+              <button
+                type="button"
+                onClick={() => setShowChecklist((v) => !v)}
+                className="w-full flex items-center justify-center gap-1.5 py-2.5 mt-1 rounded-xl bg-brand/10 hover:bg-brand/20 border border-brand/25 text-brand text-[10px] font-mono uppercase tracking-widest cursor-pointer"
+              >
+                <Backpack className="w-3.5 h-3.5" />
+                {showChecklist ? 'Скрыть полный чек-лист' : 'Полный чек-лист для кемпинга'}
+              </button>
             </div>
+
+            {showChecklist && (
+              <div className="bg-white/[0.03] border border-white/10 p-3 rounded-2xl">
+                <CampingChecklist defaultOpen />
+              </div>
+            )}
 
             {/* Вектор «Дома Личности» — зачем это */}
             <div className="bg-brand/5 border border-brand/20 p-4 rounded-2xl space-y-1">

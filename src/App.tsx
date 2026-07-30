@@ -5,7 +5,7 @@ import {
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
-import { getInitData, getStartParam } from './telegram';
+import { getInitData, getStartParam, getTelegramUser } from './telegram';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
@@ -170,6 +170,13 @@ export default function App() {
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
+  /** Инициал для аватара в шапке: внутри Telegram личность известна сразу. */
+  const profileInitial = React.useMemo(() => {
+    const name = getTelegramUser()?.first_name || '';
+    return name.trim().charAt(0).toUpperCase() || '?';
+  }, []);
+  /** С какой вкладки открыть профиль (deep-link ?checklist ведёт в «Снаряжение»). */
+  const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'settings'>('overview');
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -191,6 +198,21 @@ export default function App() {
   /** Сервер ответил 403 members_only: не зарегистрирован в клубе — афишу не показываем.
    *  Реф-код больше НЕ открывает афишу (только вступление в боте). */
   const [membersOnly, setMembersOnly] = useState(false);
+  /** Открыть анкету вступления на экране «Только для участников». */
+  const [showApplyForm, setShowApplyForm] = useState(false);
+  /**
+   * Человек пришёл по ссылке-приглашению (код в URL/start_param или уже
+   * сохранён шлюзом). Ему анкету показываем сразу: он не «случайный прохожий»,
+   * его позвал участник, и лишний экран здесь — потерянный человек.
+   */
+  const invitedByRef = React.useMemo(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('ref') || p.get('apply') === '1') return true;
+      if (localStorage.getItem('flint_ref')) return true;
+    } catch { /* нет window/localStorage */ }
+    return /(?:^|_)ref_/.test(getStartParam());
+  }, []);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -275,6 +297,24 @@ export default function App() {
     evDeepLinkDone.current = true;
     setActiveDetailEvent(ev);
   }, [events]);
+
+  /**
+   * Deep-link `?checklist=1` — кнопка «Весь список с галочками» из бота.
+   * Открывает профиль сразу на вкладке «Снаряжение», где живёт чек-лист.
+   */
+  const checklistDeepLinkDone = useRef(false);
+  useEffect(() => {
+    if (checklistDeepLinkDone.current) return;
+    let want = false;
+    try {
+      want = new URLSearchParams(window.location.search).has('checklist');
+    } catch { /* нет window.location */ }
+    if (!want && /(?:^|_)checklist/.test(getStartParam())) want = true;
+    if (!want) return;
+    checklistDeepLinkDone.current = true;
+    setProfileTab('gear');
+    setShowUserStats(true);
+  }, []);
 
   // Статус в клубе: одобрен ли участник. Нужно, чтобы не показывать «верификацию»
   // тем, кто уже внутри (пришёл по реф-ссылке и принят костяком).
@@ -552,20 +592,41 @@ export default function App() {
   // (approved/core через Telegram initData). Реф-код больше НЕ открывает систему —
   // сначала вступление в боте. Кто прошёл визуальный гейт кодом, но не член — сюда.
   if (gateEnabled && membersOnly && !showAdminPanel) {
+    /**
+     * Пришёл по реф-ссылке — сразу анкета, без промежуточного экрана. Это был
+     * ТУПИК: шлюз он проходил (код валидный), но членом клуба ещё не был, и
+     * сервер не отдавал афишу — человек упирался в «Только для участников» со
+     * ссылкой «Вступить через бот», а анкеты там не было вообще.
+     */
+    if (showApplyForm || invitedByRef) {
+      return (
+        <GateScreen
+          applyOnly
+          onPass={() => { setMembersOnly(false); setShowApplyForm(false); }}
+          onAdmin={() => setShowAdminPanel(true)}
+        />
+      );
+    }
     return (
       <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center px-6 text-center overflow-hidden relative">
         <div className="absolute top-0 left-1/4 w-96 h-96 bg-brand/5 rounded-full blur-3xl pointer-events-none" />
         <div className="text-5xl mb-6 relative z-10">🔒</div>
         <h1 className="font-display font-black text-3xl uppercase tracking-tight mb-3 relative z-10">Только для участников</h1>
         <p className="text-sm text-white/60 max-w-sm leading-relaxed font-sans relative z-10">
-          «Живи в моменте» — закрытый клуб. Афишу видят только зарегистрированные участники.
-          Вступление проходит в Telegram-боте: пройди короткие этапы — и афиша откроется здесь автоматически.
+          «Живи в моменте» — закрытый клуб. Афишу видят только участники.
+          Заполни короткую анкету — костяк познакомится и откроет афишу здесь же.
         </p>
+        <button
+          onClick={() => setShowApplyForm(true)}
+          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide relative z-10 border-none cursor-pointer"
+        >
+          Заполнить анкету
+        </button>
         <a
           href="https://t.me/campsflint_bot"
-          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide relative z-10"
+          className="mt-3 text-[11px] text-white/40 hover:text-white/70 transition-colors font-mono relative z-10"
         >
-          Вступить через бот
+          Или написать в бот →
         </a>
         <button
           onClick={() => setShowAdminPanel(true)}
@@ -625,14 +686,32 @@ export default function App() {
             </div>
           </div>
 
-          {/* Mobile hamburger button */}
-          <button
-            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            className="md:hidden p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all cursor-pointer"
-            id="mobile-menu-btn"
-          >
-            {mobileMenuOpen ? <X className="w-5 h-5 text-white" /> : <Menu className="w-5 h-5 text-white" />}
-          </button>
+          {/* Профиль + бургер. Профиль — иконкой в шапке, а не пунктом внутри
+              меню: это вход в личный кабинет, самое частое действие после афиши,
+              и на мобиле он не должен прятаться за бургером. */}
+          <div className="md:hidden flex items-center gap-2">
+            <button
+              onClick={() => setShowUserStats(true)}
+              className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative"
+              id="header-profile-btn"
+              title="Профиль"
+              aria-label="Профиль"
+            >
+              {profileInitial}
+              {activeRegistrations.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-brand text-black font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center">
+                  {activeRegistrations.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all cursor-pointer"
+              id="mobile-menu-btn"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5 text-white" /> : <Menu className="w-5 h-5 text-white" />}
+            </button>
+          </div>
 
           {/* Desktop nav (hidden on mobile) */}
           <div className="hidden md:flex items-center gap-4" id="nav-actions">
@@ -669,13 +748,21 @@ export default function App() {
 
             {/* Профиль участника — доступен всегда: внутри настройки,
                 уведомления, снаряжение и питание, а не только прогресс. */}
+            {/* Профиль — круглой иконкой-аватаром, как принято для личного
+                кабинета: узнаётся без подписи и не тонет в ряду текстовых кнопок. */}
             <button
               onClick={() => setShowUserStats(true)}
-              className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/10 bg-white/5 hover:bg-white/10 hover:text-brand cursor-pointer flex items-center gap-2 font-mono h-10"
+              className="w-10 h-10 shrink-0 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative"
               id="show-user-stats-btn"
+              title="Профиль"
+              aria-label="Профиль"
             >
-              <Trophy className="w-4 h-4 text-brand" />
-              <span>Профиль</span>
+              {profileInitial}
+              {activeRegistrations.length > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 bg-brand text-black font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center">
+                  {activeRegistrations.length}
+                </span>
+              )}
             </button>
 
             {/* Admin Panel button - всегда виден */}
@@ -1122,9 +1209,9 @@ export default function App() {
         />
       )}
 
-      {/* USER STATS MODAL */}
+      {/* ПРОФИЛЬ УЧАСТНИКА */}
       {showUserStats && (
-        <ProfileScreen onClose={() => setShowUserStats(false)} />
+        <ProfileScreen initialTab={profileTab} onClose={() => { setShowUserStats(false); setProfileTab('overview'); }} />
       )}
 
       {/* EVENT POSTER MODAL */}

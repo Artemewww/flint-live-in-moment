@@ -7,6 +7,7 @@ import {
 import { getInitData, isInsideTelegram, haptic } from '../telegram';
 import EquipmentPanel from './EquipmentPanel';
 import FoodSelectionPanel from './FoodSelectionPanel';
+import CampingChecklist from './CampingChecklist';
 
 /**
  * Личный кабинет участника. Акценты сверху вниз (пожелание владельца — «как на
@@ -49,8 +50,8 @@ function fmtWhen(at?: string | null): string {
 
 const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: 'Вегетарианец', vegan: 'Веган' };
 
-export default function ProfileScreen({ onClose }: { onClose: () => void }) {
-  const [tab, setTab] = useState<Tab>('overview');
+export default function ProfileScreen({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
+  const [tab, setTab] = useState<Tab>(initialTab || 'overview');
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
@@ -143,7 +144,13 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
       });
       const j = await res.json();
       if (j.ok) {
-        setMsgText(''); setMsgNote('Отправлено — ответ придёт в бот и сюда'); haptic('success');
+        setMsgText('');
+        // Не обещаем быстрый ответ, если уведомить организаторов не удалось —
+        // сообщение сохранено, но никто о нём пока не знает.
+        setMsgNote(j.notified > 0
+          ? 'Отправлено — ответ придёт в бот и сюда'
+          : 'Сохранено, но организаторов уведомить не удалось. Если срочно — напиши в чат клуба.');
+        haptic('success');
         load(); // подтягиваем своё сообщение в ленту, чтобы было видно, что ушло
       } else { setMsgNote(j.error || 'Не удалось отправить'); haptic('error'); }
     } catch { setMsgNote('Нет связи с сервером'); haptic('error'); }
@@ -256,7 +263,18 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
 
         {/* ── Контент ── */}
         <div className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 pb-[max(1.5rem,env(safe-area-inset-bottom))] space-y-5">
-          {loading && (
+          {/* Чек-лист — статичный список клуба, ему не нужны ни профиль, ни
+              Telegram. Поэтому он ВНЕ проверки загрузки: иначе deep-link
+              ?checklist из бота приводил бы на экран ошибки, если профиль не
+              подтянулся. И сверху — перед выездом им пользуются каждый раз,
+              а учёт снаряжения нужен раз в сезон. */}
+          {tab === 'gear' && (
+            <section>
+              <CampingChecklist />
+            </section>
+          )}
+
+          {loading && tab !== 'gear' && (
             <div className="py-16 flex flex-col items-center gap-3 text-white/40">
               <Loader2 className="w-6 h-6 animate-spin text-brand" />
               <span className="text-[11px] font-mono uppercase tracking-widest">Загружаем профиль…</span>
@@ -392,7 +410,13 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
                         className="w-full bg-black/30 border border-white/10 rounded-xl p-2.5 text-white text-[12px] placeholder:text-white/25 outline-none focus:border-brand/40 resize-none"
                       />
                       <div className="flex items-center justify-between gap-2">
-                        <span className={`text-[9px] font-mono ${/Отправлено/.test(msgNote) ? 'text-brand' : 'text-rose-400'}`}>{msgNote}</span>
+                        {/* «Сохранено, но…» — это предупреждение, а не успех:
+                            красим в янтарный, чтобы не читалось как «всё ок». */}
+                        <span className={`text-[9px] font-mono ${
+                          /^Отправлено/.test(msgNote) ? 'text-brand'
+                            : /^Сохранено/.test(msgNote) ? 'text-amber-300'
+                            : 'text-rose-400'
+                        }`}>{msgNote}</span>
                         <button
                           type="button" onClick={sendMessage} disabled={msgSending || !msgText.trim()}
                           className="shrink-0 bg-brand hover:bg-brand-hover text-black rounded-xl px-3.5 py-2 text-[10px] font-black uppercase tracking-widest cursor-pointer border-none flex items-center gap-1.5 disabled:opacity-40"
@@ -530,6 +554,7 @@ export default function ProfileScreen({ onClose }: { onClose: () => void }) {
               {/* ═══ СНАРЯЖЕНИЕ И ПИТАНИЕ ═══ */}
               {tab === 'gear' && (
                 <>
+
                   {(data.transfers || []).length > 0 && (
                     <section className="space-y-2">
                       <h3 className="text-[9px] font-mono uppercase tracking-widest text-amber-300 flex items-center gap-1.5">

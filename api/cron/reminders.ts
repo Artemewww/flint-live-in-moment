@@ -499,6 +499,9 @@ export default async function handler(req: any, res: any) {
                 `⏰ Точное время сбора — в чате события или у организатора.`,
               { inline_keyboard: [
                 [{ text: '✅ Собираюсь', callback_data: `ack_${(ev as any).id}` }],
+                // Полный чек-лист клуба (~120 пунктов) — короткий список выше
+                // только для памяти, всё остальное там.
+                [{ text: '🎒 Полный чек-лист для кемпинга', callback_data: 'chk_camp' }],
                 // Памятка (правила места, безопасность) — если организатор её заполнил.
                 ...((ev as any).logistics?.prep ? [[{ text: '🎒 Как готовиться', callback_data: `prep_${(ev as any).id}` }]] : []),
               ] }, 'events',

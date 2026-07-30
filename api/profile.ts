@@ -240,8 +240,19 @@ export default async function handler(req: any, res: any) {
               .select('referred_by')
               .eq('telegram_id', user.id)
               .maybeSingle();
-            if (existing && !existing.referred_by) {
-              await supabase.from('members').update({ referred_by: inviter.telegram_id }).eq('telegram_id', user.id);
+            // `!existing` — новичок, который открыл Mini App по ссылке раньше,
+            // чем нажал /start: строки ещё нет, и старое условие `existing &&`
+            // молча теряло привязку реферера.
+            if (!existing || !existing.referred_by) {
+              await supabase.from('members').upsert(
+                {
+                  telegram_id: user.id,
+                  username: user.username || null,
+                  first_name: user.first_name || null,
+                  referred_by: inviter.telegram_id,
+                },
+                { onConflict: 'telegram_id' },
+              );
               try {
                 await supabase.from('referrals').insert({
                   ref_code: ref,
@@ -534,23 +545,39 @@ export default async function handler(req: any, res: any) {
       });
       if (error) return res.status(200).json({ ok: false, error: error.message });
 
-      // Пинг в админ-чат с кнопкой ответа — иначе сообщение с сайта заметят
-      // только когда кто-то откроет админку.
-      const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-      if (adminChatId && BOT_TOKEN) {
+      /**
+       * Уведомляем костяк. НЕ только в админ-чат: если бота из группы убрали
+       * или её id устарел, сообщение видел бы только тот, кто зайдёт в админку.
+       * Поэтому дублируем в личку каждому костяку и возвращаем, дошло ли.
+       */
+      let notified = 0;
+      if (BOT_TOKEN) {
+        const body2 = `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(text.slice(0, 1500))}</i>`;
+        const markup = { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: `reply_${user.id}` }]] };
+        const targets: (string | number)[] = [];
+        const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+        if (adminChatId) targets.push(adminChatId);
         try {
-          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              chat_id: adminChatId, parse_mode: 'HTML',
-              text: `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(text.slice(0, 1500))}</i>`,
-              reply_markup: { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: `reply_${user.id}` }]] },
-            }),
-          });
-        } catch { /* пинг не критичен — сообщение уже в БД */ }
+          const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+          for (const c of core || []) {
+            const id = Number((c as any).telegram_id);
+            if (Number.isFinite(id) && id > 0 && id !== user.id) targets.push(id);
+          }
+        } catch { /* остаётся хотя бы админ-чат */ }
+        for (const chat of targets) {
+          try {
+            const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: chat, parse_mode: 'HTML', text: body2, reply_markup: markup }),
+            });
+            if ((await r.json())?.ok === true) notified += 1;
+          } catch { /* пробуем остальных */ }
+        }
       }
-      return res.status(200).json({ ok: true });
+      // Сообщение уже в БД, поэтому ok:true; но клиенту сообщаем, дошёл ли пинг,
+      // чтобы не обещать быстрый ответ, когда уведомить никого не удалось.
+      return res.status(200).json({ ok: true, notified });
     }
 
     // === MY_EVENTS (история событий участника) ===

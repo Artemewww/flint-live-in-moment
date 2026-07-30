@@ -307,20 +307,27 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5">
-                        Кто пригласил в Клуб? (Ник друга / Код) *
-                      </label>
-                      <input
-                        type="text"
-                        value={inviter}
-                        onChange={(e) => setInviter(e.target.value)}
-                        placeholder="Обязательно укажите резидента"
-                        className="w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
-                        required
-                        disabled={isSubmitting}
-                      />
-                    </div>
+                    {/* Кто пригласил — спрашиваем ОДИН раз, при вступлении.
+                        Участнику клуба этот вопрос на каждой записи на событие
+                        не задаём: ответ уже есть в его профиле. Раньше поле
+                        рисовалось всегда (со звёздочкой), хотя валидация его
+                        для члена клуба и так пропускала. */}
+                    {!isMember && (
+                      <div>
+                        <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-[#E6FD3A] mb-1.5">
+                          Кто пригласил в Клуб? (Ник друга / Код) *
+                        </label>
+                        <input
+                          type="text"
+                          value={inviter}
+                          onChange={(e) => setInviter(e.target.value)}
+                          placeholder="Обязательно укажите резидента"
+                          className="w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
+                          required
+                          disabled={isSubmitting}
+                        />
+                      </div>
+                    )}
 
                     {isClosedEvent && (
                       <div>

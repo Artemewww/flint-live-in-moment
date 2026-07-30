@@ -2,6 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
 import { handleGroupMessage } from '../_lib/group-handler';
 import { parseEquipment, parseCoordinates, parseTime } from '../_lib/ai-helpers';
+import { CAMPING_CHECKLIST, CAMPING_TIPS, checklistTotal } from '../_lib/camping-checklist';
 
 /**
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
@@ -603,7 +604,18 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
   const patch: Record<string, unknown> = { approved_by: inv.telegram_id };
   if (alreadyOnboarded) patch.status = 'approved';
   if (!(me as any)?.referred_by) patch.referred_by = inv.telegram_id;
-  await supabase.from('members').update(patch).eq('telegram_id', from.id);
+  // upsert, а не update: у НОВИЧКА строки в members ещё нет (её создаёт /start
+  // ниже), и update молча менял 0 строк — привязка реферера терялась, приглашение
+  // не засчитывалось пригласившему.
+  await supabase.from('members').upsert(
+    {
+      telegram_id: from.id,
+      username: from.username || null,
+      first_name: from.first_name || null,
+      ...patch,
+    },
+    { onConflict: 'telegram_id' },
+  );
 
   if (!(me as any)?.referred_by) {
     try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch { /* аудит best-effort */ }
@@ -625,6 +637,83 @@ function kb(rows: any[]) { return { inline_keyboard: rows }; }
  * ответить ему нечем (см. колбэк 'usreply').
  */
 const REPLY_ROW = [{ text: '✍️ Ответить', callback_data: 'usreply' }];
+
+/**
+ * Доставка сообщения костяку. КРИТИЧНО: раньше всё уходило в единственный
+ * ADMIN_CHAT_ID (id группы с хардкод-фолбэком). Если бота из группы убрали или
+ * id устарел, `tg()` молча возвращал ok:false — сообщение участника и даже SOS
+ * не видел НИКТО, при этом участнику рапортовалось «✅ отправлено».
+ *
+ * Поэтому: дублируем в личку каждому костяку и возвращаем РЕАЛЬНОЕ число
+ * доставок, чтобы вызывающий мог сказать правду вместо ложного «отправлено».
+ */
+/**
+ * Карточка человека для костяка: имя, @ник, телефон, событие. Телефон и имя —
+ * первое, что нужно, когда человеку плохо; раньше в SOS уходило только имя, и
+ * если телефон не был заполнен, связаться было нечем и это было незаметно.
+ * Поэтому отсутствие телефона печатаем ЯВНО, плюс даём прямую ссылку на чат.
+ */
+async function whoCard(from: any): Promise<string> {
+  const tgId = Number(from?.id);
+  const { data: m } = await supabase
+    .from('members').select('first_name,username,phone').eq('telegram_id', tgId).maybeSingle();
+  const name = (m as any)?.first_name || from?.first_name || 'Участник';
+  const uname = (m as any)?.username || from?.username || '';
+  const phone = (m as any)?.phone
+    ? `📞 <code>${esc((m as any).phone)}</code>`
+    : '📞 <b>телефон не указан</b> — писать в Telegram';
+  // Событие, на котором человек сейчас (идущее или ближайшее) — контекст «где он».
+  let where = '';
+  try {
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: regs } = await supabase
+      .from('registrations').select('event_id').eq('telegram_id', tgId).neq('status', 'cancelled');
+    const ids = (regs || []).map((r: any) => r.event_id).filter(Boolean);
+    if (ids.length) {
+      const { data: evs } = await supabase
+        .from('events').select('id,title,date,date_end,location').in('id', ids).order('date');
+      const cur = (evs || []).find((e: any) => (e.date_end || e.date) >= today);
+      if (cur) where = `\n📍 Событие: <b>${esc((cur as any).title)}</b>${(cur as any).location ? ` (${esc((cur as any).location)})` : ''}`;
+    }
+  } catch { /* контекст не критичен */ }
+  return `<b>${esc(name)}</b>${uname ? ` @${esc(uname)}` : ''} · id <code>${tgId}</code>\n${phone}${where}`;
+}
+
+/** Сигнал SOS костяку. Возвращает число доставок (0 = не узнал никто). */
+async function sendSosAlert(from: any, _chatId: number, detail?: string): Promise<number> {
+  const card = await whoCard(from);
+  const uname = from?.username ? `https://t.me/${from.username}` : null;
+  const rows: any[] = [[{ text: '✍️ Ответить участнику', callback_data: `reply_${from.id}` }]];
+  if (uname) rows.push([{ text: '💬 Открыть чат', url: uname }]);
+  return notifyCore(
+    `🆘🆘 <b>SOS от участника!</b>\n${card}`
+      + (detail ? `\n\n<i>${esc(detail.slice(0, 1500))}</i>` : '\n\n<i>Описание ещё не прислал — свяжись первым.</i>')
+      + '\n\nСрочно свяжись с ним.',
+    kb(rows),
+    Number(from?.id),
+  );
+}
+
+async function notifyCore(text: string, replyMarkup?: unknown, exceptId?: number): Promise<number> {
+  let delivered = 0;
+  const send = async (chat: number | string) => {
+    const r: any = await tg('sendMessage', {
+      chat_id: chat, parse_mode: 'HTML', disable_web_page_preview: true, text, reply_markup: replyMarkup,
+    });
+    if (r?.ok) delivered += 1;
+  };
+  if (ADMIN_CHAT_ID) await send(ADMIN_CHAT_ID);
+  try {
+    const { data } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+    for (const m of data || []) {
+      const id = Number((m as any).telegram_id);
+      // Отрицательный id — веб-заявка без Telegram; себе самому не дублируем.
+      if (!Number.isFinite(id) || id <= 0 || id === exceptId) continue;
+      await send(id);
+    }
+  } catch { /* таблица недоступна — остаётся хотя бы админ-чат */ }
+  return delivered;
+}
 
 // Причины высадки пассажира: короткий код → человекочитаемая формулировка,
 // которую увидит высаженный. «other» — водитель пишет свою причину текстом.
@@ -677,8 +766,12 @@ function mainMenu(admin = false) {
   const rows: any[] = [
     [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
     [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
+    // «Поддержка» обязана быть в меню, а не только внутри «Помощи»: написать
+    // организатору — частое действие, и человек не должен искать, куда нажать.
+    // Чек-лист рядом — им пользуются перед каждым выездом.
+    [{ text: '🎒 Чек-лист' }, { text: '💬 Поддержка' }],
   ];
-  // Пятая кнопка внизу: костяку — панель организатора, участнику — SOS
+  // Нижняя кнопка: костяку — панель организатора, участнику — SOS
   // (экстренный сигнал организаторам всегда под рукой).
   rows.push([{ text: admin ? '⚙️ Панель организатора' : '🆘 SOS' }]);
   return {
@@ -686,6 +779,41 @@ function mainMenu(admin = false) {
     resize_keyboard: true,
     is_persistent: true,
   };
+}
+
+/**
+ * Меню чек-листа для кемпинга. Разделами, а не одним сообщением: полный список
+ * ~120 пунктов не влезает в лимит Telegram (4096 символов) — целиком его можно
+ * посмотреть в Mini App, там же он с галочками.
+ */
+async function sendChecklistMenu(chatId: number, site?: string) {
+  const rows = CAMPING_CHECKLIST.map((s) => [{ text: `${s.emoji} ${s.title}`, callback_data: `chk_${s.key}` }]);
+  rows.push([{ text: `${CAMPING_TIPS.emoji} ${CAMPING_TIPS.title}`, callback_data: 'chk_tips' }]);
+  if (site) rows.push([appBtn('📋 Весь список с галочками', site, { checklist: '1' }) as any]);
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: `🎒 <b>Чек-лист для кемпинга</b>\n\n${checklistTotal()} пунктов в ${CAMPING_CHECKLIST.length} разделах — по нему клуб собирается на каждый выезд.\nВыбери раздел или открой весь список с галочками.`,
+    reply_markup: kb(rows),
+  });
+}
+
+/** Один раздел чек-листа текстом. */
+function checklistSectionText(key: string): string | null {
+  if (key === 'tips') {
+    return `${CAMPING_TIPS.emoji} <b>${esc(CAMPING_TIPS.title)}</b>\n\n`
+      + `За день до поездки зарядите:\n${CAMPING_TIPS.chargeDayBefore.map((t) => `• ${esc(t)}`).join('\n')}\n\n`
+      + `<i>${esc(CAMPING_TIPS.note)}</i>`;
+  }
+  const s = CAMPING_CHECKLIST.find((x) => x.key === key);
+  if (!s) return null;
+  let out = `${s.emoji} <b>${esc(s.title.toUpperCase())}</b>\n`;
+  for (const g of s.groups) {
+    if (g.title) out += `\n<b>${esc(g.title)}</b>\n`;
+    else out += '\n';
+    out += g.items.map((i) => `☐ ${esc(i)}`).join('\n') + '\n';
+  }
+  if (s.tip) out += `\n💡 <i>${esc(s.tip)}</i>`;
+  return out;
 }
 
 /** Приветствие + афиша открытых событий — /start и кнопка «Главная». */
@@ -1486,7 +1614,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -1695,6 +1823,18 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Раздел чек-листа для кемпинга. Отдельным сообщением, а не editMessageText:
+      // меню разделов должно остаться на месте, чтобы открыть следующий.
+      if (data.startsWith('chk_')) {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const body = checklistSectionText(data.slice('chk_'.length));
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: body || 'Раздел не найден.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // Помощь / гайд по боту из профиля.
       if (data === 'helpguide') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -1719,13 +1859,17 @@ export default async function handler(req: any, res: any) {
       }
       if (data === 'sos_alert') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сигнал отправлен' });
-        const { data: meS } = await supabase.from('members').select('first_name,phone,username').eq('telegram_id', tgId).maybeSingle();
-        const who = `${esc((meS as any)?.first_name || cq.from.first_name || 'Участник')}${(meS as any)?.username ? ' @' + esc((meS as any).username) : ''}`;
-        const phone = (meS as any)?.phone ? `\n📞 <code>${esc((meS as any).phone)}</code>` : '';
-        if (ADMIN_CHAT_ID) {
-          try { await tg('sendMessage', { chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML', text: `🆘🆘 <b>SOS от участника!</b>\n${who}${phone}\n\nСрочно свяжись с ним.` }); } catch { /* no-op */ }
-        }
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '✅ Сигнал отправлен организаторам — с тобой свяжутся. Если это угроза жизни — звони <b>112</b>.' });
+        const delivered = await sendSosAlert(cq.from, chatId);
+        // Сразу просим описать, что случилось: по одному «SOS» костяк не знает,
+        // это травма, потерялся человек или сломалась машина.
+        await setSession(tgId, 'sos_text', {});
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: (delivered > 0
+            ? '✅ Сигнал отправлен организаторам — с тобой свяжутся.'
+            : '⚠️ Не смог дозвониться до организаторов через бот. Если это угроза жизни — <b>112</b>, и звони организатору напрямую.')
+            + '\n\n✍️ Напиши одним сообщением, <b>что случилось и где ты</b> — передам сразу.\n\n☎️ Угроза жизни/здоровью — <b>112</b>.',
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -5039,17 +5183,42 @@ export default async function handler(req: any, res: any) {
         if (sess && sess.state === 'admin_reply') {
           await clearSession(msg.from.id);
           const targetId = sess.context.targetId;
-          try {
-            await tg('sendMessage', {
-              chat_id: targetId, parse_mode: 'HTML',
-              text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
-              reply_markup: kb([REPLY_ROW]),
-            });
+          // tg() НЕ бросает (глушит ошибку внутри), поэтому try/catch здесь был
+          // бесполезен: «✅ Ответ отправлен» печаталось даже когда Telegram
+          // отказал. Проверяем ok из ответа API.
+          const sendRes: any = await tg('sendMessage', {
+            chat_id: targetId, parse_mode: 'HTML',
+            text: `💬 <b>Ответ организатора:</b>\n\n${esc(text.slice(0, 2000))}`,
+            reply_markup: kb([REPLY_ROW]),
+          });
+          if (sendRes?.ok) {
             await logSupport(Number(targetId), 'out', text, msg.from.first_name || 'Организатор');
             await tg('sendMessage', { chat_id: chatId, text: '✅ Ответ отправлен.' });
-          } catch {
-            await tg('sendMessage', { chat_id: chatId, text: '⚠️ Не удалось доставить — пользователь мог остановить бота.' });
+          } else {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `⚠️ Не доставлено (${esc(String(sendRes?.description || 'Telegram отказал'))}). Возможно, участник не начинал чат с ботом или остановил его.`,
+            });
           }
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * Описание к SOS. Отдельное состояние, а не support_text: сигнал должен
+         * уйти с пометкой SOS и карточкой человека, иначе костяк не отличит
+         * «плохо стало» от обычного вопроса.
+         */
+        if (sess && sess.state === 'sos_text') {
+          await clearSession(msg.from.id);
+          await logSupport(Number(msg.from.id), 'in', `🆘 SOS: ${text}`,
+            `${msg.from.first_name || ''}${msg.from.username ? ' @' + msg.from.username : ''}`.trim() || `id${msg.from.id}`);
+          const delivered = await sendSosAlert(msg.from, chatId, text);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: delivered > 0
+              ? '✅ Передал организаторам. Оставайся на связи.'
+              : '⚠️ Через бот уведомить не удалось. Звони организатору напрямую, при угрозе жизни — <b>112</b>.',
+          });
           return res.status(200).json({ ok: true });
         }
 
@@ -5057,14 +5226,24 @@ export default async function handler(req: any, res: any) {
           await clearSession(msg.from.id);
           const supAuthor = `${msg.from.first_name || ''}${msg.from.username ? ' @' + msg.from.username : ''}`.trim() || `id${msg.from.id}`;
           await logSupport(Number(msg.from.id), 'in', text, supAuthor);
-          if (ADMIN_CHAT_ID) {
-            await tg('sendMessage', {
-              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
-              text: `💬 <b>Поддержка</b>\nОт: ${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : ''} (id ${msg.from.id})\n\n<i>${esc(text.slice(0, 1500))}</i>`,
-              reply_markup: kb([[{ text: '✍️ Ответить', callback_data: `reply_${msg.from.id}` }]]),
-            });
-          }
-          await tg('sendMessage', { chat_id: chatId, text: '✅ Отправил организаторам. Ответят сюда.' });
+          // Телефон в шапке: костяку почти всегда нужно перезвонить, а идти за
+          // ним в админку — лишний шаг.
+          const { data: supMe } = await supabase
+            .from('members').select('phone').eq('telegram_id', msg.from.id).maybeSingle();
+          const supPhone = (supMe as any)?.phone ? `\n📞 <code>${esc((supMe as any).phone)}</code>` : '\n📞 телефон не указан';
+          const delivered = await notifyCore(
+            `💬 <b>Поддержка</b>\nОт: ${esc(supAuthor)} (id ${msg.from.id})${supPhone}\n\n<i>${esc(text.slice(0, 1500))}</i>`,
+            kb([[{ text: '✍️ Ответить', callback_data: `reply_${msg.from.id}` }]]),
+            msg.from.id,
+          );
+          // Говорим правду: раньше «✅ отправлено» печаталось даже когда сообщение
+          // не ушло никому, и человек молча ждал ответа.
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: delivered > 0
+              ? '✅ Отправил организаторам. Ответят сюда.'
+              : '⚠️ Сообщение сохранено, но уведомить организаторов не удалось. Продублируй в чат клуба, если вопрос срочный.',
+          });
           return res.status(200).json({ ok: true });
         }
 
@@ -5733,6 +5912,18 @@ export default async function handler(req: any, res: any) {
             text: '🆘 <b>Экстренная помощь</b>\n\nЕсли на событии нужна срочная помощь — нажми кнопку, организаторы сразу получат сигнал с твоим именем и контактом.\n\n☎️ Угроза жизни/здоровью — сначала <b>112</b>.',
             reply_markup: kb([[{ text: '🚨 Позвать организатора СЕЙЧАС', callback_data: 'sos_alert' }]]),
           });
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '💬 Поддержка' || text === '💬 Написать в поддержку') {
+          await setSession(msg.from.id, 'support_text', {});
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (text === '🎒 Чек-лист' || text === '/checklist') {
+          await sendChecklistMenu(chatId, siteUrl(req));
           return res.status(200).json({ ok: true });
         }
         if (text === '👤 Мой статус' || text === '👤 Профиль') {
