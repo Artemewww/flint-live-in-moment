@@ -1612,12 +1612,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
       });
+      const j = await res.json();
       if (!res.ok) {
-        setLoginError(res.status === 401 ? 'Неверный пароль' : `Ошибка входа (${res.status})`);
+        setLoginError(j.error || (res.status === 401 ? 'Неверный пароль' : `Ошибка входа (${res.status})`));
         return;
       }
       // Сама сессия — в httpOnly-куке. Здесь только пометка, чтобы не мигать формой.
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
+      // Сохраняем токен для API-запросов (снаряжение, профиль)
+      if (j.token) try { localStorage.setItem('flint_admin_token', j.token); } catch {}
       setIsAuthenticated(true);
       setPassword('');
       // Кука получена — афиша в App теперь доступна, перезагружаем список.

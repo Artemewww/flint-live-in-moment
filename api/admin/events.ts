@@ -301,7 +301,7 @@ export default async function handler(req: any, res: any) {
       await supabase.from('bot_sessions').delete().eq('telegram_id', -Math.abs(h) - 100000);
     } catch { /* no-op */ }
     res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ ok: true, token: ADMIN_SECRET });
   }
   // Вход костяка БЕЗ пароля: по подписанному Telegram initData. Личность
   // доказана подписью бота (неподделываемо), проверяем is_core в members —
@@ -321,7 +321,7 @@ export default async function handler(req: any, res: any) {
       return res.status(403).json({ error: 'Доступ только для костяка клуба' });
     }
     res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true, core: true });
+    return res.status(200).json({ ok: true, core: true, token: ADMIN_SECRET });
   }
   // Вход костяка на ВЕБЕ (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает вход в боте (его личность
