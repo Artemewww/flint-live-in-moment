@@ -85,7 +85,7 @@ export default async function handler(req: any, res: any) {
     try {
       const { data: membersRaw } = await supabase
         .from('members')
-        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at,phone')
+        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at,phone,gender,dietary,prefs')
         .order('points', { ascending: false });
       // Служебные Telegram-боты (анонимный админ группы, каналы, сервис) не участники —
       // не показываем их в аудитории, чтобы список был «чётким» (жалоба владельца).
@@ -128,6 +128,15 @@ export default async function handler(req: any, res: any) {
         referredBy: m.referred_by ? String(m.referred_by) : null,
         referredByName: m.referred_by ? (nameById.get(String(m.referred_by)) || `id ${m.referred_by}`) : null,
         points: m.points || 0,
+        // Данные, которых костяку не хватало для контроля состава:
+        // пол (расселение по палаткам), согласие на фото/видео (закон РБ —
+        // без него нельзя публиковать галерею) и принятие правил клуба.
+        gender: m.gender || null,
+        dietary: m.dietary || null,
+        mediaConsent: m.prefs?.media_consent
+          ? (m.prefs.media_consent.agreed ? 'yes' : 'no')
+          : 'unknown',
+        rulesAccepted: m.prefs?.rules_accepted?.at || null,
         botActive: m.bot_active !== false,
         lastSeenAt: m.last_seen_at,
         createdAt: m.created_at,

@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { ShieldCheck, Ban, Heart, Leaf, Users, Coins, Camera, ListChecks, CheckCircle2, Lock } from 'lucide-react';
 import { CommunityEvent } from '../types';
+import { getInitData } from '../telegram';
 
 /**
  * Строгий поэтапный допуск к записи: перед регистрацией участник ОБЯЗАН
@@ -151,6 +152,18 @@ export default function RegistrationGate({
   const next = () => {
     if (isLast) {
       try { localStorage.setItem(RULES_LS_KEY, '1'); } catch { /* noop */ }
+      // Дублируем факт принятия НА СЕРВЕР. localStorage — только быстрый путь:
+      // он привязан к браузеру, теряется при смене устройства и невидим
+      // костяку, а принятие правил — организационно значимый факт, который
+      // организатор должен видеть в админке.
+      const initData = getInitData();
+      if (initData) {
+        fetch('/api/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'accept_rules', initData, version: RULES_VERSION }),
+        }).catch(() => { /* не блокируем запись на событие */ });
+      }
       onAccept();
       return;
     }

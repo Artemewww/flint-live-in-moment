@@ -1427,6 +1427,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   /** Ручная правка «от кого пришёл»: защита очков (ссылку могли переслать). */
+  /**
+   * Пол по кругу: мужчина → женщина → не указан. Прompt здесь лишний — вариантов
+   * всего три, а заполнять приходится пачкой у легаси-участников.
+   */
+  const cycleGender = async (m: any) => {
+    const next = m.gender === 'male' ? 'female' : m.gender === 'female' ? null : 'male';
+    await patchMember(m.telegramId, { gender: next });
+  };
+
   const editReferrer = async (m: any) => {
     const input = window.prompt(
       `От кого пришёл ${m.firstName || m.username || 'участник'}?\nВведи @ник или Telegram id пригласившего. Пусто — очистить.`,
@@ -1449,7 +1458,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   /** Изменить права участника (костяк/статус/реферер) и обновить список аудитории. */
-  const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string; referredBy?: number | null }) => {
+  const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string; referredBy?: number | null; gender?: string | null }) => {
     try {
       const res = await fetch(`/api/admin/registrations?action=member&telegramId=${telegramId}`, {
         method: 'PATCH',
@@ -3816,6 +3825,30 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             {m.phone && <span>📞 {m.phone}</span>}
                             {m.createdAt && <span>в клубе с {fmtJoinDate(m.createdAt)} ({daysInBot(m.createdAt)} дн)</span>}
                           </div>
+                          {/* Контроль состава: пол нужен для расселения по палаткам,
+                              согласие на фото/видео — чтобы законно публиковать
+                              галерею, правила — чтобы знать, кто их реально принял,
+                              а не проскочил. Незаполненное подсвечиваем. */}
+                          <div className="text-[9px] font-mono mt-1 flex flex-wrap gap-1.5">
+                            <span className={`px-1.5 py-0.5 rounded ${m.gender ? 'bg-white/10 text-white/60' : 'bg-amber-500/15 text-amber-300'}`}>
+                              {m.gender === 'male' ? '♂ мужчина' : m.gender === 'female' ? '♀ женщина' : '⚠ пол не указан'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded ${
+                              m.mediaConsent === 'yes' ? 'bg-brand/15 text-brand'
+                                : m.mediaConsent === 'no' ? 'bg-rose-500/15 text-rose-400'
+                                : 'bg-amber-500/15 text-amber-300'
+                            }`}>
+                              {m.mediaConsent === 'yes' ? '📸 согласие есть' : m.mediaConsent === 'no' ? '📸 запретил съёмку' : '📸 не спрашивали'}
+                            </span>
+                            <span className={`px-1.5 py-0.5 rounded ${m.rulesAccepted ? 'bg-brand/15 text-brand' : 'bg-white/10 text-white/40'}`}>
+                              {m.rulesAccepted ? `📜 правила приняты ${fmtJoinDate(m.rulesAccepted)}` : '📜 правила не приняты'}
+                            </span>
+                            {m.dietary && (
+                              <span className="px-1.5 py-0.5 rounded bg-white/10 text-white/60">
+                                🍽 {m.dietary === 'vegan' ? 'веган' : m.dietary === 'vegetarian' ? 'вегетарианец' : 'всё ест'}
+                              </span>
+                            )}
+                          </div>
                         </div>
                         <div className="text-right shrink-0">
                           <p className="text-brand font-black text-sm">{m.points} 🏅</p>
@@ -3840,6 +3873,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           title="Изменить, от кого пришёл (защита баллов)"
                         >
                           ✎ Реферер
+                        </button>
+                        {/* Пол правим вручную: у легаси-участников его нет, а без
+                            него не разложить по палаткам и не посчитать М/Ж. */}
+                        <button
+                          type="button"
+                          onClick={() => cycleGender(m)}
+                          className={`text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${
+                            m.gender ? 'bg-white/10 text-white/70 hover:bg-white/20' : 'bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+                          }`}
+                          title="Переключить пол: мужчина → женщина → не указан"
+                        >
+                          ✎ Пол
                         </button>
                         <button
                           type="button"

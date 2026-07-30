@@ -519,6 +519,26 @@ export default async function handler(req: any, res: any) {
     }
 
     /**
+     * === ACCEPT_RULES: участник принял кодекс клуба ===
+     * Клиент помнит это в localStorage, но там факт привязан к браузеру,
+     * теряется при смене устройства и невидим костяку. Пишем в members.prefs
+     * (jsonb, без миграции), чтобы админка показывала, кто правила принял.
+     */
+    if (action === 'accept_rules') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const version = String(body.version || 'v1').slice(0, 16);
+      const { data: cur } = await supabase
+        .from('members').select('prefs').eq('telegram_id', user.id).maybeSingle();
+      const prefs: any = (cur as any)?.prefs || {};
+      prefs.rules_accepted = { version, at: new Date().toISOString() };
+      const { error } = await supabase.from('members').update({ prefs }).eq('telegram_id', user.id);
+      if (error) return res.status(200).json({ ok: false, error: error.message });
+      return res.status(200).json({ ok: true });
+    }
+
+    /**
      * === SEND_MESSAGE: участник пишет организаторам ИЗ ПРОФИЛЯ на сайте ===
      * Раньше ответить можно было только в боте, и переписка, начатая
      * организатором, обрывалась: в ленте профиля сообщения видны, а ответить
