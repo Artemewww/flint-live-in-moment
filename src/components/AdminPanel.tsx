@@ -1310,10 +1310,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       const res = await adminFetch('/api/admin/registrations?action=assets');
       if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) { setActionMsg({ ok: false, text: `Ошибка загрузки инвентаря: HTTP ${res.status}` }); return; }
       const j = await res.json();
       setAssets(j.assets || []);
       setAssetsNeedMigration(!!j.needsMigration);
-    } catch { setActionMsg({ ok: false, text: 'Не удалось загрузить инвентарь' }); }
+    } catch (e) { setActionMsg({ ok: false, text: `Не удалось загрузить инвентарь: ${(e as Error).message}` }); }
   };
   const changeAssetHolder = async (a: any) => {
     const holderName = window.prompt(`У кого теперь «${a.name}»? Впиши имя нового держателя.`, a.holderName || '');
@@ -1427,10 +1428,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       const res = await adminFetch('/api/admin/registrations?action=members');
       if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) { setActionMsg({ ok: false, text: `Ошибка загрузки участников: HTTP ${res.status}` }); return; }
       const j = await res.json();
       setAudience(j);
     } catch (e) {
-      setActionMsg({ ok: false, text: 'Не удалось загрузить участников' });
+      setActionMsg({ ok: false, text: `Не удалось загрузить участников: ${(e as Error).message}` });
     }
   };
 
@@ -1439,9 +1441,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     try {
       const res = await adminFetch('/api/admin/registrations?action=conversations');
       if (res.status === 401) { handleLogout(); return; }
+      if (!res.ok) { setActionMsg({ ok: false, text: `Ошибка загрузки переписки: HTTP ${res.status}` }); return; }
       const j = await res.json();
       setConversations(j.conversations || []);
-    } catch { setActionMsg({ ok: false, text: 'Не удалось загрузить переписку' }); }
+    } catch (e) { setActionMsg({ ok: false, text: `Не удалось загрузить переписку: ${(e as Error).message}` }); }
   };
 
   /** Открыть полную ленту одного собеседника. */
@@ -1801,6 +1804,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
   const handleLogout = async () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
+    try { localStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* no-op */ }
     try { await adminFetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
     setIsAuthenticated(false);
     setPassword('');
