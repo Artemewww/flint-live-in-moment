@@ -421,8 +421,9 @@ export default async function handler(req: any, res: any) {
       return res.status(401).json({ error: 'Неверный код' });
     }
     try { await supabase.from('bot_sessions').delete().eq('telegram_id', (m as any).telegram_id).eq('state', 'logincode'); } catch { /* no-op */ }
-    res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true, core: true });
+    const sessVal = sessionValue();
+    res.setHeader('Set-Cookie', sessionCookie(sessVal));
+    return res.status(200).json({ ok: true, core: true, token: sessVal });
   }
   if (req.method === 'POST' && req.query?.action === 'logout') {
     res.setHeader('Set-Cookie', clearCookie());

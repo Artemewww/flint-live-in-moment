@@ -1675,7 +1675,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       // Сама сессия — в httpOnly-куке. Здесь только пометка, чтобы не мигать формой.
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       // Сохраняем токен для API-запросов (снаряжение, профиль)
-      if (j.token) try { localStorage.setItem('flint_admin_token', j.token); } catch {}
+      if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch {}
       setIsAuthenticated(true);
       setPassword('');
       // Кука получена — афиша в App теперь доступна, перезагружаем список.
@@ -1789,6 +1789,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       const j = await res.json().catch(() => ({}));
       if (j.ok) {
         try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* no-op */ }
+        if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch {}
         setIsAuthenticated(true);
         window.dispatchEvent(new Event('flint:events-refetch'));
       } else {
