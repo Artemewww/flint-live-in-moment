@@ -223,7 +223,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
   const save = async () => {
     try {
       // Query-форма (?eventId=) — путь-форма /events/:id на Vercel даёт 404 (нет [id]-роута).
-      const res = await fetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
+      const res = await adminFetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ shopping: { ...event.shopping, items, updated_at: new Date().toISOString() } }),
@@ -236,7 +236,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
   const send = async () => {
     setSending(true);
     try {
-      const res = await fetch(`/api/admin/events?action=shopping_send`, {
+      const res = await adminFetch(`/api/admin/events?action=shopping_send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: event.id, shopping: { ...event.shopping, items } }),
@@ -253,7 +253,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
     if (!items.length) { setErr('Список пуст — сгенерируй или добавь товары'); return; }
     setSending(true); setErr('');
     try {
-      const res = await fetch(`/api/admin/events?action=shopping_launch`, {
+      const res = await adminFetch(`/api/admin/events?action=shopping_launch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: event.id, shopping: { ...event.shopping, items } }),
@@ -351,7 +351,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
           onChange={async (e) => {
             const newBuyerId = e.target.value ? Number(e.target.value) : null;
             try {
-              await fetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
+              await adminFetch(`/api/admin/events?eventId=${encodeURIComponent(event.id)}`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ shopping: { ...event.shopping, buyer_id: newBuyerId } }),
@@ -920,6 +920,30 @@ function buildDateLabel(date: string, dateEnd: string, time: string): string {
 
 /** Сессия админки живёт 12 часов — чтобы не вводить пароль на каждой перезагрузке. */
 const SESSION_KEY = 'flint_admin_session';
+const ADMIN_TOKEN_KEY = 'flint_admin_token';
+
+/**
+ * Запрос к админ-API. ВСЕГДА подставляет `Authorization: Bearer` из
+ * localStorage.
+ *
+ * Почему нельзя полагаться на куку: сессия ставится как `SameSite=Strict`, а
+ * админку открывают ВНУТРИ Telegram Mini App — там страница живёт во встроенном
+ * контексте, запросы считаются сторонними, и такая кука к ним не прикладывается.
+ * Сервер отвечает 401, разделы (аудитория, переписка, инвентарь) просто не
+ * открываются, и по виду это неотличимо от «сломалось».
+ *
+ * Кука при этом остаётся рабочей в обычном браузере — сервер принимает и её,
+ * и Bearer, поэтому заголовок ничего не ломает, а лишь закрывает дыру.
+ * ЕДИНАЯ точка: любые новые вызовы `/api/admin/*` делать через неё, иначе
+ * дыра вернётся в следующем разделе.
+ */
+function adminFetch(input: string, init?: RequestInit): Promise<Response> {
+  let token = '';
+  try { token = localStorage.getItem(ADMIN_TOKEN_KEY) || ''; } catch { /* приватный режим */ }
+  const headers = new Headers(init?.headers || {});
+  if (token && !headers.has('Authorization')) headers.set('Authorization', `Bearer ${token}`);
+  return fetch(input, { ...init, headers });
+}
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 
 function readSession(): boolean {
@@ -1069,7 +1093,7 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
   const refreshStatus = async () => {
     setLiveBusy(true);
     try {
-      const res = await fetch(`/api/admin/events?action=split_status`, {
+      const res = await adminFetch(`/api/admin/events?action=split_status`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: event.id }),
       });
@@ -1082,7 +1106,7 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
     if (!window.confirm('Разослать каждому участнику его долю и кому переводить?')) return;
     setSplitBusy(true); setSplitResult('');
     try {
-      const res = await fetch(`/api/admin/events?action=split_send`, {
+      const res = await adminFetch(`/api/admin/events?action=split_send`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: event.id }),
       });
@@ -1284,7 +1308,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [assetsNeedMigration, setAssetsNeedMigration] = useState(false);
   const loadAssets = async () => {
     try {
-      const res = await fetch('/api/admin/registrations?action=assets');
+      const res = await adminFetch('/api/admin/registrations?action=assets');
       if (res.status === 401) { handleLogout(); return; }
       const j = await res.json();
       setAssets(j.assets || []);
@@ -1295,7 +1319,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     const holderName = window.prompt(`У кого теперь «${a.name}»? Впиши имя нового держателя.`, a.holderName || '');
     if (holderName === null) return;
     try {
-      const res = await fetch(`/api/admin/registrations?action=asset&assetId=${encodeURIComponent(a.id)}`, {
+      const res = await adminFetch(`/api/admin/registrations?action=asset&assetId=${encodeURIComponent(a.id)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ holderName: holderName.trim() }),
       });
@@ -1341,7 +1365,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (!invitingEvent || inviteIds.length === 0 || inviteSending) return;
     setInviteSending(true);
     try {
-      const res = await fetch('/api/admin/broadcast', {
+      const res = await adminFetch('/api/admin/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1401,7 +1425,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Загрузка всей аудитории клуба (эндпоинт ?action=members). */
   const loadAudience = async () => {
     try {
-      const res = await fetch('/api/admin/registrations?action=members');
+      const res = await adminFetch('/api/admin/registrations?action=members');
       if (res.status === 401) { handleLogout(); return; }
       const j = await res.json();
       setAudience(j);
@@ -1413,7 +1437,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Переписка: список диалогов «костяк ↔ участник». */
   const loadConversations = async () => {
     try {
-      const res = await fetch('/api/admin/registrations?action=conversations');
+      const res = await adminFetch('/api/admin/registrations?action=conversations');
       if (res.status === 401) { handleLogout(); return; }
       const j = await res.json();
       setConversations(j.conversations || []);
@@ -1425,7 +1449,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setActiveThread({ telegramId: tid, firstName: name, username, messages: null });
     setReplyText('');
     try {
-      const res = await fetch(`/api/admin/registrations?action=conversation&tid=${encodeURIComponent(tid)}`);
+      const res = await adminFetch(`/api/admin/registrations?action=conversation&tid=${encodeURIComponent(tid)}`);
       if (res.status === 401) { handleLogout(); return; }
       const j = await res.json();
       setActiveThread(j);
@@ -1440,7 +1464,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (Number(tid) <= 0) { setActionMsg({ ok: false, text: 'Веб-заявка без Telegram — ответить нельзя' }); return; }
     setReplySending(true);
     try {
-      const res = await fetch('/api/admin/registrations?action=reply', {
+      const res = await adminFetch('/api/admin/registrations?action=reply', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ telegramId: Number(tid), text }),
       });
@@ -1492,7 +1516,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Изменить права участника (костяк/статус/реферер) и обновить список аудитории. */
   const patchMember = async (telegramId: number, patch: { isCore?: boolean; status?: string; role?: string; referredBy?: number | null; gender?: string | null }) => {
     try {
-      const res = await fetch(`/api/admin/registrations?action=member&telegramId=${telegramId}`, {
+      const res = await adminFetch(`/api/admin/registrations?action=member&telegramId=${telegramId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -1638,7 +1662,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setLoginError('');
     setLoggingIn(true);
     try {
-      const res = await fetch('/api/admin/events?action=login', {
+      const res = await adminFetch('/api/admin/events?action=login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password }),
@@ -1669,7 +1693,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (!initData) { if (!silent) setLoginError('Открой админку внутри Telegram, чтобы войти по подписи.'); return false; }
     if (!silent) { setLoginError(''); setLoggingIn(true); }
     try {
-      const res = await fetch('/api/admin/events?action=login_telegram', {
+      const res = await adminFetch('/api/admin/events?action=login_telegram', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ initData }),
       });
@@ -1716,7 +1740,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       tries++;
       if (tries > 60) { clearInterval(webTgTimer.current); setWebTgPolling(false); setLoginError('Время вышло. Нажми ещё раз и подтверди в боте.'); return; }
       try {
-        const res = await fetch(`/api/admin/events?action=weblogin_check&nonce=${nonce}`);
+        const res = await adminFetch(`/api/admin/events?action=weblogin_check&nonce=${nonce}`);
         if (res.status === 403) { clearInterval(webTgTimer.current); setWebTgPolling(false); setLoginError('Ты не в костяке клуба'); return; }
         const j = await res.json().catch(() => ({}));
         if (j.ok) {
@@ -1740,7 +1764,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (!codeUser.trim()) { setLoginError('Введи свой @ник в Telegram'); return; }
     setLoginError(''); setCodeBusy(true);
     try {
-      const res = await fetch('/api/admin/events?action=request_login_code', {
+      const res = await adminFetch('/api/admin/events?action=request_login_code', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: codeUser.trim() }),
       });
@@ -1753,7 +1777,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (codeVal.replace(/\D/g, '').length !== 6) { setLoginError('Код — 6 цифр'); return; }
     setLoginError(''); setCodeBusy(true);
     try {
-      const res = await fetch('/api/admin/events?action=verify_login_code', {
+      const res = await adminFetch('/api/admin/events?action=verify_login_code', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: codeUser.trim(), code: codeVal.trim() }),
       });
@@ -1771,7 +1795,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
   const handleLogout = async () => {
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
-    try { await fetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
+    try { await adminFetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
     setIsAuthenticated(false);
     setPassword('');
   };
@@ -1785,7 +1809,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     let alive = true;
     const beat = async () => {
       try {
-        const res = await fetch(`/api/admin/events?action=presence&id=${encodeURIComponent(tabId())}&name=${encodeURIComponent(name)}`, {
+        const res = await adminFetch(`/api/admin/events?action=presence&id=${encodeURIComponent(tabId())}&name=${encodeURIComponent(name)}`, {
                   });
         const data = await res.json();
         if (alive && Array.isArray(data.users)) setOnlineAdmins(data.users);
@@ -1808,7 +1832,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   /** Перезагрузить данные события, не сбрасывая активную вкладку. */
   const refreshStats = async (event: CommunityEvent) => {
     try {
-      const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
+      const res = await adminFetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
       // Кука протухла (12 ч) — просим войти заново, а не показываем пустые данные.
       if (res.status === 401) { handleLogout(); return false; }
       if (res.ok) {
@@ -1844,7 +1868,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const patchEvent = async (patch: Record<string, unknown>) => {
     if (!selectedEvent) return;
     try {
-      const res = await fetch(`/api/admin/events?eventId=${encodeURIComponent(selectedEvent.id)}`, {
+      const res = await adminFetch(`/api/admin/events?eventId=${encodeURIComponent(selectedEvent.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -1868,7 +1892,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     if (!selectedEvent) return;
     setBroadcasting(selectedEvent.id);
     try {
-      const res = await fetch('/api/admin/broadcast', {
+      const res = await adminFetch('/api/admin/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: selectedEvent.id, message }),
@@ -1895,7 +1919,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     setBroadcastResult(null);
     try {
       // Рассылка идёт на сервере (токен бота не в браузере, безопасно).
-      const res = await fetch('/api/admin/broadcast', {
+      const res = await adminFetch('/api/admin/broadcast', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ eventId: event.id, audience: toAll ? 'all' : 'event' }),
@@ -1920,7 +1944,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   // Обновить статус/оплату/явку участника и перечитать список.
   const patchRegistration = async (reg: any, patch: Record<string, unknown>) => {
     try {
-      await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+      await adminFetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch),
@@ -2783,7 +2807,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                       body = { hasTransport: false, transportDetails: null, transportSeats: 0 };
                                     }
                                     try {
-                                      const res = await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+                                      const res = await adminFetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
                                         method: 'PATCH',
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify(body),
@@ -2873,7 +2897,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                   onClick={async () => {
                                     if (!window.confirm(`Удалить участника ${reg.name}? Действие необратимо.`)) return;
                                     try {
-                                      const res = await fetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
+                                      const res = await adminFetch(`/api/admin/registrations?registrationId=${encodeURIComponent(reg.id)}`, {
                                         method: 'DELETE',
                                                                       });
                                       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -3044,7 +3068,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           if (!window.confirm(`Отправить список машин ${needsRide.length} участникам без транспорта?`)) return;
                           setBroadcasting(selectedEvent.id);
                           try {
-                            const res = await fetch(`/api/admin/events?action=rides_send`, {
+                            const res = await adminFetch(`/api/admin/events?action=rides_send`, {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ eventId: selectedEvent.id }),
@@ -3983,7 +4007,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             if (reason.trim()) {
                               if (!window.confirm(`Удалить пользователя ${m.firstName || m.username} навсегда с отправкой причины? Он сможет заново зарегистрироваться.`)) return;
                               try {
-                                const res = await fetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
+                                const res = await adminFetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
                                   method: 'DELETE',
                                   headers: { 'Content-Type': 'application/json' },
                                   body: JSON.stringify({ reason: reason.trim() }),
@@ -4006,7 +4030,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           onClick={async () => {
                             if (!window.confirm(`Удалить пользователя ${m.firstName || m.username} навсегда БЕЗ пояснения? Он сможет заново зарегистрироваться.`)) return;
                             try {
-                              const res = await fetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
+                              const res = await adminFetch(`/api/admin/registrations?action=member&telegramId=${m.telegramId}`, {
                                 method: 'DELETE',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({}),
@@ -4713,7 +4737,7 @@ function EditEventModal({ event, onClose, onSave }: {
             onClick={async () => {
               setProgBusy(true);
               try {
-                const res = await fetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
+                const res = await adminFetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`);
                 const j = await res.json();
                 const regs: any[] = j.registrations || [];
                 const roster = regs

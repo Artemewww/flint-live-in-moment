@@ -532,11 +532,24 @@ export default function App() {
     alert('Сессия админки истекла — войди заново (кнопка «Админ» → пароль). Твои данные не потеряны, просто повтори сохранение после входа.');
     window.location.reload();
   };
+  /**
+   * Токен админки к запросу. Кука сессии — `SameSite=Strict`, а панель
+   * открывают внутри Telegram Mini App, где страница во встроенном контексте и
+   * такая кука не прикладывается: сервер отвечает 401, и сохранение события
+   * выглядит как «сессия истекла». Сервер принимает и куку, и Bearer.
+   */
+  const adminAuthHeaders = (base: Record<string, string> = {}): Record<string, string> => {
+    try {
+      const t = localStorage.getItem('flint_admin_token');
+      if (t) return { ...base, Authorization: `Bearer ${t}` };
+    } catch { /* приватный режим */ }
+    return base;
+  };
   const adminSaveEvent = async (ev: CommunityEvent, isNew: boolean) => {
     try {
       const res = await fetch('/api/admin/events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(ev),
       });
       if (res.status === 401) { handleAdminExpired(); return; }
@@ -557,7 +570,7 @@ export default function App() {
   };
   const adminDeleteEvent = async (eventId: string) => {
     try {
-      const res = await fetch(`/api/admin/events?eventId=${eventId}`, { method: 'DELETE' });
+      const res = await fetch(`/api/admin/events?eventId=${eventId}`, { method: 'DELETE', headers: adminAuthHeaders() });
       if (res.status === 401) { handleAdminExpired(); return; }
       if (!res.ok) {
         alert(`Не удалось удалить событие: HTTP ${res.status}`);

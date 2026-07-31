@@ -255,7 +255,10 @@ function validSession(value: string): boolean {
 function isAdmin(req: any): boolean {
   if (!ADMIN_SECRET) return false;
   const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
-  if (bearer && safeEq(bearer, ADMIN_SECRET)) return true;
+  // ADMIN_SECRET — для крона/curl. Браузер и Mini App шлют СЕССИОННЫЙ токен
+  // (тот же exp.mac, что в куке): в Mini App кука SameSite=Strict не доходит,
+  // поэтому заголовок — единственный рабочий путь.
+  if (bearer && (safeEq(bearer, ADMIN_SECRET) || validSession(bearer))) return true;
   const cookie = readCookie(req, ADMIN_COOKIE);
   return !!cookie && validSession(cookie);
 }
@@ -270,10 +273,20 @@ function passwordMatches(password: string): boolean {
   return !!ADMIN_SECRET && safeEq(String(password || ''), ADMIN_SECRET);
 }
 
-function sessionCookie(): string {
+/**
+ * Значение сессии: `exp.mac`, подписано ADMIN_SECRET и живёт 12 часов.
+ * Именно ЕГО отдаём клиенту как токен для `Authorization: Bearer` — сам
+ * ADMIN_SECRET наружу не выпускаем: он бессрочный и открывает все админ-роуты,
+ * а из localStorage его может забрать любой XSS. Сессионный токен протухает.
+ */
+function sessionValue(): string {
   const exp = Date.now() + ADMIN_TTL_MS;
   const mac = crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex');
-  return `${ADMIN_COOKIE}=${encodeURIComponent(`${exp}.${mac}`)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ADMIN_TTL_MS / 1000}`;
+  return `${exp}.${mac}`;
+}
+
+function sessionCookie(value = sessionValue()): string {
+  return `${ADMIN_COOKIE}=${encodeURIComponent(value)}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${ADMIN_TTL_MS / 1000}`;
 }
 
 function clearCookie(): string {
@@ -300,8 +313,14 @@ export default async function handler(req: any, res: any) {
       let h = 0; for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
       await supabase.from('bot_sessions').delete().eq('telegram_id', -Math.abs(h) - 100000);
     } catch { /* no-op */ }
-    res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true, token: ADMIN_SECRET });
+    // Кука и токен — ОДНО значение сессии: в обычном браузере работает кука, а
+    // в Mini App (SameSite=Strict её не пропускает) клиент шлёт тот же токен
+    // заголовком.
+    {
+      const sess = sessionValue();
+      res.setHeader('Set-Cookie', sessionCookie(sess));
+      return res.status(200).json({ ok: true, token: sess });
+    }
   }
   // Вход костяка БЕЗ пароля: по подписанному Telegram initData. Личность
   // доказана подписью бота (неподделываемо), проверяем is_core в members —
@@ -320,8 +339,11 @@ export default async function handler(req: any, res: any) {
     if (!m || (m as any).is_core !== true) {
       return res.status(403).json({ error: 'Доступ только для костяка клуба' });
     }
-    res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true, core: true, token: ADMIN_SECRET });
+    {
+      const sess = sessionValue();
+      res.setHeader('Set-Cookie', sessionCookie(sess));
+      return res.status(200).json({ ok: true, core: true, token: sess });
+    }
   }
   // Вход костяка на ВЕБЕ (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает вход в боте (его личность

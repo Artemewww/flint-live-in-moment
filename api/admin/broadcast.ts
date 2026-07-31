@@ -57,7 +57,10 @@ function validSession(value: string): boolean {
 function isAdmin(req: any): boolean {
   if (!ADMIN_SECRET) return false;
   const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
-  if (bearer && safeEq(bearer, ADMIN_SECRET)) return true;
+  // ADMIN_SECRET — для крона/curl. Браузер и Mini App шлют СЕССИОННЫЙ токен
+  // (тот же exp.mac, что в куке): в Mini App кука SameSite=Strict не доходит,
+  // поэтому заголовок — единственный рабочий путь.
+  if (bearer && (safeEq(bearer, ADMIN_SECRET) || validSession(bearer))) return true;
   const cookie = readCookie(req, ADMIN_COOKIE);
   return !!cookie && validSession(cookie);
 }
