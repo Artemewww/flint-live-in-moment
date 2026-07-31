@@ -1273,6 +1273,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [broadcastResult, setBroadcastResult] = useState<{eventId: string, success: boolean, message: string} | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<CommunityEvent | null>(null);
   const [eventStats, setEventStats] = useState<any>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<'overview' | 'participants' | 'logistics' | 'settings'>('overview');
   const [showTemplates, setShowTemplates] = useState(false);
   /** Дата события при создании из шаблона (§12.1: выбор пресета → дата → событие). */
@@ -2332,9 +2333,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
             );})}
           </div>
 
-          {/* Event Details Panel. На мобильном без выбранного события панель-заглушку
+            {/* Event Details Panel. На мобильном без выбранного события панель-заглушку
               скрываем — иначе она отбирала половину высоты у списка мероприятий. */}
           <div className={`flex-1 overflow-y-auto p-4 md:p-6 min-h-0 ${selectedEvent ? 'block' : 'hidden md:block'}`}>
+            {/* Кнопка «← Все события» — всегда видна, если выбрано событие */}
+            {selectedEvent && (
+              <button
+                onClick={() => { setSelectedEvent(null); setEventStats(null); }}
+                className="mb-3 flex items-center gap-1 text-xs text-white/60 hover:text-white bg-white/5 rounded-lg px-3 py-2 cursor-pointer border-none"
+              >
+                ← Все события
+              </button>
+            )}
             {!selectedEvent ? (
               (() => {
                 const today = new Date().toISOString().slice(0, 10);
