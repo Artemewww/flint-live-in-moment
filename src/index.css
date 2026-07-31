@@ -34,3 +34,16 @@ html, body {
   max-width: 100%;
   overflow-x: clip; /* clip надёжнее hidden: не создаёт скролл-контекст, но режет вылезающее вправо */
 }
+
+/* iOS Safari/Telegram WebView автоматически зумит страницу при фокусе на
+   поле, если у него font-size < 16px — почти все инпуты в проекте на
+   text-sm/text-xs (14/12px). Форсируем 16px именно в момент фокуса, чтобы
+   не увеличивать все поля визуально (переопределяли бы дизайн), а просто
+   убрать триггер зума. */
+@media screen and (max-width: 768px) {
+  input:focus,
+  select:focus,
+  textarea:focus {
+    font-size: 16px !important;
+  }
+}

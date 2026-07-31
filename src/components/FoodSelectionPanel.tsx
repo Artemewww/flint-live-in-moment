@@ -24,7 +24,7 @@ interface FoodSelection {
   custom_note?: string;
 }
 
-export default function FoodSelectionPanel({ eventId, telegramId }: { eventId?: string; telegramId?: number }) {
+export default function FoodSelectionPanel({ eventId, telegramId, eventTitle }: { eventId?: string; telegramId?: number; eventTitle?: string }) {
   const [categories, setCategories] = useState<FoodCategory[]>([]);
   const [selections, setSelections] = useState<FoodSelection[]>([]);
   const [loading, setLoading] = useState(true);
@@ -108,6 +108,9 @@ export default function FoodSelectionPanel({ eventId, telegramId }: { eventId?: 
           </span>
         )}
       </div>
+      <p className="text-[11px] text-white/40 leading-relaxed -mt-2">
+        Отметь, что из общего списка возьмёшь с собой{eventTitle ? <> на «<span className="text-white/60">{eventTitle}</span>»</> : ' на ближайший выезд'} — костяк видит, что уже закрыто, и не дублирует закупку.
+      </p>
 
       {/* Search */}
       <div className="relative">
