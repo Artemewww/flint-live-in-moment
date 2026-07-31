@@ -430,6 +430,37 @@ function LogisticsEditor({ value, onChange, event }: { value: any; onChange: (v:
       </div>
       <input value={v.returnInfo || ''} onChange={(e) => set('returnInfo', e.target.value)} placeholder="Обратная дорога (напр. ~22:00 обратно к метро)" className={inp} />
       <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
+
+      {/* Мед-показания — НЕ прячем за кнопку «Как готовиться»: человек с
+          противопоказанием обязан увидеть их ДО записи, а не после. */}
+      <label className="text-[10px] text-white/40 uppercase font-mono block pt-1">🩺 Мед-показания: кому нельзя / с чем осторожно</label>
+      <textarea
+        value={v.medical || ''}
+        onChange={(e) => set('medical', e.target.value)}
+        placeholder={'Напр.: голодание не подходит при диабете и беременности; баня — при давлении и сердце.\nПоказывается прямо в карточке события, до кнопки записи.'}
+        rows={2}
+        className={inp}
+      />
+
+      {/* Короткие предупреждения-флаги: они меняют не подготовку, а ожидания. */}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {[
+          { k: 'detox', l: '📵 Цифровой детокс (без телефонов)' },
+          { k: 'nosignal', l: '📡 Плохая связь / нет интернета' },
+        ].map((f) => {
+          const on = !!v[f.k];
+          return (
+            <button
+              key={f.k}
+              type="button"
+              onClick={() => set(f.k, !on)}
+              className={`px-3 py-2 rounded-xl border text-xs font-mono transition-colors cursor-pointer ${on ? 'border-[#E6FD3A]/60 text-[#E6FD3A] bg-[#E6FD3A]/10' : 'border-white/10 text-white/40 bg-transparent'}`}
+            >
+              {on ? '✓ ' : '– '}{f.l}
+            </button>
+          );
+        })}
+      </div>
       {/* Памятка: правила места, юридика, безопасность, снаряжение. Бот показывает
           кнопкой «Как готовиться» и прикладывает к чек-листу за день до выезда. */}
       <div className="flex items-center justify-between pt-1">

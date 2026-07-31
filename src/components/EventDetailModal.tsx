@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack
+  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
@@ -183,6 +183,11 @@ export default function EventDetailModal({
   const [showChecklist, setShowChecklist] = useState(false);
   /** Онлайн-событие: часть блоков (сборы, маршрут, чек-лист) для него бессмысленна. */
   const isOnline = event.notifications?._format === 'online';
+  /** Предупреждения из логистики: здоровье и условия на месте. */
+  const logi: any = event.logistics || {};
+  const medicalNote = String(logi.medical || '').trim();
+  const isDetox = !!logi.detox;
+  const isNoSignal = !!logi.nosignal;
   const handleInterest = async () => {
     if (interestSending || interestSent) return;
     setInterestSending(true);
@@ -519,6 +524,35 @@ export default function EventDetailModal({
               <div className="text-sm font-bold text-white">{guide.vector.title}</div>
               <p className="text-xs text-white/70 leading-relaxed">{guide.vector.text}</p>
             </div>
+
+            {/* Мед-показания — рядом с порогом входа и ДО кнопки записи:
+                человеку с противопоказанием нужно увидеть их раньше, чем он
+                решит участвовать, а не в памятке после регистрации. */}
+            {medicalNote && (
+              <div className="bg-rose-500/5 border border-rose-500/20 p-4 rounded-2xl flex gap-3.5 items-start">
+                <HeartPulse className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <span className="text-rose-400 text-[10px] tracking-wider font-mono block uppercase font-bold">Кому нельзя / с чем осторожно</span>
+                  <p className="text-xs text-white/80 leading-relaxed font-sans whitespace-pre-wrap">{medicalNote}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Условия, меняющие ожидания: телефон и связь планируют заранее. */}
+            {(isDetox || isNoSignal) && (
+              <div className="flex flex-wrap gap-2">
+                {isDetox && (
+                  <span className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3 py-2">
+                    📵 Цифровой детокс — событие без телефонов
+                  </span>
+                )}
+                {isNoSignal && (
+                  <span className="text-[11px] text-amber-200 bg-amber-500/10 border border-amber-500/25 rounded-xl px-3 py-2">
+                    📡 Связи и интернета на месте почти нет — предупреди близких
+                  </span>
+                )}
+              </div>
+            )}
 
             {/* Hard Entry Threshold */}
             <div className="bg-rose-500/5 border border-rose-500/20 p-4 rounded-2xl flex gap-3.5 items-start">
