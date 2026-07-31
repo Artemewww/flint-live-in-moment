@@ -89,26 +89,55 @@ function WeatherBlock({ event }: { event: CommunityEvent }) {
   useEffect(() => {
     if (!lat || !lng) return;
     const start = event.date;
-    const end = event.dateEnd || event.date;
+    const eventEnd = event.dateEnd || event.date;
     const today = getToday();
     if (!start || start < today) return;
     const daysAhead = (new Date(`${start}T00:00:00`).getTime() - new Date(`${today}T00:00:00`).getTime()) / 86400000;
     if (daysAhead > 15) return; // open-meteo прогноз ~16 дней
+    /**
+     * Показываем НЕДЕЛЮ, а не только дни события: по одному столбику
+     * (однодневный выезд) нельзя понять тенденцию — похолодает или разгуляется,
+     * а от этого зависит, что класть в рюкзак. Дни самого события подсвечиваем
+     * отдельно, чтобы неделя не читалась как «событие на 7 дней».
+     */
+    // Считаем в UTC: `new Date('...T00:00:00')` берёт ЛОКАЛЬНУЮ полночь, а
+    // toISOString() переводит обратно в UTC — при часовом поясе UTC+3 дата
+    // уезжала на день назад, и неделя выходила шестидневной.
+    const plus = (iso: string, n: number) => {
+      const d = new Date(`${iso}T00:00:00Z`);
+      d.setUTCDate(d.getUTCDate() + n);
+      return d.toISOString().slice(0, 10);
+    };
+    const weekEnd = plus(start, 6);
+    const end = eventEnd > weekEnd ? eventEnd : weekEnd;
     const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,weathercode&timezone=auto&start_date=${start}&end_date=${end}`;
     fetch(url).then((r) => r.json()).then(setData).catch(() => {});
   }, [lat, lng, event.date, event.dateEnd]);
 
   if (!data?.daily?.time?.length) return null;
   const d = data.daily;
-  const maxRain = Math.max(...((d.precipitation_probability_max as number[]) || [0]));
+  /**
+   * Дождь считаем ТОЛЬКО по дням события. Раньше окно совпадало с событием, но
+   * теперь лента недельная — максимум по ней предупреждал бы «возьми дождевик»
+   * из-за ливня через пять дней после возвращения.
+   */
+  const evEnd = event.dateEnd || event.date;
+  const rainOnEventDays = (d.time as string[])
+    .map((t, i) => (t >= event.date && t <= evEnd ? (d.precipitation_probability_max?.[i] ?? 0) : 0));
+  const maxRain = Math.max(0, ...rainOnEventDays);
   return (
     <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2.5">
-      <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold">🌦 Погода на даты</span>
+      <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold">🌦 Погода на неделю</span>
       <div className="flex gap-2 overflow-x-auto scrollbar-none">
         {(d.time as string[]).map((t, i) => {
           const w = WMO[d.weathercode[i]] || { icon: '🌡', label: '' };
+          // Дни самого события — акцентом, остальная неделя приглушена:
+          // иначе семидневная лента читается как «событие на неделю».
+          const isEventDay = t >= event.date && t <= (event.dateEnd || event.date);
           return (
-            <div key={t} className="shrink-0 bg-black/25 border border-white/5 rounded-xl px-3 py-2 text-center min-w-[74px]">
+            <div key={t} className={`shrink-0 rounded-xl px-3 py-2 text-center min-w-[74px] border ${
+              isEventDay ? 'bg-brand/10 border-brand/30' : 'bg-black/25 border-white/5 opacity-70'
+            }`}>
               <div className="text-[10px] text-white/50">{new Date(`${t}T00:00:00`).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}</div>
               <div className="text-xl leading-tight my-0.5" title={w.label}>{w.icon}</div>
               <div className="text-xs font-bold text-white">{Math.round(d.temperature_2m_max[i])}°<span className="text-white/40">/{Math.round(d.temperature_2m_min[i])}°</span></div>
