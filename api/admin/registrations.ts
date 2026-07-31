@@ -1,7 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
-import { setGroupBan as banInEventGroups } from '../_lib/group-ban';
-
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
@@ -17,11 +15,39 @@ function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
   (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
 }
 
-/** Бан/разбан в группах событий — общий хелпер (см. api/_lib/group-ban.ts). */
+/**
+ * Бан/разбан человека во ВСЕХ Telegram-группах событий.
+ * Дублировано из api/_lib/group-ban.ts — Vercel не включает файлы из папок
+ * с префиксом «_» в бандл serverless-функции, импорт роняет MODULE_NOT_FOUND.
+ */
 async function setGroupBan(telegramId: number, ban: boolean) {
-  const r = await banInEventGroups(supabase, BOT_TOKEN, telegramId, ban);
-  if (r.failed.length) slog('warn', `group ${ban ? 'ban' : 'unban'}: часть групп не отработала`, { failed: r.failed });
-  return r;
+  const out = { groups: 0, kicked: 0, failed: [] as string[] };
+  if (!BOT_TOKEN || !Number.isFinite(telegramId) || telegramId <= 0) return out;
+  let chats: number[] = [];
+  try {
+    const { data } = await supabase.from('event_groups').select('chat_id').eq('active', true);
+    chats = Array.from(new Set((data || [])
+      .map((g: any) => Number(g.chat_id))
+      .filter((c: number) => Number.isFinite(c) && c !== 0)));
+  } catch { return out; }
+  out.groups = chats.length;
+  const method = ban ? 'banChatMember' : 'unbanChatMember';
+  for (const chatId of chats) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, user_id: telegramId, ...(ban ? {} : { only_if_banned: true }) }),
+      });
+      const j = await r.json();
+      if (j?.ok) out.kicked += 1;
+      else out.failed.push(`${chatId}: ${j?.description || 'отказ Telegram'}`);
+    } catch (e) {
+      out.failed.push(`${chatId}: ${(e as Error).message}`);
+    }
+  }
+  if (out.failed.length) slog('warn', `group ${ban ? 'ban' : 'unban'}: часть групп не отработала`, { failed: out.failed });
+  return out;
 }
 
 /** Начисление баллов участнику (read+update, без RPC). Best-effort. */
