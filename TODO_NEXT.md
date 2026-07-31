@@ -6,128 +6,62 @@
 
 ---
 
-## 🔥 Критичные задачи
+## ✅ Сделано на сессии 31.07.2026
 
-### 1. Убрать хардкод-пароль из фронтенда
+### 1. Исправлена кнопка "Вступить через бот" (не перенаправляла)
+**Файл**: `src/App.tsx` (строка ~639)
+**Проблема**: Ссылка `https://t.me/campsflint_bot` вела на бота без deep-link параметра. Пользователь попадал в бота, но не понимал что делать дальше.
+**Решение**: Добавлен параметр `?start=apply` — теперь бот сразу открывает анкету вступления.
 
-**Файл**: `src/admin/AdminLayout.tsx`
+### 2. Исправлена аудитория клуба (не работала)
+**Файлы**: `src/components/AdminPanel.tsx`, `api/admin/events.ts`
+**Проблема**: При входе через Telegram (`handleTelegramLogin`) токен сессии не сохранялся в `localStorage`. Функция `adminFetch` не могла аутентифицировать запросы к `/api/admin/registrations?action=members` — сервер возвращал 401.
+**Решение**: 
+- В `handleTelegramLogin` добавлено сохранение `j.token` в `localStorage` (ключ `flint_admin_token`)
+- В `handleWebTelegramLogin` добавлено сохранение `j.token` в `localStorage`
+- Сервер `weblogin_check` теперь возвращает `token` в ответе (раньше только ставил куку)
 
-**Проблема**: Пароль админки хранится в коде (`password === "строка"`), виден в публичном бандле.
+### 3. Исправлена переписка (не работала)
+**Файлы**: те же, что и для аудитории
+**Проблема**: Та же — отсутствие токена в `localStorage` → `adminFetch` → 401.
+**Решение**: То же — токен теперь сохраняется при любом способе входа.
 
-**Что делать**:
-```typescript
-// Было:
-if (password === "hardcoded_password") { ... }
-
-// Должно быть:
-const response = await fetch('/api/admin/login', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  credentials: 'include', // чтобы кука сохранилась
-  body: JSON.stringify({ password })
-});
-
-if (response.ok) {
-  const { expiresAt } = await response.json();
-  setIsAuthenticated(true);
-}
-```
-
-**Результат**: Пароль проверяется только на сервере, фронтенд получает подписанную куку.
+### 4. Исправлен инвентарь (не отображался)
+**Файлы**: те же, что и для аудитории
+**Проблема**: Та же — отсутствие токена в `localStorage` → `adminFetch` → 401.
+**Решение**: То же — токен теперь сохраняется при любом способе входа.
 
 ---
 
+## 🔥 Критичные задачи (остались)
+
+### 1. Убрать хардкод-пароль из фронтенда
+**Файл**: `src/admin/AdminLayout.tsx` (если существует) или проверить `AdminPanel.tsx`
+**Проблема**: Пароль админки может храниться в коде, виден в публичном бандле.
+**Что делать**: Проверить, что пароль проверяется только на сервере через `/api/admin/events?action=login`.
+
 ### 2. Добавить rate-limiting к `/api/admin/login`
-
-**Файл**: `api/admin/login.ts`
-
-**Что делать**:
-```typescript
-import { isRateLimited, getClientIp } from './_lib/ratelimit';
-
-// В начале handler():
-const clientIp = getClientIp(req);
-if (isRateLimited(`admin-login:${clientIp}`, 3, 60 * 60 * 1000)) {
-  return res.status(429).json({ 
-    error: 'Слишком много попыток входа. Попробуйте через час.' 
-  });
-}
-```
-
-**Результат**: Защита от брутфорса (3 попытки в час).
+**Файл**: `api/admin/events.ts`
+**Что делать**: Rate-limiting уже реализован в `login` и `login_telegram` (3 и 8 попыток соответственно). Проверить работу.
 
 ---
 
 ## ⚠️ Важные задачи
 
 ### 3. Применить rate-limiting к публичным действиям
-
 **Файлы**: `api/events.ts` (actions: vote, interest, feedback)
-
-**Что делать**:
-```typescript
-// В handleVote(), handleInterest(), handleFeedback():
-const clientIp = getClientIp(req);
-if (isRateLimited(`vote:${clientIp}`, 10, 60 * 60 * 1000)) {
-  return res.status(429).json({ error: 'Слишком много запросов' });
-}
-```
-
-**Лимиты**:
-- `vote`: 10 голосов/час
-- `interest`: 5 кликов/час
-- `feedback`: 3 отзыва/час
-
----
+**Что делать**: Rate-limiting уже частично реализован. Проверить и дополнить.
 
 ### 4. Структурированное логирование
-
 **Цель**: Заменить разрозненные `console.log()` на единый формат.
-
 **Создать**: `api/_lib/logger.ts`
-
-```typescript
-export function log(level: 'INFO' | 'WARN' | 'ERROR', message: string, meta?: any) {
-  const timestamp = new Date().toISOString();
-  console.log(JSON.stringify({ timestamp, level, message, ...meta }));
-}
-
-// Использование:
-log('INFO', 'Registration created', { userId: 123, eventId: 'camp-summer' });
-log('ERROR', 'Database error', { error: err.message });
-```
-
-**Применить в**: `api/register.ts`, `api/events.ts`, `api/telegram/webhook.ts`.
-
----
+**Статус**: Не сделано.
 
 ### 5. Проверить работу на staging
-
 **Команды**:
-
 ```bash
-# 1. Проверить, что легаси-код не импортируется
 cd /Users/artdementiev/Desktop/00_Проекты/flint-live-in-moment
-grep -r "from.*bot/" api/ src/
-
-# 2. Задеплоить на Vercel
 vercel --prod
-
-# 3. Проверить rate-limiting
-for i in {1..6}; do
-  curl -X POST https://your-domain.vercel.app/api/register \
-    -H "Content-Type: application/json" \
-    -d '{"eventId":"test","name":"Test","telegram":"@test"}' \
-    -w "\n%{http_code}\n"
-done
-# Ожидаем: 200 200 200 200 200 429
-
-# 4. Проверить админ-вход
-curl -X POST https://your-domain.vercel.app/api/admin/login \
-  -H "Content-Type: application/json" \
-  -d '{"password":"wrong"}' \
-  -w "\nTime: %{time_total}s\n"
-# Ожидаем: 401 через ~1 секунду (задержка против брутфорса)
 ```
 
 ---
@@ -135,76 +69,25 @@ curl -X POST https://your-domain.vercel.app/api/admin/login \
 ## 💡 Желательные задачи
 
 ### 6. Unit-тесты для utils
-
 **Файл**: `api/_lib/telegram.test.ts`
+**Статус**: Не сделано.
 
-```typescript
-import { verifyInitData, idFromHandle, escapeHtml } from './telegram';
-
-describe('verifyInitData', () => {
-  it('should reject invalid signature', () => {
-    const result = verifyInitData('hash=fake&user={}', 'BOT_TOKEN');
-    expect(result).toBeNull();
-  });
-});
-
-describe('idFromHandle', () => {
-  it('should generate stable negative ID', () => {
-    const id1 = idFromHandle('testuser');
-    const id2 = idFromHandle('testuser');
-    expect(id1).toBe(id2);
-    expect(id1).toBeLessThan(0);
-  });
-});
-```
-
-**Запуск**: `npm test` (настроить Jest/Vitest в `package.json`).
+### 7. Мониторинг ошибок (Sentry / Vercel Analytics)
+**Статус**: Не сделано.
 
 ---
 
-### 7. Мониторинг ошибок
-
-**Цель**: Отслеживать баги в production.
-
-**Варианты**:
-- **Sentry**: `npm install @sentry/node`, добавить в `api/*.ts`
-- **LogRocket**: для записи сессий пользователей
-- **Vercel Analytics**: встроенный дашборд
-
-**Пример** (Sentry):
-```typescript
-import * as Sentry from '@sentry/node';
-
-Sentry.init({ dsn: process.env.SENTRY_DSN });
-
-try {
-  // ваш код
-} catch (error) {
-  Sentry.captureException(error);
-  throw error;
-}
-```
-
----
-
-## 📁 Структура изменённых файлов
+## 📁 Структура изменённых файлов (сессия 31.07.2026)
 
 ```
-api/
-├── _lib/               # Новые общие модули
-│   ├── telegram.ts     # ✅ Утилиты Telegram API
-│   ├── ratelimit.ts    # ✅ Rate limiting
-│   └── logger.ts       # TODO: создать
-├── admin/
-│   └── login.ts        # ✅ Серверный вход в админку
-├── register.ts         # ✅ Обновлён (utils + rate-limit)
-└── events.ts           # ✅ Обновлён (utils)
-
-bot.legacy/             # ✅ Архив устаревшего кода
-└── README_LEGACY.md
-
-IMPROVEMENTS.md         # ✅ Полная документация улучшений
-TODO_NEXT.md            # ✅ Этот файл
+api/admin/
+├── events.ts            # ✅ weblogin_check возвращает token
+src/components/
+├── AdminPanel.tsx       # ✅ handleTelegramLogin сохраняет token
+│                        # ✅ handleWebTelegramLogin сохраняет token
+src/
+├── App.tsx              # ✅ Кнопка "Вступить через бот" → ?start=apply
+TODO_NEXT.md             # ✅ Этот файл (обновлён)
 ```
 
 ---
@@ -220,16 +103,23 @@ TODO_NEXT.md            # ✅ Этот файл
 3. **Отсутствие логов в production**  
    → Подключить Sentry или настроить Vercel Log Drains
 
+4. **Таблица `club_assets`** может отсутствовать в БД  
+   → Накатить миграцию `supabase/migrations/2026-club-assets.sql`
+
+5. **Таблица `support_messages`** может отсутствовать в БД  
+   → Накатить миграцию `supabase/migrations/2026-support-messages.sql`
+
 ---
 
 ## ✅ Чеклист готовности к деплою
 
-- [ ] Фронтенд (`src/admin/AdminLayout.tsx`) использует `/api/admin/login`
-- [ ] Rate-limiting добавлен в `/api/admin/login` и `/api/events`
+- [x] Фронтенд сохраняет токен при входе через Telegram
+- [x] Сервер `weblogin_check` возвращает токен
+- [x] Кнопка "Вступить через бот" ведёт на `?start=apply`
 - [ ] Все тесты проходят (`npm test`)
 - [ ] Проверен staging (`vercel --prod`)
 - [ ] `ADMIN_TOKEN` установлен в Vercel Environment Variables
-- [ ] `bot.legacy/` не импортируется нигде в коде
+- [ ] Миграции `club_assets` и `support_messages` накатаны в Supabase
 
 ---
 

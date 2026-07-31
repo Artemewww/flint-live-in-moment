@@ -366,10 +366,11 @@ export default async function handler(req: any, res: any) {
     }
     const { data: m } = await supabase.from('members').select('is_core').eq('telegram_id', (sess as any).telegram_id).maybeSingle();
     if (!m || (m as any).is_core !== true) return res.status(403).json({ error: 'not_core' });
-    // Успех — одноразово гасим сессию и выдаём куку.
+    // Успех — одноразово гасим сессию и выдаём куку + токен.
     try { await supabase.from('bot_sessions').delete().eq('telegram_id', (sess as any).telegram_id).eq('state', 'weblogin'); } catch { /* no-op */ }
-    res.setHeader('Set-Cookie', sessionCookie());
-    return res.status(200).json({ ok: true, core: true });
+    const sessVal = sessionValue();
+    res.setHeader('Set-Cookie', sessionCookie(sessVal));
+    return res.status(200).json({ ok: true, core: true, token: sessVal });
   }
   // «Забыли пароль» — вход по одноразовому коду из Telegram (OTP, как у Telegram).
   // Шаг 1: костяк вводит свой @ник → бот присылает 6-значный код ему в личку.

@@ -636,7 +636,7 @@ export default function App() {
           Заполнить анкету
         </button>
         <a
-          href="https://t.me/campsflint_bot"
+          href="https://t.me/campsflint_bot?start=apply"
           className="mt-3 text-[11px] text-white/40 hover:text-white/70 transition-colors font-mono relative z-10"
         >
           Или написать в бот →

@@ -1702,7 +1702,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         if (!silent) setLoginError(res.status === 403 ? 'Ты не в костяке клуба' : 'Подпись Telegram не подтверждена');
         return false;
       }
+      const j = await res.json().catch(() => ({}));
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
+      // Сохраняем токен для API-запросов — без него аудитория, переписка и инвентарь не работают.
+      if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch {}
       setIsAuthenticated(true);
       window.dispatchEvent(new Event('flint:events-refetch'));
       return true;
@@ -1747,6 +1750,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           clearInterval(webTgTimer.current);
           setWebTgPolling(false);
           try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* no-op */ }
+          // Сохраняем токен для API-запросов — без него аудитория, переписка и инвентарь не работают.
+          if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch {}
           setIsAuthenticated(true);
           window.dispatchEvent(new Event('flint:events-refetch'));
         }
