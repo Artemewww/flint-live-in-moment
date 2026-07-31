@@ -1832,8 +1832,10 @@ export default async function handler(req: any, res: any) {
        * обрывалась на первом же ответе. Технически это тот же support_text.
        */
       if (data === 'usreply') {
-        await setSession(tgId, 'support_text', {});
+        // answerCallbackQuery ДО setSession: если сессия упадёт (БД не готова),
+        // кнопка всё равно ответит и не зависнет с часиками.
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        try { await setSession(tgId, 'support_text', {}); } catch { /* сессия best-effort */ }
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text: '✍️ Напиши ответ одним сообщением — передам организаторам.',
