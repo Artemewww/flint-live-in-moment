@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { Calendar, Gift, Users, X, Plus, Lock, Bot } from 'lucide-react';
-import { isAuthorized } from '../telegram';
+import { isAuthorized, openBot } from '../telegram';
 
 interface Birthday {
   id: string;
@@ -204,15 +204,14 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
                   Откройте сайт через бота <strong className="text-brand">@campsflint_bot</strong>, чтобы увидеть дни рождения.
                 </p>
               </div>
-              <a
-                href="https://t.me/campsflint_bot"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-black px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all"
+              <button
+                type="button"
+                onClick={() => openBot('https://t.me/campsflint_bot')}
+                className="inline-flex items-center gap-2 bg-brand hover:bg-brand-hover text-black px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all border-none cursor-pointer"
               >
                 <Bot className="w-4 h-4" />
                 Открыть в боте
-              </a>
+              </button>
             </div>
           )}
 

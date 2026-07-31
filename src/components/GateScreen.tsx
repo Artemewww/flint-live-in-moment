@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Lock, KeyRound, ArrowRight, Loader2, UserPlus, X, CheckCircle } from 'lucide-react';
 import { LogoMain } from './VectorIcons';
-import { getInitData, getStartParam, haptic } from '../telegram';
+import { getInitData, getStartParam, haptic, openBot } from '../telegram';
 import { submitClubApplication } from '../api';
 
 /**
@@ -168,14 +168,13 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
           <p className="text-sm text-white/50 leading-relaxed mb-6">
             Если вы считаете, что это ошибка, обратитесь в поддержку.
           </p>
-          <a
-            href="https://t.me/campsflint_bot"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-block bg-white/10 hover:bg-white/20 text-white font-mono text-xs uppercase tracking-widest py-3 px-6 rounded-xl transition-all"
+          <button
+            type="button"
+            onClick={() => openBot('https://t.me/campsflint_bot')}
+            className="inline-block bg-white/10 hover:bg-white/20 text-white font-mono text-xs uppercase tracking-widest py-3 px-6 rounded-xl transition-all border-none cursor-pointer"
           >
             Написать в поддержку →
-          </a>
+          </button>
         </motion.div>
       </div>
     );
@@ -290,14 +289,13 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
               </button>
             </div>
 
-            <a
-              href="https://t.me/campsflint_bot"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-block mt-4 text-[11px] text-white/40 hover:text-brand transition-colors font-mono"
+            <button
+              type="button"
+              onClick={() => openBot('https://t.me/campsflint_bot')}
+              className="inline-block mt-4 text-[11px] text-white/40 hover:text-brand transition-colors font-mono bg-transparent border-none cursor-pointer"
             >
               Написать в бот →
-            </a>
+            </button>
           </>
         ) : (
           <>

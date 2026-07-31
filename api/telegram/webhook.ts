@@ -6037,6 +6037,18 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        // Кнопка «Поддержка» из Mini App (t.me/bot?start=support) — в приложении
+        // не было ни одной кнопки для связи с костяком после регистрации,
+        // участник упирался в тупик. Доступно всем, даже до вступления.
+        if (payload === 'support') {
+          await setSession(msg.from.id, 'support_text', {});
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '💬 <b>Поддержка</b>\n\nОпиши вопрос одним сообщением — передам организаторам. Ответ придёт сюда.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
         let invitedIn = false;
         let invitedBy = false;   // ссылка была, но пригласивший сам не в клубе

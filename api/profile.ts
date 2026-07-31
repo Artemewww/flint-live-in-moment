@@ -76,6 +76,20 @@ function escHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Синтетический id для заявок без Telegram (сайт вне Mini App): `telegram_id`
+ * в members — PRIMARY KEY NOT NULL, upsert без него падает. Тот же приём,
+ * что в api/register.ts (idFromHandle) — детерминированный отрицательный id
+ * по телефону, чтобы повторная заявка с тем же номером не плодила дубли.
+ */
+function idFromHandle(handle: string): number {
+  let hash = 0;
+  for (let i = 0; i < handle.length; i++) {
+    hash = (hash * 31 + handle.charCodeAt(i)) | 0;
+  }
+  return -Math.abs(hash) - 1;
+}
+
 // Базовый чек-лист продуктов по категориям
 const FOOD_CATEGORIES = [
   { name: 'Мясо и птица', items: ['Курица', 'Говядина', 'Свинина', 'Индейка', 'Фарш', 'Колбаса/сосиски', 'Бекон', 'Печень'] },
@@ -666,10 +680,14 @@ export default async function handler(req: any, res: any) {
       }
 
       const user = verifyInitData(body.initData);
-      const telegramId: number | null = user ? user.id : null;
+      // Заявка с сайта вне Telegram (обычный браузер) не даёт настоящий id —
+      // telegram_id тут PRIMARY KEY NOT NULL, поэтому синтезируем свой.
+      const telegramId: number = user ? user.id : idFromHandle(phone);
+
       const refCode = Math.random().toString(36).slice(2, 9);
 
       const memberData: any = {
+        telegram_id: telegramId,
         first_name: firstName,
         last_name: lastName || null,
         phone,
@@ -677,15 +695,12 @@ export default async function handler(req: any, res: any) {
         ref_code: refCode,
         source_hint: sourceHint || 'website',
         agreed_pd: true,
+        username: user?.username || null,
       };
-      if (telegramId) {
-        memberData.telegram_id = telegramId;
-        memberData.username = user?.username || null;
-      }
 
       const { error } = await supabase.from('members').upsert(
         memberData,
-        { onConflict: telegramId ? 'telegram_id' : undefined }
+        { onConflict: 'telegram_id' }
       );
 
       if (error) {
@@ -694,7 +709,7 @@ export default async function handler(req: any, res: any) {
 
       const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
       if (adminChatId && BOT_TOKEN) {
-        const msg = `📋 <b>Новая заявка на вступление</b>\n\nИмя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId ? `\nTelegram ID: ${telegramId}` : ''}\n\n/approve_${refCode} — одобрить`;
+        const msg = `📋 <b>Новая заявка на вступление</b>\n\nИмя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId > 0 ? `\nTelegram ID: ${telegramId}` : '\n(заявка с сайта, без Telegram)'}\n\n/approve_${refCode} — одобрить`;
         try {
           await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
             method: 'POST',

@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
-  Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle, 
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu
+  Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle,
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
-import { getInitData, getStartParam, getTelegramUser } from './telegram';
+import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
@@ -635,12 +635,13 @@ export default function App() {
         >
           Заполнить анкету
         </button>
-        <a
-          href="https://t.me/campsflint_bot?start=apply"
-          className="mt-3 text-[11px] text-white/40 hover:text-white/70 transition-colors font-mono relative z-10"
+        <button
+          type="button"
+          onClick={() => openBot('https://t.me/campsflint_bot?start=apply')}
+          className="mt-3 text-[11px] text-white/40 hover:text-white/70 transition-colors font-mono relative z-10 bg-transparent border-none cursor-pointer"
         >
           Или написать в бот →
-        </a>
+        </button>
         <button
           onClick={() => setShowAdminPanel(true)}
           className="mt-4 text-[11px] text-white/30 hover:text-white/70 transition-colors font-mono bg-transparent border-none cursor-pointer relative z-10"
@@ -662,12 +663,13 @@ export default function App() {
           Ваш доступ к афише сообщества сейчас закрыт. Если это недоразумение — напишите
           организатору в Telegram, и мы разберёмся.
         </p>
-        <a
-          href="https://t.me/campsflint_bot"
-          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide"
+        <button
+          type="button"
+          onClick={() => openBot('https://t.me/campsflint_bot')}
+          className="mt-8 px-6 py-3 rounded-full bg-[#E6FD3A] text-black font-black text-sm uppercase tracking-wide border-none cursor-pointer"
         >
           Написать организатору
-        </a>
+        </button>
       </div>
     );
   }
@@ -809,16 +811,24 @@ export default function App() {
               </button>
             )}
 
-            <a
-              href="https://t.me/campsflint_bot"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="bg-brand hover:bg-brand-hover text-black px-4.5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-2 cursor-pointer font-bold h-10 shadow-lg shadow-brand/10 hover:shadow-brand/20 active:scale-98"
+            <button
+              type="button"
+              onClick={() => openBot('https://t.me/campsflint_bot?start=support')}
+              title="Написать в поддержку"
+              className="bg-white/5 hover:bg-white/10 border border-white/10 text-white w-10 h-10 rounded-xl flex items-center justify-center cursor-pointer transition-all shrink-0"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openBot('https://t.me/campsflint_bot')}
+              className="bg-brand hover:bg-brand-hover text-black px-4.5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-2 cursor-pointer font-bold h-10 shadow-lg shadow-brand/10 hover:shadow-brand/20 active:scale-98 border-none"
               id="tg-bot-main-btn"
             >
               <span>В Бот</span>
               <span className="font-mono text-[9px] text-black/50 hidden sm:inline">@campsflint_bot</span>
-            </a>
+            </button>
           </div>
 
           {/* Mobile menu overlay */}
@@ -885,16 +895,23 @@ export default function App() {
                   </button>
                 )}
 
-                <a
-                  href="https://t.me/campsflint_bot"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full bg-brand hover:bg-brand-hover text-black px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 font-bold shadow-lg shadow-brand/10"
-                  onClick={() => setMobileMenuOpen(false)}
+                <button
+                  type="button"
+                  className="w-full bg-brand hover:bg-brand-hover text-black px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 font-bold shadow-lg shadow-brand/10 border-none cursor-pointer"
+                  onClick={() => { openBot('https://t.me/campsflint_bot'); setMobileMenuOpen(false); }}
                 >
                   <span>В Бот</span>
                   <span className="font-mono text-[9px] text-black/50">@campsflint_bot</span>
-                </a>
+                </button>
+
+                <button
+                  type="button"
+                  className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
+                  onClick={() => { openBot('https://t.me/campsflint_bot?start=support'); setMobileMenuOpen(false); }}
+                >
+                  <MessageCircle className="w-4 h-4 text-brand" />
+                  Поддержка
+                </button>
               </div>
             </div>
           )}
@@ -954,7 +971,7 @@ export default function App() {
             <div className="flex gap-4 font-black">
               <button onClick={() => setShowManifestoModal(true)} className="hover:underline bg-transparent border-none text-black p-0 cursor-pointer uppercase tracking-wider font-mono font-bold">СПИСОК ВЕКТОРОВ</button>
               <span>•</span>
-              <a href="https://t.me/campsflint_bot" className="hover:underline">ВСТУПИТЬ В БОТ</a>
+              <button type="button" onClick={() => openBot('https://t.me/campsflint_bot')} className="hover:underline bg-transparent border-none p-0 cursor-pointer uppercase font-mono">ВСТУПИТЬ В БОТ</button>
             </div>
           </div>
         </div>
@@ -1081,14 +1098,13 @@ export default function App() {
               >
                 Вернуться на главную
               </button>
-              <a
-                href="https://t.me/campsflint_bot"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all text-center flex items-center justify-center gap-1 shadow-md shadow-brand/10 hover:shadow-brand/20 cursor-pointer"
+              <button
+                type="button"
+                onClick={() => openBot('https://t.me/campsflint_bot')}
+                className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all text-center flex items-center justify-center gap-1 shadow-md shadow-brand/10 hover:shadow-brand/20 cursor-pointer border-none"
               >
                 Запустить бот
-              </a>
+              </button>
             </div>
           </div>
         </div>
