@@ -911,11 +911,13 @@ function mainMenu(admin = false) {
   // Костяку — третий ряд с быстрым входом в панель организатора.
   const rows: any[] = [
     [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
-    [{ text: '👤 Профиль' }, { text: '❓ Помощь' }],
-    // «Поддержка» обязана быть в меню, а не только внутри «Помощи»: написать
-    // организатору — частое действие, и человек не должен искать, куда нажать.
-    // Чек-лист рядом — им пользуются перед каждым выездом.
-    [{ text: '🎒 Чек-лист' }, { text: '💬 Поддержка' }],
+    // «Помощь» → «Как это работает»: старое название путали с «Поддержкой»
+    // (обе выглядели как «куда написать, если что-то не так»). Чек-лист убран
+    // отсюда — он общий для всего клуба, а не под конкретное событие, здесь
+    // как отдельная кнопка не нужен (/checklist и раздел в карточке события
+    // остаются). «Поддержка» — отдельной строкой, частое действие.
+    [{ text: '👤 Профиль' }, { text: 'ℹ️ Как это работает' }],
+    [{ text: '💬 Поддержка' }],
   ];
   // Нижняя кнопка: костяку — панель организатора, участнику — SOS
   // (экстренный сигнал организаторам всегда под рукой).
@@ -963,18 +965,26 @@ function checklistSectionText(key: string): string | null {
 }
 
 /** Приветствие + афиша открытых событий — /start и кнопка «Главная». */
+/** Прошедшее событие не должно попадать в списки/карточки — по dateEnd, если есть, иначе date (то же правило, что в архиве). */
+function isUpcomingEvent(ev: any, today: string): boolean {
+  return (ev.date_end || ev.date || '') >= today;
+}
+
+/** Текстовая строка-кнопка на событие (без фото) — открывает Mini App сразу на карточке. */
+function eventRow(ev: any, site: string) {
+  return [{ text: `${ev.title} · ${whenPhrase(ev.date)}`, web_app: { url: `${site}/?ev=${encodeURIComponent(ev.id)}` } }];
+}
+
 async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
   const site = openBtn?.web_app?.url || '';
-  const { data: evs } = await supabase
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: raw } = await supabase
     .from('events')
-    .select('id,title,date,location,image,telegram_image')
+    .select('id,title,date,date_end,location,image,telegram_image')
     .eq('status', 'open')
     .order('date', { ascending: true })
-    .limit(6);
-  // На входе — компактно: 2 ближайшие афиши, не список текстовых кнопок.
-  const CARD_LIMIT = 2;
-  const cards = (evs || []).slice(0, CARD_LIMIT);
-  const rest = (evs || []).length - cards.length;
+    .limit(12);
+  const evs = (raw || []).filter((e: any) => isUpcomingEvent(e, today));
 
   // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
   const tailRows: any[][] = [];
@@ -986,28 +996,34 @@ async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
     parse_mode: 'HTML',
     text:
       '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
-      'Живая афиша трезвого сообщества.' + (cards.length ? ' Ближайшее — ниже 👇' : ''),
-    reply_markup: cards.length ? undefined : { inline_keyboard: tailRows },
+      'Живая афиша трезвого сообщества.' + (evs.length ? ' Ближайшее — ниже 👇' : ''),
+    reply_markup: evs.length ? undefined : { inline_keyboard: tailRows },
   });
-  for (const ev of cards) {
-    await sendEventCard(chatId, ev, site);
-  }
-  if (cards.length) {
-    await tg('sendMessage', {
-      chat_id: chatId, parse_mode: 'HTML',
-      text: rest > 0 ? `Ещё ${rest} — в афише:` : 'Вся программа и фильтры — в афише:',
-      reply_markup: { inline_keyboard: tailRows },
-    });
-  }
+  if (!evs.length) return;
+
+  // Только ОДНА афиша с фото (самая ближайшая) — дальше текстом, без картинок,
+  // чтобы список не превращался в очередь фото-сообщений.
+  const [first, ...rest] = evs;
+  await sendEventCard(chatId, first, site);
+  const nextFew = rest.slice(0, 4);
+  const more = rest.length - nextFew.length;
+  const rows = nextFew.map((e: any) => eventRow(e, site));
+  rows.push(...tailRows);
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML',
+    text: !nextFew.length ? 'Вся программа и фильтры — в афише:' : (more > 0 ? `Ещё ${more} — в афише:` : 'Ещё ближайшее:'),
+    reply_markup: kb(rows),
+  });
 }
 
 /**
  * Карточка одного события: афиша (фото) + короткая подпись + кнопка
  * «Подробнее» (открывает Mini App сразу на карточке события). Раньше список
  * событий был ОДНИМ сообщением с текстовыми кнопками-строками — владелец
- * попросил вместо этого афишу-картинку под каждое событие, как в «Позвать
- * друга» (share_), но короче: без длинного текста, только заголовок/дата/
- * место, подробности — уже в Mini App.
+ * попросил вместо этого афишу-картинку под событие, как в «Позвать друга»
+ * (share_), но короче: без длинного текста, только заголовок/дата/место,
+ * подробности — уже в Mini App. С фото — только САМОЕ БЛИЖАЙШЕЕ событие,
+ * остальные — текстовой строкой (eventRow), чтобы не спамить фото-карточками.
  */
 async function sendEventCard(chatId: number, ev: any, site: string, extraButtons: any[][] = []) {
   const telegramImage = ev.telegram_image || ev.telegramImage || '';
@@ -1032,9 +1048,14 @@ async function sendEventCard(chatId: number, ev: any, site: string, extraButtons
   }
 }
 
-/** «Мои события» — записи участника с быстрой отменой, афишами. */
+/**
+ * «Мои события» — записи участника с быстрой отменой. ПРОШЕДШИЕ события
+ * раньше не фильтровались вообще (баг — уже завершённый выезд всплывал в
+ * списке); теперь — только предстоящее. Фото только у самого ближайшего.
+ */
 async function sendMyEvents(chatId: number, tgId: number, openBtn: any) {
   const site = openBtn?.web_app?.url || '';
+  const today = new Date().toISOString().slice(0, 10);
   const { data: regs } = await supabase
     .from('registrations').select('event_id,status')
     .eq('telegram_id', tgId).neq('status', 'cancelled');
@@ -1047,41 +1068,61 @@ async function sendMyEvents(chatId: number, tgId: number, openBtn: any) {
     });
     return;
   }
-  const { data: evs } = await supabase
-    .from('events').select('id,title,date,location,image,telegram_image').in('id', ids).order('date');
+  const { data: raw } = await supabase
+    .from('events').select('id,title,date,date_end,location,image,telegram_image').in('id', ids).order('date');
+  const evs = (raw || []).filter((e: any) => isUpcomingEvent(e, today));
+  if (!evs.length) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: '🗓 <b>Мои события</b>\n\nБлижайших записей нет. Открой афишу и выбери следующий выезд 👇',
+      reply_markup: kb([[openBtn]]),
+    });
+    return;
+  }
   await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🗓 <b>Мои события</b>' });
-  for (const e of evs || []) {
-    await sendEventCard(chatId, e, site, [[{ text: '❌ Отменить запись', callback_data: `regcancel_${e.id}` }]]);
+  const [first, ...rest] = evs;
+  await sendEventCard(chatId, first, site, [[{ text: '❌ Отменить запись', callback_data: `regcancel_${first.id}` }]]);
+  for (const e of rest) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: `📌 <b>${esc(e.title)}</b> · ${esc(whenPhrase(e.date))}`,
+      reply_markup: kb([
+        [{ text: '📋 Подробнее', web_app: { url: `${site}/?ev=${encodeURIComponent(e.id)}` } }],
+        [{ text: '❌ Отменить запись', callback_data: `regcancel_${e.id}` }],
+      ]),
+    });
   }
 }
 
 /**
- * Экран «Ближайшие события» — кнопка меню и команда /events. Афишами идут
- * только САМЫЕ БЛИЖАЙШИЕ (иначе при большом числе открытых событий это
- * превращается в спам из фото-сообщений) — остальное смотрят в афише
- * Mini App по кнопке ниже.
+ * Экран «Ближайшие события» — кнопка меню и команда /events. С фото —
+ * только САМОЕ БЛИЖАЙШЕЕ, остальные текстовой строкой (без картинок),
+ * иначе при большом числе открытых событий список превращается в спам
+ * из фото-сообщений. Прошедшие события отфильтрованы (см. isUpcomingEvent).
  */
 async function sendEventsList(chatId: number, openBtn: any) {
   const site = openBtn?.web_app?.url || '';
-  const { data: evs } = await supabase
-    .from('events').select('id,title,date,location,image,telegram_image,status')
-    .eq('status', 'open').order('date', { ascending: true }).limit(6);
-  if (!evs || !evs.length) {
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: raw } = await supabase
+    .from('events').select('id,title,date,date_end,location,image,telegram_image,status')
+    .eq('status', 'open').order('date', { ascending: true }).limit(12);
+  const evs = (raw || []).filter((e: any) => isUpcomingEvent(e, today));
+  if (!evs.length) {
     await tg('sendMessage', { chat_id: chatId, text: 'Пока нет открытых событий. Загляни позже.' });
     return;
   }
-  const CARD_LIMIT = 3;
-  const cards = evs.slice(0, CARD_LIMIT);
-  const rest = evs.length - cards.length;
-  for (const ev of cards) {
-    await sendEventCard(chatId, ev, site);
-  }
+  const [first, ...rest] = evs;
+  await sendEventCard(chatId, first, site);
+  const nextFew = rest.slice(0, 4);
+  const more = rest.length - nextFew.length;
+  const rows = nextFew.map((e: any) => eventRow(e, site));
+  rows.push([openBtn as any]);
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
-    text: rest > 0
-      ? `📅 Показал ${cards.length} ближайших. Ещё ${rest} — в афише, там же фильтры и вся программа:`
-      : '📅 Полная афиша с программой и фильтрами:',
-    reply_markup: kb([[openBtn]]),
+    text: !nextFew.length
+      ? '📅 Полная афиша с программой и фильтрами:'
+      : (more > 0 ? `📅 Ещё ${more} — в афише, там же фильтры и вся программа:` : '📅 Ещё ближайшее:'),
+    reply_markup: kb(rows),
   });
 }
 
@@ -1609,7 +1650,7 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
   // Кнопки (SOS вынесен в нижнее меню). Реф-ссылку показываем только кнопкой
   // «Отправить другу» — без лишнего текста со ссылкой (по просьбе владельца).
   const rows: any[] = [];
-  const row1: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }, { text: '📖 Помощь', callback_data: 'helpguide' }];
+  const row1: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }, { text: '📖 Как это работает', callback_data: 'helpguide' }];
   rows.push(row1);
   if (link) {
     const invite = 'Это «Живи в моменте» — закрытый клуб трезвых событий. Заходи по моей ссылке.';
@@ -6131,7 +6172,7 @@ export default async function handler(req: any, res: any) {
           await sendEventsList(chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
-        if (text === 'ℹ️ Помощь' || text === '❓ Помощь') {
+        if (text === 'ℹ️ Как это работает' || text === 'ℹ️ Помощь' || text === '❓ Помощь') {
           await sendHelp(chatId);
           return res.status(200).json({ ok: true });
         }
