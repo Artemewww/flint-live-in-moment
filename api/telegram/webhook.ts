@@ -964,26 +964,41 @@ function checklistSectionText(key: string): string | null {
 
 /** Приветствие + афиша открытых событий — /start и кнопка «Главная». */
 async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
+  const site = openBtn?.web_app?.url || '';
   const { data: evs } = await supabase
     .from('events')
-    .select('id,title,status,date')
+    .select('id,title,date,location,image,telegram_image')
     .eq('status', 'open')
     .order('date', { ascending: true })
     .limit(6);
-  const rows = (evs || []).map((e: any) => [
-    { text: `✅ ${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` },
-  ]);
+  // На входе — компактно: 2 ближайшие афиши, не список текстовых кнопок.
+  const CARD_LIMIT = 2;
+  const cards = (evs || []).slice(0, CARD_LIMIT);
+  const rest = (evs || []).length - cards.length;
+
   // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
-  if (isCoreUser) rows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
-  rows.push([openBtn as any]);
+  const tailRows: any[][] = [];
+  if (isCoreUser) tailRows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
+  tailRows.push([openBtn as any]);
+
   await tg('sendMessage', {
     chat_id: chatId,
     parse_mode: 'HTML',
     text:
       '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
-      'Живая афиша трезвого сообщества. Выбери событие — покажу детали, дату и как добраться 👇',
-    reply_markup: { inline_keyboard: rows },
+      'Живая афиша трезвого сообщества.' + (cards.length ? ' Ближайшее — ниже 👇' : ''),
+    reply_markup: cards.length ? undefined : { inline_keyboard: tailRows },
   });
+  for (const ev of cards) {
+    await sendEventCard(chatId, ev, site);
+  }
+  if (cards.length) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: rest > 0 ? `Ещё ${rest} — в афише:` : 'Вся программа и фильтры — в афише:',
+      reply_markup: { inline_keyboard: tailRows },
+    });
+  }
 }
 
 /**
