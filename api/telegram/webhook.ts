@@ -3,7 +3,6 @@ import * as crypto from 'crypto';
 import { handleGroupMessage } from '../_lib/group-handler';
 import { parseEquipment, parseCoordinates, parseTime } from '../_lib/ai-helpers';
 import { CAMPING_CHECKLIST, CAMPING_TIPS, checklistTotal } from '../_lib/camping-checklist';
-import { setGroupBan as banInEventGroups } from '../_lib/group-ban';
 
 /**
  * Вебхук Telegram-бота @campsflint_bot. Делает бота и сайт единым целым:
@@ -648,9 +647,41 @@ function kb(rows: any[]) { return { inline_keyboard: rows }; }
  */
 const REPLY_ROW = [{ text: '✍️ Ответить', callback_data: 'usreply' }];
 
-/** Бан/разбан в группах событий — общий хелпер (см. api/_lib/group-ban.ts). */
-const setGroupBan = (telegramId: number, ban: boolean) =>
-  banInEventGroups(supabase, BOT_TOKEN, telegramId, ban);
+/**
+ * Бан/разбан человека во ВСЕХ Telegram-группах событий.
+ * Дублировано из api/_lib/group-ban.ts — Vercel не включает файлы из папок
+ * с префиксом «_» в бандл serverless-функции, импорт роняет MODULE_NOT_FOUND
+ * при загрузке модуля, то есть на КАЖДОМ апдейте вебхука (см. тот же фикс
+ * в api/admin/registrations.ts, коммит 30c8125).
+ */
+async function setGroupBan(telegramId: number, ban: boolean) {
+  const out = { groups: 0, kicked: 0, failed: [] as string[] };
+  if (!BOT_TOKEN || !Number.isFinite(telegramId) || telegramId <= 0) return out;
+  let chats: number[] = [];
+  try {
+    const { data } = await supabase.from('event_groups').select('chat_id').eq('active', true);
+    chats = Array.from(new Set((data || [])
+      .map((g: any) => Number(g.chat_id))
+      .filter((c: number) => Number.isFinite(c) && c !== 0)));
+  } catch { return out; }
+  out.groups = chats.length;
+  const method = ban ? 'banChatMember' : 'unbanChatMember';
+  for (const chatId of chats) {
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, user_id: telegramId, ...(ban ? {} : { only_if_banned: true }) }),
+      });
+      const j = await r.json();
+      if (j?.ok) out.kicked += 1;
+      else out.failed.push(`${chatId}: ${j?.description || 'отказ Telegram'}`);
+    } catch (e) {
+      out.failed.push(`${chatId}: ${(e as Error).message}`);
+    }
+  }
+  return out;
+}
 
 /**
  * Доставка сообщения костяку. КРИТИЧНО: раньше всё уходило в единственный
