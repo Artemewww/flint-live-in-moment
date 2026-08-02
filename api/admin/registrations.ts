@@ -468,6 +468,35 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to fetch registrations' });
       }
 
+      /**
+       * Обогащаем заявки профилем из members. Без этого организатор не мог
+       * связаться с человеком: в registrations нет username (в карточке
+       * показывался голый telegram_id вместо @ника), а имя в анкете часто
+       * другое, чем в Telegram («Анастасия Ламковская» в заявке vs
+       * «Анастасия @Stasla» в аудитории) — человека буквально не находили.
+       * Телефон берём из заявки, а если там пусто — из профиля клуба.
+       */
+      const regIds = Array.from(new Set(
+        (registrations || []).map((r: any) => Number(r.telegram_id)).filter((id: number) => Number.isFinite(id) && id > 0)
+      ));
+      const { data: regMembers } = regIds.length
+        ? await supabase.from('members')
+            .select('telegram_id,username,first_name,phone,gender,status,is_core,bot_active')
+            .in('telegram_id', regIds)
+        : { data: [] as any[] };
+      const memberOf = new Map((regMembers || []).map((m: any) => [Number(m.telegram_id), m]));
+      for (const r of registrations || []) {
+        const m: any = memberOf.get(Number(r.telegram_id));
+        if (!m) continue;
+        (r as any).username = m.username || null;
+        (r as any).member_name = m.first_name || null;
+        (r as any).phone = r.phone || m.phone || null;
+        (r as any).gender = (r as any).gender || m.gender || null;
+        (r as any).member_status = m.status || null;
+        (r as any).is_core = !!m.is_core;
+        (r as any).bot_active = m.bot_active !== false;
+      }
+
       // Получаем статистику
       const { data: statsData } = await supabase.rpc('get_event_stats', { event_id: eventId });
 

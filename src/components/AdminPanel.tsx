@@ -720,6 +720,13 @@ function mapRegistration(r: any) {
     roles: toList(r.roles),
     days: toList(r.days),
     source: r.source || '',
+    // Профиль из аудитории клуба (сервер подмешивает к заявке): имя в анкете
+    // часто отличается от телеграмного, и без этого участника нельзя было ни
+    // найти в аудитории, ни написать ему.
+    username: r.username || '',
+    memberName: r.member_name || '',
+    gender: r.gender || '',
+    botActive: r.bot_active !== false,
   };
 }
 
@@ -1312,10 +1319,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audience, setAudience] = useState<any>(null);
   /** Поиск по аудитории (имя / @ник). */
   const [audienceQuery, setAudienceQuery] = useState('');
-  /** Фильтр аудитории по категории. */
-  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked'>('all');
-  /** Сортировка аудитории. */
-  const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name'>('default');
+  /** Фильтр аудитории по категории. `botoff` — кто остановил бота: им не дойдёт
+   *  ни одна рассылка, и это нужно видеть отдельно, а не гадать после отправки. */
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff'>('all');
+  /** Сортировка аудитории. `newest`/`oldest` — по дате входа в клуб («сколько дней с нами»). */
+  const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name' | 'newest' | 'oldest'>('default');
 
   /** Инвентарь клуба: список активов, кто держит, сколько дней. */
   const [showAssets, setShowAssets] = useState(false);
@@ -1570,6 +1578,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     let list = ((audience?.members) || []).filter((m: any) => {
       if (audienceFilter === 'core' && !m.isCore) return false;
       if (audienceFilter === 'blocked' && m.status !== 'blocked') return false;
+      if (audienceFilter === 'male' && m.gender !== 'male') return false;
+      if (audienceFilter === 'female' && m.gender !== 'female') return false;
+      if (audienceFilter === 'botoff' && m.botActive !== false) return false;
       if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -2809,12 +2820,51 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                           visible.map((reg: any, idx: number) => (
                             <div key={idx} className="p-3 border-b border-white/5 hover:bg-white/5">
                               <div className="flex items-center justify-between mb-2">
-                                <div className="flex-1">
-                                  <p className="text-sm font-bold">{reg.name || 'Гость'}</p>
-                                  <p className="text-[10px] text-white/60">@{reg.telegram}</p>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="text-sm font-bold">{reg.name || 'Гость'}</p>
+                                    {/* В Telegram человек может называться иначе, чем в анкете —
+                                        показываем оба имени, иначе его не найти в аудитории. */}
+                                    {reg.memberName && reg.memberName !== reg.name && (
+                                      <span className="text-[10px] text-white/40">· в Telegram: {reg.memberName}</span>
+                                    )}
+                                    {!reg.botActive && (
+                                      <span className="text-[9px] px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300 font-mono">бот остановлен</span>
+                                    )}
+                                  </div>
+                                  <p className="text-[10px] text-white/60">
+                                    {reg.username ? `@${reg.username}` : `id ${reg.telegramId}`}
+                                  </p>
+                                  {reg.phone && (
+                                    <a href={`tel:${reg.phone}`} className="text-[10px] text-brand hover:underline font-mono">
+                                      📞 {reg.phone}
+                                    </a>
+                                  )}
                                   {reg.inviter && (
                                     <p className="text-[10px] text-brand">Пригласил: {reg.inviter}</p>
                                   )}
+                                  <div className="flex items-center gap-2 mt-1">
+                                    {/* Написать прямо из админки — тред уходит в общую переписку,
+                                        участник получит сообщение в бот с кнопкой «Ответить». */}
+                                    {Number(reg.telegramId) > 0 && (
+                                      <button
+                                        onClick={() => { setShowChats(true); openThread(String(reg.telegramId), reg.memberName || reg.name, reg.username || undefined); }}
+                                        className="text-[9px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-white/70 hover:text-white cursor-pointer transition-all"
+                                      >
+                                        ✍️ Написать
+                                      </button>
+                                    )}
+                                    {reg.username && (
+                                      <a
+                                        href={`https://t.me/${reg.username}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-[9px] px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 border border-white/10 text-white/70 hover:text-white transition-all"
+                                      >
+                                        ↗ Telegram
+                                      </a>
+                                    )}
+                                  </div>
                                 </div>
                                 <span className={`text-[9px] px-2 py-1 rounded-full font-mono ${
                                   reg.status === 'confirmed' ? 'bg-brand/20 text-brand' :
@@ -3890,8 +3940,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     placeholder="Поиск по имени или @нику"
                     className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
                   />
-                  <div className="flex gap-2">
-                    {([['all', 'Все'], ['core', 'Костяк'], ['blocked', 'Заблокированные']] as const).map(([key, label]) => (
+                  <div className="flex flex-wrap gap-2">
+                    {([['all', 'Все'], ['core', 'Костяк'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"
