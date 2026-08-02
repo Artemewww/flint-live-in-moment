@@ -708,6 +708,7 @@ function mapRegistration(r: any) {
     hasTransport: r.has_transport || false,
     transportDetails: r.transport_details || '',
     transportSeats: r.transport_seats || 0,
+    hasLicense: r.has_license ?? null,
     inventory: toList(r.inventory),
     inviter: r.inviter || '',
     category: r.category || '',
@@ -2973,8 +2974,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                 </div>
                               </div>
 
+                              {/* Права — критично для квадроциклов/аренды авто */}
+                              {reg.hasLicense !== undefined && reg.hasLicense !== null && (
+                                <div className="flex flex-wrap gap-1 mt-2">
+                                  <span className={`text-[9px] px-1.5 py-0.5 rounded ${reg.hasLicense ? 'bg-brand/15 text-brand' : 'bg-rose-500/15 text-rose-400'}`}>
+                                    {reg.hasLicense ? '🎫 права есть' : '🎫 прав нет'}
+                                  </span>
+                                </div>
+                              )}
+
                               {/* Что человек берёт и чем помогает — из чек-листов бота */}
-                              {(reg.equipment.length > 0 || reg.roles.length > 0 || reg.guestCount > 0 || reg.childrenCount > 0 || reg.foodOptout) && (
+                              {(reg.guestCount > 0 || reg.childrenCount > 0 || reg.foodOptout || reg.dietary || reg.roles.length > 0 || reg.equipment.length > 0) && (
                                 <div className="flex flex-wrap gap-1 mt-2">
                                   {reg.guestCount > 0 && <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">+{reg.guestCount} гост.</span>}
                                   {reg.childrenCount > 0 && <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded">+{reg.childrenCount} дет.</span>}

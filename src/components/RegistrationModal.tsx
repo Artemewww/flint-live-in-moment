@@ -37,6 +37,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     hasTransport: false,
     // Обязательный выбор способа добраться: null = ещё не ответил (не пропустить).
     transportMode: null as null | 'car' | 'seek' | 'self',
+    // Права — ОБЯЗАТЕЛЬНО для событий с квадроциклами/авто: без них не узнать,
+    // кто может вести машину/квадроцикл. null = ещё не ответил.
+    hasLicense: null as null | 'yes' | 'no',
     transportDetails: '',
     transportSeats: 0,
     inventory: '',
@@ -111,6 +114,8 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         ? formData.transportDetails.trim()
         : formData.transportMode === 'seek' ? 'Ищет попутку' : 'Без авто',
       transport_seats: isDriver ? formData.transportSeats : 0,
+      // Права — важно для событий с арендой квадроциклов/авто.
+      has_license: formData.hasLicense === 'yes' ? true : formData.hasLicense === 'no' ? false : null,
       // Колонки списочные (jsonb): шлём МАССИВ, а не строку через запятую.
       // Строка тут порождала legacy-записи, на которых админка падала в белый
       // экран (`inventory.slice(...).map is not a function`) — см. toList()
@@ -182,6 +187,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
     if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
     if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
+    if (formData.hasLicense === null) return setError('Укажите, есть ли у вас водительские права — это нужно для авто и квадроциклов');
     if (!consentGiven) return setError('Нужно согласие на обработку персональных данных');
 
     finishSuccess(
@@ -376,6 +382,34 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         <Truck className="w-4 h-4 text-brand" />
                         Как добираетесь? <span className="text-brand">*</span>
                       </label>
+
+                      {/* Права — критично для событий с арендой квадроциклов/авто */}
+                      <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50">
+                        🎫 Есть ли водительские права? <span className="text-brand">*</span>
+                      </label>
+                      <div className="flex gap-2">
+                        {([
+                          { v: 'yes' as const, l: '✅ Есть' },
+                          { v: 'no' as const, l: '❌ Нет' },
+                        ]).map(({ v, l }) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => setFormData({ ...formData, hasLicense: v } as any)}
+                            className={`flex-1 py-2.5 px-3 rounded-lg text-xs font-bold transition-all ${
+                              formData.hasLicense === v
+                                ? 'bg-brand text-black'
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                            }`}
+                          >
+                            {l}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-white/40 italic">
+                        Для событий с квадроциклами и арендой авто — права обязательны. Покажем организатору, кто может вести.
+                      </p>
+
                       <div className="space-y-2">
                         {([
                           { mode: 'car' as const, label: '🚗 На своём авто' },

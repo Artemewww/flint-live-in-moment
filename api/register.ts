@@ -132,7 +132,7 @@ async function rateLimit(scope: string, ident: string, max: number, windowMs: nu
 // эндпоинт публичный, и клиент мог бы сам подтвердить себе заявку и отметить
 // оплату. Их ставит только админка (api/admin/registrations.ts) и бот.
 const REG_FIELDS = [
-  'has_transport', 'transport_details', 'transport_seats', 'inventory',
+  'has_transport', 'transport_details', 'transport_seats', 'has_license', 'inventory',
   'category', 'dietary', 'guest_count', 'equipment', 'roles', 'notes',
 ];
 

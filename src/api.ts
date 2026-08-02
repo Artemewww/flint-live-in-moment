@@ -20,6 +20,8 @@ export interface RegisterPayload {
   has_transport?: boolean;
   transport_details?: string;
   transport_seats?: number;
+  /** Есть ли водительские права — критично для квадроциклов/аренды авто. */
+  has_license?: boolean | null;
   // Списочные колонки (jsonb) — только массив: строка порождала legacy-записи,
   // на которых падала админка (см. toList() в AdminPanel.tsx).
   inventory?: string[];
