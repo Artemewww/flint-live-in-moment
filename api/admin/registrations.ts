@@ -185,6 +185,11 @@ export default async function handler(req: any, res: any) {
       }));
 
       const reachable = list.filter((m) => m.realTelegram && m.botActive).length;
+      // Пол: для расселения по палаткам и контроля состава. Считаем по всем,
+      // у кого пол указан; «не указан» — отдельно, чтобы костяк видел пробел.
+      const male = list.filter((m) => m.gender === 'male').length;
+      const female = list.filter((m) => m.gender === 'female').length;
+      const noGender = list.filter((m) => !m.gender).length;
       return res.status(200).json({
         members: list,
         summary: {
@@ -193,6 +198,9 @@ export default async function handler(req: any, res: any) {
           core: list.filter((m) => m.isCore).length,
           reachable,
           blocked: list.filter((m) => m.realTelegram && !m.botActive).length,
+          male,
+          female,
+          noGender,
         },
       });
     } catch (error) {

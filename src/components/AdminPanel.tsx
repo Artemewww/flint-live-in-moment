@@ -3916,6 +3916,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       {audience.summary.blocked ? ` · заблокировали ${audience.summary.blocked}` : ''}
                     </p>
                   )}
+                  {audience?.summary && (
+                    <p className="text-[11px] text-white/50 font-mono mt-0.5">
+                      ♂ мужчин: <b className="text-white/80">{audience.summary.male ?? 0}</b> · ♀ женщин: <b className="text-white/80">{audience.summary.female ?? 0}</b>
+                      {audience.summary.noGender ? ` · ⚠ пол не указан: ${audience.summary.noGender}` : ''}
+                    </p>
+                  )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
                   {audience && (audience.members || []).length > 0 && (
