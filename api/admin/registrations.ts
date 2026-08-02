@@ -122,7 +122,7 @@ export default async function handler(req: any, res: any) {
     try {
       const { data: membersRaw } = await supabase
         .from('members')
-        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at,phone,gender,dietary,prefs')
+        .select('telegram_id,username,first_name,status,is_core,role,referred_by,points,bot_active,last_seen_at,created_at,phone,gender,birthday,dietary,prefs')
         .order('points', { ascending: false });
       // Служебные Telegram-боты (анонимный админ группы, каналы, сервис) не участники —
       // не показываем их в аудитории, чтобы список был «чётким» (жалоба владельца).
@@ -169,6 +169,7 @@ export default async function handler(req: any, res: any) {
         // пол (расселение по палаткам), согласие на фото/видео (закон РБ —
         // без него нельзя публиковать галерею) и принятие правил клуба.
         gender: m.gender || null,
+        birthday: m.birthday || null,
         dietary: m.dietary || null,
         mediaConsent: m.prefs?.media_consent
           ? (m.prefs.media_consent.agreed ? 'yes' : 'no')

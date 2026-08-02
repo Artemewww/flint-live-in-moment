@@ -632,6 +632,7 @@ function SettingsTab({ profile, onSaved }: { profile: any; onSaved: () => void }
   const [firstName, setFirstName] = useState(profile.firstName || '');
   const [phone, setPhone] = useState(profile.phone || '');
   const [gender, setGender] = useState<string>(profile.gender || '');
+  const [birthday, setBirthday] = useState(profile.birthday || '');
   const [dietary, setDietary] = useState<string>(profile.dietary || 'omnivore');
   const notif = profile.prefs?.notify || {};
   const [notifyPrefs, setNotifyPrefs] = useState<Record<string, boolean>>({
@@ -644,6 +645,13 @@ function SettingsTab({ profile, onSaved }: { profile: any; onSaved: () => void }
   const [msg, setMsg] = useState('');
 
   const save = async () => {
+    // День рождения — ОБЯЗАТЕЛЬНО: нужен для доски дней рождения и расчёта
+    // возраста в админке. Без него профиль не сохраняется.
+    if (!birthday) {
+      setMsg('Укажи день рождения — это обязательное поле');
+      haptic('error');
+      return;
+    }
     setSaving(true); setMsg('');
     try {
       const res = await fetch('/api/profile', {
@@ -651,7 +659,7 @@ function SettingsTab({ profile, onSaved }: { profile: any; onSaved: () => void }
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: 'save_settings', initData: getInitData(),
-          firstName, phone, gender: gender || undefined, dietary, notifyPrefs,
+          firstName, phone, gender: gender || undefined, birthday, dietary, notifyPrefs,
         }),
       });
       const j = await res.json();
@@ -686,6 +694,16 @@ function SettingsTab({ profile, onSaved }: { profile: any; onSaved: () => void }
               value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+375 29 111-22-33"
               className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-[13px] font-mono outline-none focus:border-brand/40 placeholder:text-white/25"
             />
+          </label>
+          <label className="block">
+            <span className="text-[9px] font-mono uppercase tracking-widest text-white/40">День рождения *</span>
+            <input
+              type="date"
+              value={birthday} onChange={(e) => setBirthday(e.target.value)}
+              max={new Date().toISOString().split('T')[0]}
+              className="mt-1 w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-[13px] font-mono outline-none focus:border-brand/40"
+            />
+            <p className="text-[9px] text-white/30 font-mono mt-1">Обязательное поле. Нужен для доски дней рождения и возраста в клубе.</p>
           </label>
           <div>
             <span className="text-[9px] font-mono uppercase tracking-widest text-white/40">Пол</span>

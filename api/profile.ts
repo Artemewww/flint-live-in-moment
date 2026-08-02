@@ -335,7 +335,7 @@ export default async function handler(req: any, res: any) {
 
       const { data: me } = await supabase
         .from('members')
-        .select('telegram_id,first_name,username,phone,status,is_core,role,points,gender,dietary,prefs,ref_code,agreed_pd,created_at')
+        .select('telegram_id,first_name,username,phone,status,is_core,role,points,gender,birthday,dietary,prefs,ref_code,agreed_pd,created_at')
         .eq('telegram_id', user.id)
         .maybeSingle();
 
@@ -477,6 +477,7 @@ export default async function handler(req: any, res: any) {
           role: (me as any)?.role || 'member',
           points: (me as any)?.points || 0,
           gender: (me as any)?.gender || null,
+          birthday: (me as any)?.birthday || null,
           dietary: (me as any)?.dietary || null,
           agreedPd: !!(me as any)?.agreed_pd,
           prefs: (me as any)?.prefs || {},
@@ -510,6 +511,15 @@ export default async function handler(req: any, res: any) {
       }
       if (typeof body.phone === 'string') patch.phone = body.phone.trim().slice(0, 40) || null;
       if (body.gender === 'male' || body.gender === 'female') patch.gender = body.gender;
+      // День рождения — ОБЯЗАТЕЛЬНОЕ поле: нужен для доски дней рождения и
+      // расчёта возраста в админке. Валидируем формат YYYY-MM-DD и что дата
+      // не в будущем.
+      if (typeof body.birthday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.birthday)) {
+        const bd = new Date(`${body.birthday}T00:00:00`);
+        if (!Number.isNaN(bd.getTime()) && bd.getTime() <= Date.now()) {
+          patch.birthday = body.birthday;
+        }
+      }
       if (['omnivore', 'vegetarian', 'vegan'].includes(body.dietary)) patch.dietary = body.dietary;
 
       // Настройки уведомлений живут в members.prefs (jsonb) — без миграции.

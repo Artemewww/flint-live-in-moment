@@ -4052,6 +4052,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             <span className={`px-1.5 py-0.5 rounded ${m.gender ? 'bg-white/10 text-white/60' : 'bg-amber-500/15 text-amber-300'}`}>
                               {m.gender === 'male' ? '♂ мужчина' : m.gender === 'female' ? '♀ женщина' : '⚠ пол не указан'}
                             </span>
+                            {/* Возраст из дня рождения — для контроля состава и
+                                подбора событий. Без возраста на доске дней рождения. */}
+                            {m.birthday && (
+                              <span className="px-1.5 py-0.5 rounded bg-white/10 text-white/60">
+                                🎂 {(() => {
+                                  const bd = new Date(`${m.birthday}T00:00:00`);
+                                  if (Number.isNaN(bd.getTime())) return m.birthday;
+                                  const now = new Date();
+                                  let age = now.getFullYear() - bd.getFullYear();
+                                  const mDiff = now.getMonth() - bd.getMonth();
+                                  if (mDiff < 0 || (mDiff === 0 && now.getDate() < bd.getDate())) age--;
+                                  return `${age} лет`;
+                                })()}
+                              </span>
+                            )}
+                            {!m.birthday && (
+                              <span className="px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300">⚠ день рождения не указан</span>
+                            )}
                             <span className={`px-1.5 py-0.5 rounded ${
                               m.mediaConsent === 'yes' ? 'bg-brand/15 text-brand'
                                 : m.mediaConsent === 'no' ? 'bg-rose-500/15 text-rose-400'
