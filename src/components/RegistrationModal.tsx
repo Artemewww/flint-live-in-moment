@@ -130,9 +130,12 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       sourceHint: formData.source.trim() || undefined,
     });
 
-    // Закрытое событие с неверным кодом — сервер вернул отказ. Не показываем «успех».
-    if (!result.ok && result.code === 'access_denied') {
-      setError(result.message || 'Неверный код доступа к закрытому событию');
+    // ЛЮБАЯ ошибка сервера — НЕ показываем «успех». Раньше обрабатывался только
+    // access_denied, и если база отклоняла вставку (напр. колонка has_license не
+    // создана в Supabase), человек видел «Вы записаны», а записи в базе не было.
+    if (!result.ok) {
+      if (result.code === 'access_denied') setError(result.message || 'Неверный код доступа к закрытому событию');
+      else setError(result.message || 'Не удалось отправить заявку. Попробуй ещё раз.');
       setIsSubmitting(false);
       haptic('error');
       return;
