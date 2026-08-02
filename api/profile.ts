@@ -624,6 +624,33 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, notified });
     }
 
+    // === BIRTHDAYS (дни рождения участников клуба) ===
+    // Доска дней рождения: только одобренные участники, только имя + дата.
+    // Возраст НЕ отдаём — на доске он не нужен (пожелание владельца).
+    if (action === 'birthdays') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const { data: members } = await supabase
+        .from('members')
+        .select('telegram_id,first_name,birthday')
+        .eq('status', 'approved')
+        .not('birthday', 'is', null);
+
+      const list = (members || [])
+        .filter((m: any) => m.birthday && /^\d{4}-\d{2}-\d{2}$/.test(m.birthday))
+        .map((m: any) => {
+          const bd = m.birthday.split('-');
+          return {
+            id: String(m.telegram_id),
+            name: m.first_name || 'Участник',
+            date: `${bd[1]}-${bd[2]}`, // MM-DD
+          };
+        });
+
+      return res.status(200).json({ ok: true, birthdays: list });
+    }
+
     // === MY_EVENTS (история событий участника) ===
     if (action === 'my_events') {
       const user = verifyInitData(body.initData);

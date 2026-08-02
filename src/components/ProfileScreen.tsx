@@ -119,6 +119,14 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
     }
     if (p && !p.phone) out.push({ key: 'phone', tone: 'info', text: 'Не указан телефон для связи', sub: 'Вкладка «Настройки»' });
     if (p && !p.gender) out.push({ key: 'gender', tone: 'info', text: 'Не указан пол', sub: 'Нужен для расселения по палаткам' });
+    // День рождения — ОБЯЗАТЕЛЬНОЕ поле: без него тебя не будет на доске дней
+    // рождения, а организаторы не смогут оценить возраст. Подсвечиваем ЖЁЛТЫМ +
+    // колокольчик: это не блокирующее, но важное действие.
+    if (p && !p.birthday) out.push({
+      key: 'birthday', tone: 'warn',
+      text: '🎂 Не указан день рождения',
+      sub: 'Ты не попадёшь на доску именинников и в рассылку с поздравлением',
+    });
     return out;
   }, [upcoming, p]);
 
@@ -308,10 +316,12 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                         <AlertTriangle className="w-3.5 h-3.5" /> Требует внимания ({todo.length})
                       </h3>
                       {todo.map((t) => (
-                        <div
+                        <button
                           key={t.key}
-                          className={`rounded-2xl border p-3.5 flex items-start gap-3 ${
-                            t.tone === 'warn' ? 'bg-rose-500/10 border-rose-500/30' : 'bg-white/5 border-white/10'
+                          type="button"
+                          onClick={() => { if (t.key === 'birthday') { setTab('settings'); haptic('success'); } }}
+                          className={`w-full text-left rounded-2xl border p-3.5 flex items-start gap-3 cursor-pointer transition-all ${
+                            t.tone === 'warn' ? 'bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/15' : 'bg-white/5 border-white/10 hover:bg-white/10'
                           }`}
                         >
                           <span className={`mt-1 w-1.5 h-1.5 rounded-full shrink-0 ${t.tone === 'warn' ? 'bg-rose-400' : 'bg-brand'}`} />
@@ -319,7 +329,12 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                             <div className="text-[13px] leading-snug">{t.text}</div>
                             {t.sub && <div className="text-[10px] text-white/45 font-mono mt-0.5">{t.sub}</div>}
                           </div>
-                        </div>
+                          {t.key === 'birthday' && (
+                            <span className="shrink-0 text-[9px] font-mono uppercase text-brand bg-brand/10 border border-brand/25 rounded-lg px-2 py-1">
+                              Заполнить →
+                            </span>
+                          )}
+                        </button>
                       ))}
                     </section>
                   )}

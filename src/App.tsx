@@ -391,13 +391,24 @@ export default function App() {
       }
       if (savedBirthdays) {
         setBirthdays(JSON.parse(savedBirthdays));
-      } else {
-        // Демо-данные для тестирования
-        setBirthdays([
-          { id: '1', name: 'Александр', date: '07-15', year: 1990, telegram: '@alex' },
-          { id: '2', name: 'Михаил', date: '07-22', year: 1988, telegram: '@mike' },
-          { id: '3', name: 'Дмитрий', date: '08-03', year: 1992, telegram: '@dima' }
-        ]);
+      }
+      // Дни рождения теперь живут в БД (участники указывают их в профиле).
+      // Подтягиваем из API — доска показывает реальных именинников клуба.
+      const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
+      if (initData) {
+        fetch('/api/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'birthdays', initData }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok && Array.isArray(d.birthdays)) {
+              setBirthdays(d.birthdays);
+              try { localStorage.setItem('moment_birthdays', JSON.stringify(d.birthdays)); } catch { /* no-op */ }
+            }
+          })
+          .catch(() => { /* офлайн — остаются сохранённые */ });
       }
     } catch (err) {
       console.error('Failed to load local storage registrations', err);
@@ -1218,11 +1229,6 @@ export default function App() {
         <BirthdayCalendar
           birthdays={birthdays}
           onClose={() => setShowBirthdayCalendar(false)}
-          onAddBirthday={(newBirthday) => {
-            const updated = [...birthdays, newBirthday];
-            setBirthdays(updated);
-            localStorage.setItem('moment_birthdays', JSON.stringify(updated));
-          }}
         />
       )}
 

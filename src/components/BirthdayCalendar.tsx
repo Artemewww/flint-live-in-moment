@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { motion } from 'motion/react';
-import { Calendar, Gift, Users, X, Plus, Lock, Bot } from 'lucide-react';
+import { Gift, X, Lock, Bot } from 'lucide-react';
 import { isAuthorized, openBot } from '../telegram';
 
 interface Birthday {
@@ -14,102 +14,9 @@ interface Birthday {
 interface BirthdayCalendarProps {
   birthdays: Birthday[];
   onClose: () => void;
-  onAddBirthday: (birthday: {id: string, name: string, date: string, year?: number, telegram?: string}) => void;
 }
 
-interface AddBirthdayFormProps {
-  onAdd: (birthday: {id: string, name: string, date: string, year?: number, telegram?: string}) => void;
-}
-
-function AddBirthdayForm({ onAdd }: AddBirthdayFormProps) {
-  const [name, setName] = useState('');
-  const [day, setDay] = useState('');
-  const [month, setMonth] = useState('');
-  const [year, setYear] = useState('');
-  const [telegram, setTelegram] = useState('');
-
-  const handleSubmit = () => {
-    if (!name || !day || !month) return;
-    
-    const dateStr = `${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
-    onAdd({
-      id: Date.now().toString(),
-      name,
-      date: dateStr,
-      year: year ? parseInt(year) : undefined,
-      telegram: telegram || undefined
-    });
-    
-    setName('');
-    setDay('');
-    setMonth('');
-    setYear('');
-    setTelegram('');
-  };
-
-  return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-2 gap-2">
-        <input
-          type="text"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="Имя"
-          className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-xs placeholder:text-white/30 focus:outline-none focus:border-brand/40"
-        />
-        <input
-          type="text"
-          value={telegram}
-          onChange={(e) => setTelegram(e.target.value)}
-          placeholder="@username (необязательно)"
-          className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-xs placeholder:text-white/30 focus:outline-none focus:border-brand/40"
-        />
-      </div>
-      <div className="grid grid-cols-3 gap-2">
-        <input
-          type="number"
-          value={day}
-          onChange={(e) => setDay(e.target.value)}
-          placeholder="День"
-          min="1"
-          max="31"
-          className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-xs placeholder:text-white/30 focus:outline-none focus:border-brand/40"
-        />
-        <input
-          type="number"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-          placeholder="Месяц"
-          min="1"
-          max="12"
-          className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-xs placeholder:text-white/30 focus:outline-none focus:border-brand/40"
-        />
-        <input
-          type="number"
-          value={year}
-          onChange={(e) => setYear(e.target.value)}
-          placeholder="Год (необязательно)"
-          className="bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-xs placeholder:text-white/30 focus:outline-none focus:border-brand/40"
-        />
-      </div>
-      <button
-        type="button"
-        onClick={handleSubmit}
-        disabled={!name || !day || !month}
-        className={`w-full py-3 rounded-xl text-xs font-bold uppercase tracking-widest flex items-center justify-center gap-2 transition-all outline-none border-none cursor-pointer ${
-          !name || !day || !month
-            ? 'bg-white/5 text-white/30 cursor-not-allowed'
-            : 'bg-brand hover:bg-brand-hover text-black shadow-lg shadow-brand/10'
-        }`}
-      >
-        <Plus className="w-4 h-4" />
-        Добавить
-      </button>
-    </div>
-  );
-}
-
-export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: BirthdayCalendarProps) {
+export default function BirthdayCalendar({ birthdays, onClose }: BirthdayCalendarProps) {
   const authorized = isAuthorized();
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
@@ -118,6 +25,7 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
 
   const monthNames = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 
                       'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
+  const currentMonth = new Date().getMonth();
 
   const birthdaysThisMonth = useMemo(() => {
     return birthdays
@@ -227,10 +135,13 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
                 className={`px-4 py-2 rounded-full text-xs font-mono uppercase tracking-wider font-bold transition-all whitespace-nowrap cursor-pointer border-none ${
                   selectedMonth === idx
                     ? 'bg-brand text-black font-black'
-                    : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
+                    : idx === currentMonth
+                      ? 'bg-brand/15 text-brand border border-brand/30 hover:bg-brand/25'
+                      : 'bg-white/5 text-white/50 hover:bg-white/10 hover:text-white'
                 }`}
               >
                 {month}
+                {idx === currentMonth && <span className="ml-1">●</span>}
               </button>
             ))}
           </div>
@@ -318,7 +229,6 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
                         </div>
                         <div className="text-[10px] text-white/50 font-mono">
                           {day} {monthNames[selectedMonth]}
-                          {birthday.year && ` (${new Date().getFullYear() - birthday.year} лет)`}
                         </div>
                       </div>
                       {today && (
@@ -332,16 +242,6 @@ export default function BirthdayCalendar({ birthdays, onClose, onAddBirthday }: 
               </div>
             </div>
           )}
-
-          {/* Add Birthday Form */}
-          <div className="space-y-3 pt-4 border-t border-white/10">
-            <h3 className="text-white/40 uppercase text-[9px] tracking-wider font-mono">
-              Добавить свой день рождения
-            </h3>
-            <AddBirthdayForm onAdd={(newBirthday) => {
-              onAddBirthday(newBirthday);
-            }} />
-          </div>
 
           {birthdaysThisMonth.length === 0 && (
             <div className="text-center py-8 text-white/40 text-xs">
