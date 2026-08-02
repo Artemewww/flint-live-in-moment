@@ -166,28 +166,47 @@ export default async function handler(req: any, res: any) {
       (event?.price_label ? `💰 ${esc(event.price_label)}\n` : '') +
       `\nОткрой карточку и запишись — место держим за тобой.`;
 
+    const rsvpMode = body.rsvp === true;
     const text =
       body.message ||
       (toPicked
         ? inviteText
-        : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
-          (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
-          (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-          (event?.price_label ? `\n💰 ${esc(event.price_label)}\n` : '') +
-          `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
+        : rsvpMode
+          ? `✅ <b>Подтверждение участия — «${esc(event?.title || 'Мероприятие FLINT')}»</b>\n\n` +
+            (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
+            (event?.location ? `📍 ${esc(event.location)}\n` : '') +
+            (event?.price_label ? `💰 ${esc(event.price_label)}\n` : '') +
+            `\nПодтверди, что ты точно будешь — так организаторы посчитают места, закупку и транспорт.\n\nНажми одну кнопку 👇`
+          : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
+            (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
+            (event?.location ? `📍 ${esc(event.location)}\n` : '') +
+            (event?.price_label ? `\n💰 ${esc(event.price_label)}\n` : '') +
+            `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
 
-    // Приглашение ведёт в Mini App сразу на карточку события (deep-link ?ev=),
-    // потому что регистрация в клубе идёт ТОЛЬКО через Mini App, не через чат.
     const site = `https://${req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app'}`;
+
+    /**
+     * RSVP-режим: орг хочет точное число пришедших. Рассылаем ВСЕМ записанным
+     * вопрос «Будешь или нет?» с кнопками ✅ Еду / ❌ Не смогу. Каждая кнопка
+     * подтверждает/снимает участие в один тап (rsvpy_ → status='confirmed',
+     * rsvpn_ → спрашивает причину и снимает). Это контрольный опрос: одного
+     * запроса обычно достаточно, повтор — по кнопке в админке.
+     */
     const markup = toPicked
       ? { inline_keyboard: [
           [{ text: '👀 Открыть и записаться', web_app: { url: `${site}/?ev=${encodeURIComponent(eventId)}` } }],
           [{ text: '✍️ Ответить', callback_data: 'usreply' }],
         ] }
-      : { inline_keyboard: [
-          [{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }],
-          [{ text: '✍️ Ответить', callback_data: 'usreply' }],
-        ] };
+      : rsvpMode
+        ? { inline_keyboard: [
+            [{ text: '✅ Еду', callback_data: `rsvpy_${eventId}` }],
+            [{ text: '❌ Не смогу', callback_data: `rsvpn_${eventId}` }],
+            [{ text: '✍️ Ответить', callback_data: 'usreply' }],
+          ] }
+        : { inline_keyboard: [
+            [{ text: '✅ Понял(а)', callback_data: `ack_${eventId}` }],
+            [{ text: '✍️ Ответить', callback_data: 'usreply' }],
+          ] };
 
     const results = await Promise.allSettled(
       ids.map((chatId) =>

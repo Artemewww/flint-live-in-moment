@@ -2458,6 +2458,36 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       )}
                       Разослать
                     </button>
+                    {/* RSVP: контрольное подтверждение «кто точно придёт». Шлём
+                        всем записанным вопрос с кнопками ✅ Еду / ❌ Не смогу. */}
+                    <button
+                      onClick={async () => {
+                        if (!window.confirm('Разослать ВСЕМ записанным вопрос «Будешь точно?» с кнопками ✅ Еду / ❌ Не смогу?\n\nПодтвердившие отметятся как «Подтверждён», не пришедшие — снимутся с события и освободят место.')) return;
+                        setBroadcasting(selectedEvent.id);
+                        try {
+                          const res = await adminFetch('/api/admin/broadcast', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ eventId: selectedEvent.id, rsvp: true }),
+                          });
+                          const j = await res.json();
+                          setActionMsg({
+                            ok: !!j.ok,
+                            text: j.ok ? `RSVP разослан ${j.sent}/${j.total || 0} участникам` : (j.message || 'Ошибка'),
+                          });
+                        } catch (e) {
+                          setActionMsg({ ok: false, text: 'Ошибка сети' });
+                        } finally {
+                          setBroadcasting(null);
+                        }
+                      }}
+                      disabled={broadcasting === selectedEvent.id}
+                      className="bg-white/5 hover:bg-white/10 border border-white/10 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase flex items-center gap-2 disabled:opacity-50"
+                      title="Спросить всех записанных: точно будут или нет"
+                    >
+                      <UserCheck className="w-4 h-4 text-brand" />
+                      Спросить: кто придёт?
+                    </button>
                   </div>
                 </div>
 
