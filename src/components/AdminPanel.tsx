@@ -680,6 +680,20 @@ function ImageUploadField({ value, onChange }: { value: string; onChange: (url: 
   );
 }
 
+/**
+ * Списочные поля заявки в БД лежат в ДВУХ форматах: массив (новые записи) и
+ * строка через запятую (legacy — так писал старый онбординг бота). Интерфейс
+ * зовёт на них .slice().map(), и одна legacy-строка роняла ВСЮ вкладку
+ * «Участники» в белый экран (`inventory.slice(...).map is not a function`) —
+ * организатор не мог посмотреть состав события. Приводим к массиву здесь,
+ * чтобы ниже по коду формат был ровно один.
+ */
+function toList(v: unknown): string[] {
+  if (Array.isArray(v)) return v.filter((x) => x != null).map((x) => String(x));
+  if (typeof v === 'string') return v.split(',').map((s) => s.trim()).filter(Boolean);
+  return [];
+}
+
 // Приводим заявку из БД (snake_case) к виду, который ждёт интерфейс (camelCase).
 function mapRegistration(r: any) {
   return {
@@ -694,7 +708,7 @@ function mapRegistration(r: any) {
     hasTransport: r.has_transport || false,
     transportDetails: r.transport_details || '',
     transportSeats: r.transport_seats || 0,
-    inventory: r.inventory || [],
+    inventory: toList(r.inventory),
     inviter: r.inviter || '',
     category: r.category || '',
     dietary: r.dietary || '',
@@ -702,9 +716,9 @@ function mapRegistration(r: any) {
     childrenCount: r.children_count || 0,
     foodOptout: r.food_optout || false,
     attended: r.attended || false,
-    equipment: r.equipment || [],
-    roles: r.roles || [],
-    days: r.days || [],
+    equipment: toList(r.equipment),
+    roles: toList(r.roles),
+    days: toList(r.days),
     source: r.source || '',
   };
 }

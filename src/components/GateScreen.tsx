@@ -129,10 +129,21 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
       lastName: applyLastName.trim() || undefined,
       phone: applyPhone.trim(),
       sourceHint: applySource.trim() || undefined,
+      // Пришёл по приглашению — код снимает ручную модерацию на сервере.
+      refCode: knownRef || undefined,
     });
     if (result.ok) {
-      setApplySuccess(true);
       haptic('success');
+      // Впустили сразу (реф-ссылка): не показываем «ждите рассмотрения», а
+      // открываем афишу — иначе человек упирался в экран ожидания, будучи
+      // уже принятым, и воронка снова обрывалась.
+      if (result.approved) {
+        try { localStorage.setItem('flint_gate_ok', '1'); } catch {}
+        onPass();
+        setApplying(false);
+        return;
+      }
+      setApplySuccess(true);
     } else {
       setApplyError(result.message || 'Ошибка при отправке заявки');
       haptic('error');

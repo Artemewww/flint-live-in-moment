@@ -16,6 +16,12 @@ interface RegistrationModalProps {
 
 const insideTg = isInsideTelegram();
 
+/** Поле ввода «через запятую» → массив для jsonb-колонок (inventory/equipment/roles). */
+function toArr(v: string): string[] | undefined {
+  const list = String(v || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length ? list : undefined;
+}
+
 export default function RegistrationModal({ event, isMember = false, onClose, onSuccess }: RegistrationModalProps) {
   // Внутри Telegram личность известна сразу (initData) — имя и ник подставляем,
   // но анкету человек проходит ту же, что и в браузере.
@@ -105,12 +111,16 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         ? formData.transportDetails.trim()
         : formData.transportMode === 'seek' ? 'Ищет попутку' : 'Без авто',
       transport_seats: isDriver ? formData.transportSeats : 0,
-      inventory: formData.inventory.trim() || undefined,
+      // Колонки списочные (jsonb): шлём МАССИВ, а не строку через запятую.
+      // Строка тут порождала legacy-записи, на которых админка падала в белый
+      // экран (`inventory.slice(...).map is not a function`) — см. toList()
+      // в AdminPanel.tsx, там же нормализация уже накопленных строк.
+      inventory: toArr(formData.inventory),
       category: formData.category,
       dietary: formData.dietary,
       guest_count: formData.guestCount || 0,
-      equipment: formData.equipment.trim() || undefined,
-      roles: formData.roles.trim() || undefined,
+      equipment: toArr(formData.equipment),
+      roles: toArr(formData.roles),
       agreedPd: consentGiven,
       sourceHint: formData.source.trim() || undefined,
     });

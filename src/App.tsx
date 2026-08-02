@@ -615,7 +615,14 @@ export default function App() {
       return (
         <GateScreen
           applyOnly
-          onPass={() => { setMembersOnly(false); setShowApplyForm(false); }}
+          onPass={() => {
+            setMembersOnly(false);
+            setShowApplyForm(false);
+            // Афишу очистили на 403 — после вступления её нужно перезапросить,
+            // иначе новый участник видит пустой экран вместо событий.
+            setEventsLoading(true);
+            window.dispatchEvent(new Event('flint:events-refetch'));
+          }}
           onAdmin={() => setShowAdminPanel(true)}
         />
       );

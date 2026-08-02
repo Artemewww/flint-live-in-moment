@@ -663,7 +663,7 @@ export default async function handler(req: any, res: any) {
 
       const { data: existing } = await supabase
         .from('members')
-        .select('telegram_id, status')
+        .select('telegram_id, status, referred_by')
         .eq('phone', phone)
         .maybeSingle();
 
@@ -686,17 +686,42 @@ export default async function handler(req: any, res: any) {
 
       const refCode = Math.random().toString(36).slice(2, 9);
 
+      /**
+       * Реф-ссылка = доверие пригласившего, она снимает ручную модерацию — так
+       * работает и bindReferrer в боте, и api/register.ts. Без этого воронка
+       * вступления была ТУПИКОМ: бот отправлял новичка в Mini App заполнять
+       * анкету, /api/events не пускал не-члена (403), анкета ставила только
+       * pending_review — и человек навсегда оставался вне клуба. С 30.07 по
+       * 02.08 так застряли 22 человека, ни одного нового участника.
+       * Требуем подписанный Telegram initData: код можно переслать, а вот
+       * подделать подпись Telegram — нет.
+       */
+      let inviterId: number | null = null;
+      const applyRef = String(body.refCode || '').trim();
+      if (applyRef && user) {
+        const { data: inv } = await supabase
+          .from('members').select('telegram_id,status,is_core').eq('ref_code', applyRef).maybeSingle();
+        const inviterInside = !!inv && ((inv as any).status === 'approved' || (inv as any).is_core === true);
+        if (inviterInside && Number((inv as any).telegram_id) !== telegramId) {
+          inviterId = Number((inv as any).telegram_id);
+        }
+      }
+
       const memberData: any = {
         telegram_id: telegramId,
         first_name: firstName,
         last_name: lastName || null,
         phone,
-        status: 'pending_review',
+        status: inviterId ? 'approved' : 'pending_review',
         ref_code: refCode,
         source_hint: sourceHint || 'website',
         agreed_pd: true,
         username: user?.username || null,
       };
+      if (inviterId) {
+        memberData.approved_by = inviterId;
+        if (!(existing as any)?.referred_by) memberData.referred_by = inviterId;
+      }
 
       const { error } = await supabase.from('members').upsert(
         memberData,
@@ -709,7 +734,10 @@ export default async function handler(req: any, res: any) {
 
       const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
       if (adminChatId && BOT_TOKEN) {
-        const msg = `📋 <b>Новая заявка на вступление</b>\n\nИмя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId > 0 ? `\nTelegram ID: ${telegramId}` : '\n(заявка с сайта, без Telegram)'}\n\n/approve_${refCode} — одобрить`;
+        const who = `Имя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}`;
+        const msg = inviterId
+          ? `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.`
+          : `📋 <b>Новая заявка на вступление</b>\n\n${who}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId > 0 ? `\nTelegram ID: ${telegramId}` : '\n(заявка с сайта, без Telegram)'}\n\n/approve_${refCode} — одобрить`;
         try {
           await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
             method: 'POST',
@@ -719,7 +747,11 @@ export default async function handler(req: any, res: any) {
         } catch {}
       }
 
-      return res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.' });
+      // `approved: true` — сигнал фронту сразу открыть афишу, а не показывать
+      // экран «ждите рассмотрения»: человек уже в клубе.
+      return inviterId
+        ? res.status(200).json({ ok: true, approved: true, message: 'Добро пожаловать в клуб!' })
+        : res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.' });
     }
 
     // === ONBOARD ===

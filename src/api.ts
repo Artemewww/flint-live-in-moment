@@ -20,12 +20,14 @@ export interface RegisterPayload {
   has_transport?: boolean;
   transport_details?: string;
   transport_seats?: number;
-  inventory?: string;
+  // Списочные колонки (jsonb) — только массив: строка порождала legacy-записи,
+  // на которых падала админка (см. toList() в AdminPanel.tsx).
+  inventory?: string[];
   category?: 'male' | 'female';
   dietary?: 'omnivore' | 'vegetarian' | 'vegan';
   guest_count?: number;
-  equipment?: string;
-  roles?: string;
+  equipment?: string[];
+  roles?: string[];
   /** Согласие на обработку персональных данных (пишется в members.agreed_pd). */
   agreedPd?: boolean;
   /** «Откуда узнал о клубе» — свободный текст из анкеты. */
@@ -43,15 +45,19 @@ export interface RegisterResult {
 }
 
 /**
- * Отправляет заявку на вступление в закрытый клуб с сайта (без Telegram).
- * Создаёт запись в members со статусом pending_review.
+ * Отправляет заявку на вступление в закрытый клуб.
+ * Без реф-кода — статус pending_review (ручная модерация костяком).
+ * С валидным `refCode` внутри Telegram — впуск сразу (доверие пригласившего),
+ * сервер отвечает `approved: true`.
  */
 export async function submitClubApplication(payload: {
   firstName: string;
   lastName?: string;
   phone: string;
   sourceHint?: string;
-}): Promise<RegisterResult & { code?: string }> {
+  /** Реф-код пригласившего — снимает ручную модерацию. */
+  refCode?: string;
+}): Promise<RegisterResult & { code?: string; approved?: boolean }> {
   try {
     const res = await fetch('/api/profile', {
       method: 'POST',
@@ -59,7 +65,7 @@ export async function submitClubApplication(payload: {
       body: JSON.stringify({ action: 'apply', ...payload, initData: getInitData() }),
     });
     if (!res.ok) return { ok: false, delivered: false, message: `HTTP ${res.status}` };
-    return (await res.json()) as RegisterResult & { code?: string };
+    return (await res.json()) as RegisterResult & { code?: string; approved?: boolean };
   } catch (err) {
     return { ok: false, delivered: false, message: (err as Error).message };
   }
