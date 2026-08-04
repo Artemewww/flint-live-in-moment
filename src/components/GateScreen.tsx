@@ -228,12 +228,31 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-green-500/10 border border-green-500/30 text-green-400 text-[10px] font-mono uppercase tracking-widest mb-4">
             <CheckCircle className="w-3 h-3" /> Заявка отправлена
           </div>
-          <h1 className="font-display font-black text-2xl uppercase italic tracking-tight leading-none mb-2">
-            Спасибо!
+          <h1 className="font-display font-black text-2xl uppercase italic tracking-tight leading-none mb-3">
+            Заявка отправлена!
           </h1>
-          <p className="text-sm text-white/50 leading-relaxed mb-6">
-            Ваша заявка на вступление в клуб отправлена. Мы свяжемся с вами после рассмотрения.
-          </p>
+          <div className="text-left bg-white/5 border border-white/10 rounded-2xl p-4 mb-5 space-y-2.5">
+            <p className="text-[11px] text-white/40 uppercase font-mono tracking-widest mb-1">Что дальше</p>
+            <div className="flex gap-2.5 text-sm text-white/70">
+              <span className="text-brand font-black shrink-0">1</span>
+              <span>Костяк клуба рассмотрит заявку вручную — обычно в течение дня.</span>
+            </div>
+            <div className="flex gap-2.5 text-sm text-white/70">
+              <span className="text-brand font-black shrink-0">2</span>
+              <span>Ответ придёт тебе <b className="text-white">прямо в бот @campsflint_bot</b>. Открой его и нажми «Старт», чтобы не пропустить.</span>
+            </div>
+            <div className="flex gap-2.5 text-sm text-white/70">
+              <span className="text-brand font-black shrink-0">3</span>
+              <span>Как только одобрят — здесь откроется афиша событий.</span>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => openBot('https://t.me/campsflint_bot')}
+            className="w-full bg-brand hover:bg-brand-hover text-black font-black font-mono text-xs uppercase tracking-widest py-3.5 rounded-xl cursor-pointer border-none"
+          >
+            Открыть бот @campsflint_bot →
+          </button>
         </motion.div>
       </div>
     );

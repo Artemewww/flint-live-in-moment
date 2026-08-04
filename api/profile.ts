@@ -794,17 +794,38 @@ export default async function handler(req: any, res: any) {
 
       const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
       if (adminChatId && BOT_TOKEN) {
-        const who = `Имя: ${escHtml(firstName)} ${escHtml(lastName || '')}\nТелефон: ${escHtml(phone)}`;
-        const msg = inviterId
-          ? `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.`
-          : `📋 <b>Новая заявка на вступление</b>\n\n${who}\nИсточник: ${escHtml(sourceHint || 'сайт')}${telegramId > 0 ? `\nTelegram ID: ${telegramId}` : '\n(заявка с сайта, без Telegram)'}\n\n/approve_${refCode} — одобрить`;
+        const uname = user?.username ? '@' + escHtml(user.username) : 'ника нет';
+        const who =
+          `👤 ${escHtml(firstName)} ${escHtml(lastName || '')}\n` +
+          `📞 <code>${escHtml(phone)}</code>\n` +
+          `✈️ ${uname}${telegramId > 0 ? ` (id ${telegramId})` : ' — заявка с сайта, без Telegram'}` +
+          (sourceHint ? `\n💬 Откуда: ${escHtml(sourceHint)}` : '');
+        // Кнопки — тот же callback approve_/reject_/reply_<telegram_id>, что и у
+        // заявок из бота: костяк решает в один тап, ответ придёт заявителю в бот.
+        // Для веб-заявки без Telegram кнопки бесполезны (бот не напишет) — там
+        // только телефон и текстовая команда одобрения.
+        let payload: any;
+        if (inviterId) {
+          payload = { chat_id: adminChatId, parse_mode: 'HTML',
+            text: `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.` };
+        } else if (telegramId > 0) {
+          payload = { chat_id: adminChatId, parse_mode: 'HTML',
+            text: `🚪 <b>Новая заявка в клуб</b>\n\n${who}\n\nРешение — кнопками ниже, ответ придёт заявителю в бот.`,
+            reply_markup: { inline_keyboard: [
+              [{ text: '✅ Принять', callback_data: `approve_${telegramId}` }, { text: '❌ Отклонить', callback_data: `reject_${telegramId}` }],
+              [{ text: '✍️ Написать заявителю', callback_data: `reply_${telegramId}` }],
+            ] } };
+        } else {
+          payload = { chat_id: adminChatId, parse_mode: 'HTML',
+            text: `🚪 <b>Новая заявка в клуб (с сайта)</b>\n\n${who}\n\n⚠️ Без Telegram — бот ответить не сможет, свяжитесь по телефону.\nОдобрить: /approve_${refCode}` };
+        }
         try {
-          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ chat_id: adminChatId, text: msg, parse_mode: 'HTML' }),
+          const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
           });
-        } catch {}
+          const j = await r.json().catch(() => ({ ok: false }));
+          if (!(j as any).ok) slog('warn', 'apply admin-notify не доставлено', j);
+        } catch (e) { slog('warn', 'apply admin-notify ошибка сети', e); }
       }
 
       // `approved: true` — сигнал фронту сразу открыть афишу, а не показывать
