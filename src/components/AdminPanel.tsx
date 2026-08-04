@@ -1585,9 +1585,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
       return true;
     });
+    const joinTs = (m: any) => { const t = new Date(m.createdAt || 0).getTime(); return Number.isFinite(t) ? t : 0; };
     if (audienceSort === 'points') list = [...list].sort((a: any, b: any) => (b.points || 0) - (a.points || 0));
     else if (audienceSort === 'attended') list = [...list].sort((a: any, b: any) => (b.attendedCount || 0) - (a.attendedCount || 0));
     else if (audienceSort === 'name') list = [...list].sort((a: any, b: any) => (a.firstName || '').localeCompare(b.firstName || ''));
+    // «Новички» — кто позже вступил (больший timestamp) сверху; «Старожилы» — наоборот.
+    else if (audienceSort === 'newest') list = [...list].sort((a: any, b: any) => joinTs(b) - joinTs(a));
+    else if (audienceSort === 'oldest') list = [...list].sort((a: any, b: any) => joinTs(a) - joinTs(b));
     return list;
   };
 
@@ -4000,7 +4004,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   </div>
                   <div className="flex gap-2 items-center">
                     <span className="text-[9px] text-white/30 uppercase font-mono">Сортировка:</span>
-                    {([['default', 'По умолч.'], ['points', 'Баллы'], ['attended', 'Визиты'], ['name', 'Имя']] as const).map(([key, label]) => (
+                    {([['default', 'По умолч.'], ['newest', '🆕 Новички'], ['oldest', '⭐ Старожилы'], ['points', 'Баллы'], ['attended', 'Визиты'], ['name', 'Имя']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"

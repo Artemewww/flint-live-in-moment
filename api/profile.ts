@@ -698,40 +698,30 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: false, error: 'Имя и телефон обязательны' });
       }
 
-      const { data: existing } = await supabase
-        .from('members')
-        .select('telegram_id, status, referred_by')
-        .eq('phone', phone)
-        .maybeSingle();
-
-      if (existing) {
-        if (existing.status === 'approved') {
-          return res.status(200).json({ ok: false, code: 'already_member', message: 'Вы уже участник клуба' });
-        }
-        if (existing.status === 'pending_review') {
-          return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении' });
-        }
-        if (existing.status === 'blocked') {
-          return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
-        }
-      }
-
       const user = verifyInitData(body.initData);
       // Заявка с сайта вне Telegram (обычный браузер) не даёт настоящий id —
       // telegram_id тут PRIMARY KEY NOT NULL, поэтому синтезируем свой.
       const telegramId: number = user ? user.id : idFromHandle(phone);
 
-      const refCode = Math.random().toString(36).slice(2, 9);
+      // 0) Текущий Telegram-аккаунт УЖЕ в клубе → впускаем сразу, а не блокируем
+      //    формой. Раньше одобренный участник, попавший на экран анкеты, получал
+      //    «вы уже участник» и не мог войти (жалоба 03.08).
+      if (user) {
+        const { data: meNow } = await supabase
+          .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        if (meNow && ((meNow as any).status === 'approved' || (meNow as any).is_core)) {
+          return res.status(200).json({ ok: true, approved: true, message: 'Вы уже в клубе' });
+        }
+        if (meNow && (meNow as any).status === 'blocked') {
+          return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
+        }
+      }
 
       /**
-       * Реф-ссылка = доверие пригласившего, она снимает ручную модерацию — так
-       * работает и bindReferrer в боте, и api/register.ts. Без этого воронка
-       * вступления была ТУПИКОМ: бот отправлял новичка в Mini App заполнять
-       * анкету, /api/events не пускал не-члена (403), анкета ставила только
-       * pending_review — и человек навсегда оставался вне клуба. С 30.07 по
-       * 02.08 так застряли 22 человека, ни одного нового участника.
-       * Требуем подписанный Telegram initData: код можно переслать, а вот
-       * подделать подпись Telegram — нет.
+       * Реф-ссылка = доверие пригласившего, снимает ручную модерацию — как
+       * bindReferrer в боте и api/register.ts. Без этого воронка вступления
+       * была ТУПИКОМ (30.07–02.08 застряли 22 человека). Требуем подписанный
+       * initData: код можно переслать, а подпись Telegram — нет.
        */
       let inviterId: number | null = null;
       const applyRef = String(body.refCode || '').trim();
@@ -744,6 +734,29 @@ export default async function handler(req: any, res: any) {
         }
       }
 
+      // Телефон привязан к ДРУГОМУ аккаунту. Своя запись (тот же telegram_id)
+      // сюда не попадает — иначе повторная отправка ложно ругалась «вы уже
+      // участник» (жалоба 03.08).
+      const { data: existing } = await supabase
+        .from('members')
+        .select('telegram_id, status, referred_by')
+        .eq('phone', phone)
+        .maybeSingle();
+      const existOther = !!existing && Number((existing as any).telegram_id) !== telegramId;
+      if (existOther && (existing as any).status === 'approved') {
+        return res.status(200).json({ ok: false, code: 'already_member', message: 'Этот телефон уже привязан к участнику клуба. Если это вы — откройте приложение под тем же Telegram-аккаунтом.' });
+      }
+      if (existOther && (existing as any).status === 'blocked') {
+        return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
+      }
+      // Своя заявка уже на модерации и нового приглашения нет — не плодим шум.
+      if (existing && Number((existing as any).telegram_id) === telegramId
+          && (existing as any).status === 'pending_review' && !inviterId) {
+        return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении' });
+      }
+
+      const refCode = Math.random().toString(36).slice(2, 9);
+
       const memberData: any = {
         telegram_id: telegramId,
         first_name: firstName,
@@ -751,13 +764,20 @@ export default async function handler(req: any, res: any) {
         phone,
         status: inviterId ? 'approved' : 'pending_review',
         ref_code: refCode,
-        source_hint: sourceHint || 'website',
         agreed_pd: true,
         username: user?.username || null,
       };
       if (inviterId) {
         memberData.approved_by = inviterId;
         if (!(existing as any)?.referred_by) memberData.referred_by = inviterId;
+      }
+      // «Откуда узнал» — в members НЕТ колонки source_hint (именно из-за неё
+      // КАЖДАЯ заявка падала на upsert 02–03.08). Кладём в prefs (jsonb).
+      if (sourceHint) {
+        const { data: cur } = await supabase.from('members').select('prefs').eq('telegram_id', telegramId).maybeSingle();
+        const prefs: any = (cur as any)?.prefs || {};
+        prefs.source_hint = String(sourceHint).slice(0, 300);
+        memberData.prefs = prefs;
       }
 
       const { error } = await supabase.from('members').upsert(
@@ -766,7 +786,10 @@ export default async function handler(req: any, res: any) {
       );
 
       if (error) {
-        return res.status(200).json({ ok: false, error: 'Ошибка при создании заявки' });
+        // Реальную причину показываем и в лог, и пользователю: раньше её прятал
+        // общий текст, и невозможно было понять, что упало (напр. source_hint).
+        slog('error', 'apply upsert failed', error);
+        return res.status(200).json({ ok: false, error: `Не удалось сохранить заявку: ${error.message || 'ошибка БД'}` });
       }
 
       const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
