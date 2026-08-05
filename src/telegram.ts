@@ -124,3 +124,20 @@ export function openBot(url: string): void {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
 }
+
+/**
+ * Вернуть человека В ЧАТ С БОТОМ. Внутри Mini App правильный способ —
+ * ЗАКРЫТЬ мини-приложение (`close()`): оно схлопывается и пользователь
+ * оказывается в переписке с ботом, где и придёт ответ по заявке. Открывать
+ * ссылку на тот же бот через openTelegramLink бесполезно — мини-апп остаётся
+ * поверх. В обычном браузере (не Telegram) просто открываем ссылку на бота.
+ */
+export function closeToBot(url: string): void {
+  const wa = getWebApp();
+  if (wa) {
+    try { wa.close(); return; } catch { /* SDK недоступен — падаем в ссылку */ }
+  }
+  if (typeof window !== 'undefined') {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}

@@ -792,8 +792,17 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: false, error: `Не удалось сохранить заявку: ${error.message || 'ошибка БД'}` });
       }
 
+      // Доставку админу возвращаем в ответе (_adminNotified/_adminNotifyErr):
+      // раньше провал глушился, и было не видно, дошло ли уведомление. Теперь
+      // это видно и в тесте, и во фронте.
+      let adminNotified = false;
+      let adminNotifyErr: string | null = null;
       const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-      if (adminChatId && BOT_TOKEN) {
+      if (!adminChatId) {
+        adminNotifyErr = 'TELEGRAM_ADMIN_CHAT_ID не задан в окружении';
+      } else if (!BOT_TOKEN) {
+        adminNotifyErr = 'TELEGRAM_BOT_TOKEN не задан в окружении';
+      } else {
         const uname = user?.username ? '@' + escHtml(user.username) : 'ника нет';
         const who =
           `👤 ${escHtml(firstName)} ${escHtml(lastName || '')}\n` +
@@ -823,16 +832,23 @@ export default async function handler(req: any, res: any) {
           const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
           });
-          const j = await r.json().catch(() => ({ ok: false }));
-          if (!(j as any).ok) slog('warn', 'apply admin-notify не доставлено', j);
-        } catch (e) { slog('warn', 'apply admin-notify ошибка сети', e); }
+          const j: any = await r.json().catch(() => ({ ok: false }));
+          adminNotified = j.ok === true;
+          if (!adminNotified) {
+            adminNotifyErr = j.description || `sendMessage вернул ${r.status}`;
+            slog('warn', 'apply admin-notify не доставлено', j);
+          }
+        } catch (e) {
+          adminNotifyErr = (e as Error).message;
+          slog('warn', 'apply admin-notify ошибка сети', e);
+        }
       }
 
       // `approved: true` — сигнал фронту сразу открыть афишу, а не показывать
       // экран «ждите рассмотрения»: человек уже в клубе.
       return inviterId
-        ? res.status(200).json({ ok: true, approved: true, message: 'Добро пожаловать в клуб!' })
-        : res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.' });
+        ? res.status(200).json({ ok: true, approved: true, message: 'Добро пожаловать в клуб!', _adminNotified: adminNotified, _adminNotifyErr: adminNotifyErr })
+        : res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.', _adminNotified: adminNotified, _adminNotifyErr: adminNotifyErr });
     }
 
     // === ONBOARD ===

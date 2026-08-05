@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Lock, KeyRound, ArrowRight, Loader2, UserPlus, X, CheckCircle } from 'lucide-react';
 import { LogoMain } from './VectorIcons';
-import { getInitData, getStartParam, haptic, openBot } from '../telegram';
+import { getInitData, getStartParam, haptic, openBot, closeToBot } from '../telegram';
 import { submitClubApplication } from '../api';
 
 /**
@@ -248,10 +248,10 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
           </div>
           <button
             type="button"
-            onClick={() => openBot('https://t.me/campsflint_bot')}
+            onClick={() => closeToBot('https://t.me/campsflint_bot')}
             className="w-full bg-brand hover:bg-brand-hover text-black font-black font-mono text-xs uppercase tracking-widest py-3.5 rounded-xl cursor-pointer border-none"
           >
-            Открыть бот @campsflint_bot →
+            Вернуться в бот →
           </button>
         </motion.div>
       </div>
