@@ -329,7 +329,14 @@ export default async function handler(req: any, res: any) {
         `для онлайна — false);\n` +
         `- needsRides: true, если участникам надо ДОБИРАТЬСЯ до места (машины, попутки). ` +
         `Для online всегда false;\n` +
-        `- needsTents: true, только если событие с ночёвкой в палатках. Для однодневных и online — false.`;
+         `- needsTents: true, только если событие с ночёвкой в палатках. Для однодневных и online — false.\n` +
+         `\nКЛЮЧЕВОЕ — АДАПТИВНЫЕ БЛОКИ события зависят от СУТИ ИДЕИ. Определи их максимально честно:\n` +
+         `- activity: основное действие события одной фразой (напр. «гидроциклы», «катамараны», «сапборды», «конная прогулка», «кайтсерфинг», «йога на рассвете»). Если действия нет (созвон, разбор) — пустая строка;\n` +
+         `- needsLicenses: true, если для активности нужны права/разрешение (гидроцикл — права на гидроцикл, авто — права, катер — права на катер). Для бана, йоги, интеллекта — false;\n` +
+         `- needsCarRental: true, если участникам нужен автомобиль для поездки, а у части его нет — будут арендовать. Для выездов в лес/на воду почти всегда true;\n` +
+         `- needsAccommodation: true, если событие с ночёвкой (палатки, дом, гостиница). Однодневное — false;\n` +
+         `- hasAccommodationVote: true, если РАЗУМНО предложить выбор жилья (палатка vs домик) как голосование. Для активных выездов с ночёвкой — true, для событий где дом уже арендован — false;\n` +
+         `- fuelEstimate: примерная сумма на топливо на ВСЮ группу в BYN (0 если не нужно, напр. онлайн/город).`;
       const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
@@ -355,6 +362,12 @@ export default async function handler(req: any, res: any) {
           needsFood: { type: Type.BOOLEAN },
           needsRides: { type: Type.BOOLEAN },
           needsTents: { type: Type.BOOLEAN },
+          activity: { type: Type.STRING },
+          needsLicenses: { type: Type.BOOLEAN },
+          needsCarRental: { type: Type.BOOLEAN },
+          needsAccommodation: { type: Type.BOOLEAN },
+          hasAccommodationVote: { type: Type.BOOLEAN },
+          fuelEstimate: { type: Type.NUMBER },
         },
         required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
       });
@@ -376,6 +389,13 @@ export default async function handler(req: any, res: any) {
         entryThreshold: p.entryThreshold || '',
         houseQualities: Array.isArray(p.houseQualities) ? p.houseQualities.filter((k: string) => allowedKeys.includes(k)) : [],
         maxParticipants: Number(p.maxParticipants) || 15,
+        // Активность и адаптивные блоки — ИИ сам решает, что подключать.
+        activity: String(p.activity || '').slice(0, 80),
+        needsLicenses: !!p.needsLicenses,
+        needsCarRental: !!p.needsCarRental,
+        needsAccommodation: !!p.needsAccommodation,
+        hasAccommodationVote: !!p.hasAccommodationVote,
+        fuelEstimate: Number(p.fuelEstimate) || 0,
       };
       /**
        * Адаптивная структура: блоки события зависят от его сути, а не от типа.
@@ -394,6 +414,11 @@ export default async function handler(req: any, res: any) {
         feat_food: online ? false : p.needsFood !== false,
         feat_rides: online ? false : p.needsRides !== false,
         feat_tents: online ? false : p.needsTents === true,
+        feat_licenses: online ? false : !!p.needsLicenses,
+        feat_car_rental: online ? false : !!p.needsCarRental,
+        feat_housing: online ? false : !!p.needsAccommodation,
+        feat_housing_vote: online ? false : !!p.hasAccommodationVote,
+        fuel_estimate: Number(p.fuelEstimate) || 0,
       };
       return res.status(200).json({ draft, model: usedModel });
     }
