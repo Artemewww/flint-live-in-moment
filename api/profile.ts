@@ -793,14 +793,13 @@ export default async function handler(req: any, res: any) {
       }
 
       // Доставку админу возвращаем в ответе (_adminNotified/_adminNotifyErr):
-      // раньше провал глушился, и было не видно, дошло ли уведомление. Теперь
-      // это видно и в тесте, и во фронте.
+      // раньше провал глушился, и было не видно, дошло ли уведомление.
+      // КРИТИЧНО: шлём не только в групповой админ-чат (мог быть замьючен/не тот),
+      // но и В ЛИЧКУ каждому костяку — так владелец гарантированно видит заявку
+      // и жмёт «Принять» прямо у себя. Тот же приём, что notifyCore в боте.
       let adminNotified = false;
       let adminNotifyErr: string | null = null;
-      const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
-      if (!adminChatId) {
-        adminNotifyErr = 'TELEGRAM_ADMIN_CHAT_ID не задан в окружении';
-      } else if (!BOT_TOKEN) {
+      if (!BOT_TOKEN) {
         adminNotifyErr = 'TELEGRAM_BOT_TOKEN не задан в окружении';
       } else {
         const uname = user?.username ? '@' + escHtml(user.username) : 'ника нет';
@@ -810,37 +809,49 @@ export default async function handler(req: any, res: any) {
           `✈️ ${uname}${telegramId > 0 ? ` (id ${telegramId})` : ' — заявка с сайта, без Telegram'}` +
           (sourceHint ? `\n💬 Откуда: ${escHtml(sourceHint)}` : '');
         // Кнопки — тот же callback approve_/reject_/reply_<telegram_id>, что и у
-        // заявок из бота: костяк решает в один тап, ответ придёт заявителю в бот.
-        // Для веб-заявки без Telegram кнопки бесполезны (бот не напишет) — там
-        // только телефон и текстовая команда одобрения.
-        let payload: any;
+        // заявок из бота: костяк решает в один тап (работает и в личке, и в чате).
+        let text: string;
+        let replyMarkup: any = undefined;
         if (inviterId) {
-          payload = { chat_id: adminChatId, parse_mode: 'HTML',
-            text: `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.` };
+          text = `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.`;
         } else if (telegramId > 0) {
-          payload = { chat_id: adminChatId, parse_mode: 'HTML',
-            text: `🚪 <b>Новая заявка в клуб</b>\n\n${who}\n\nРешение — кнопками ниже, ответ придёт заявителю в бот.`,
-            reply_markup: { inline_keyboard: [
-              [{ text: '✅ Принять', callback_data: `approve_${telegramId}` }, { text: '❌ Отклонить', callback_data: `reject_${telegramId}` }],
-              [{ text: '✍️ Написать заявителю', callback_data: `reply_${telegramId}` }],
-            ] } };
+          text = `🚪 <b>Новая заявка в клуб</b>\n\n${who}\n\nРешение — кнопками ниже, ответ придёт заявителю в бот.`;
+          replyMarkup = { inline_keyboard: [
+            [{ text: '✅ Принять', callback_data: `approve_${telegramId}` }, { text: '❌ Отклонить', callback_data: `reject_${telegramId}` }],
+            [{ text: '✍️ Написать заявителю', callback_data: `reply_${telegramId}` }],
+          ] };
         } else {
-          payload = { chat_id: adminChatId, parse_mode: 'HTML',
-            text: `🚪 <b>Новая заявка в клуб (с сайта)</b>\n\n${who}\n\n⚠️ Без Telegram — бот ответить не сможет, свяжитесь по телефону.\nОдобрить: /approve_${refCode}` };
+          text = `🚪 <b>Новая заявка в клуб (с сайта)</b>\n\n${who}\n\n⚠️ Без Telegram — бот ответить не сможет, свяжитесь по телефону.\nОдобрить: /approve_${refCode}`;
         }
+
+        // Получатели: групповой админ-чат + личка всем костякам (без дублей).
+        const recipients = new Set<string>();
+        const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+        if (adminChatId) recipients.add(String(adminChatId));
         try {
-          const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
-          });
-          const j: any = await r.json().catch(() => ({ ok: false }));
-          adminNotified = j.ok === true;
-          if (!adminNotified) {
-            adminNotifyErr = j.description || `sendMessage вернул ${r.status}`;
-            slog('warn', 'apply admin-notify не доставлено', j);
+          const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+          for (const c of core || []) {
+            const id = Number((c as any).telegram_id);
+            if (Number.isFinite(id) && id > 0 && id !== telegramId) recipients.add(String(id));
           }
-        } catch (e) {
-          adminNotifyErr = (e as Error).message;
-          slog('warn', 'apply admin-notify ошибка сети', e);
+        } catch { /* нет доступа к таблице — остаётся хотя бы админ-чат */ }
+
+        if (!recipients.size) {
+          adminNotifyErr = 'некому слать: нет TELEGRAM_ADMIN_CHAT_ID и ни одного костяка';
+        } else {
+          const errs: string[] = [];
+          for (const chat of recipients) {
+            try {
+              const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: chat, parse_mode: 'HTML', disable_web_page_preview: true, text, reply_markup: replyMarkup }),
+              });
+              const j: any = await r.json().catch(() => ({ ok: false }));
+              if (j.ok === true) adminNotified = true;
+              else errs.push(`${chat}: ${j.description || r.status}`);
+            } catch (e) { errs.push(`${chat}: ${(e as Error).message}`); }
+          }
+          if (!adminNotified) { adminNotifyErr = errs.join('; ') || 'sendMessage не ok'; slog('warn', 'apply admin-notify нигде не доставлено', errs); }
         }
       }
 
