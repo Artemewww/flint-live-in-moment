@@ -609,11 +609,14 @@ export default async function handler(req: any, res: any) {
       const user = allowed ? null : verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
       if (user) {
         const { data: m } = await supabase
-          .from('members').select('status,is_core,prefs').eq('telegram_id', user.id).maybeSingle();
-        // Правила клуба — ОБЯЗАТЕЛЬНЫ. Костяк (is_core) проходит без них (он их
-        // автор), а обычный approved-участник — только если принял кодекс
-        // (prefs.rules_accepted). Без этого человек не видит афишу и события.
-        allowed = !!m && (m.is_core === true || (m.status === 'approved' && !!m.prefs?.rules_accepted));
+          .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        // Афишу видит любой принятый участник/костяк. Кодекс клуба НЕ требуем
+        // здесь: раньше требовали prefs.rules_accepted, и одобренные кнопкой/
+        // по реф-ссылке (у них кодекс не проставлен) упирались в «только для
+        // участников» и не могли даже посмотреть события (баг 07.08, @iaevgen).
+        // Принятие кодекса обязательно при ЗАПИСИ на событие (RegistrationGate),
+        // где оно и уместно — там же пишется prefs.rules_accepted.
+        allowed = !!m && (m.is_core === true || m.status === 'approved');
       }
       if (!allowed) return res.status(403).json({ error: 'members_only' });
     }
