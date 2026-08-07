@@ -271,15 +271,22 @@ export default async function handler(req: any, res: any) {
     // пол, согласие на ПД и, для реф-новичка, ВПУСКАЕМ в клуб. Раньше это делал
     // короткий онбординг в боте; теперь единственный путь — Mini App.
     // ⚠️ pending_review (ручная модерация) и blocked реф-ссылкой НЕ обходятся.
+    // Не-член, пришедший по ссылке-приглашению на событие, БОЛЬШЕ НЕ впускается
+    // автоматически (это был последний лаз мимо ручного одобрения). Он идёт на
+    // рассмотрение костяком (pending_review) с кнопками — как обычная заявка.
+    // ⚠️ Одобренных участников (isMember) это НЕ касается — их регистрация без
+    // изменений. Меняется поведение ТОЛЬКО для новичков по ссылке.
+    let newPendingViaRef = false;
     try {
       const patch: Record<string, unknown> = {};
       if (body.category === 'male' || body.category === 'female') patch.gender = body.category;
       if (body.agreedPd === true) patch.agreed_pd = true;
-      const canApprove = verified?.id && inviterId && !isMember
-        && myStatus !== 'blocked' && myStatus !== 'pending_review';
-      if (canApprove) {
-        patch.status = 'approved';
-        patch.approved_by = inviterId;
+      const isNewByRef = verified?.id && inviterId && !isMember
+        && myStatus !== 'blocked' && myStatus !== 'approved';
+      if (isNewByRef) {
+        if (myStatus !== 'pending_review') patch.status = 'pending_review';
+        patch.referred_by = inviterId;   // фиксируем, кто пригласил (атрибуция)
+        newPendingViaRef = true;
       }
       if (Object.keys(patch).length) {
         await supabase.from('members').update(patch).eq('telegram_id', member.telegram_id);
@@ -386,26 +393,56 @@ export default async function handler(req: any, res: any) {
       } catch { /* анкета догонится кроном-доборщиком */ }
     }
 
-    // 3) Уведомление организатору (best-effort, не роняет заявку).
+    // 3) Уведомление костяку (best-effort, не роняет заявку).
     let delivered = false;
-    if (BOT_TOKEN && ADMIN_CHAT_ID) {
-      try {
-        const text =
-          `🟢 <b>Новая заявка</b> • 💾 в базе\n\n` +
+    if (BOT_TOKEN) {
+      // Новичок по ссылке (pending_review) — костяк решает КНОПКАМИ, и шлём в
+      // личку каждому костяку, а не только в групповой чат. Обычный участник,
+      // записавшийся на событие, — простое инфо-уведомление в чат.
+      let text: string;
+      let replyMarkup: any = undefined;
+      if (newPendingViaRef && verified?.id) {
+        text =
+          `🚪 <b>Новая заявка в клуб</b> (через запись на «${escapeHtml(eventTitle || eventId)}»)\n\n` +
+          `👤 ${escapeHtml(name)}\n` +
+          `✈️ ${escapeHtml(telegram)} (id ${verified.id})\n` +
+          `📞 <code>${escapeHtml(phone || '—')}</code>\n` +
+          `🔗 Пригласил: ${escapeHtml(inviter || '—')}\n\n` +
+          `Решай кнопками — ответ придёт заявителю в бот.`;
+        replyMarkup = { inline_keyboard: [
+          [{ text: '✅ Принять', callback_data: `approve_${verified.id}` }, { text: '❌ Отклонить', callback_data: `reject_${verified.id}` }],
+          [{ text: '✍️ Написать заявителю', callback_data: `reply_${verified.id}` }],
+        ] };
+      } else {
+        text =
+          `🟢 <b>Запись на событие</b>\n\n` +
           `<b>Событие:</b> ${escapeHtml(eventTitle || eventId)}\n` +
           `<b>Имя:</b> ${escapeHtml(name)}\n` +
           `<b>Telegram:</b> ${escapeHtml(telegram)}\n` +
           `<b>Телефон:</b> ${escapeHtml(phone || '—')}\n` +
-          `<b>Пригласил:</b> ${escapeHtml(inviter || '—')}\n` +
           `<b>Верификация:</b> ${verified ? '✅ Telegram подтверждён' : 'веб-форма'}`;
-        const tg = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chat_id: ADMIN_CHAT_ID, text, parse_mode: 'HTML', disable_web_page_preview: true }),
-        });
-        delivered = (await tg.json()).ok === true;
-      } catch (e) {
-        slog('error', 'Telegram notify failed', e);
+      }
+      // Получатели: групповой чат + личка костякам (для заявок с кнопками — чтобы
+      // владелец точно увидел и решил). Обычные записи — тоже в чат.
+      const recipients = new Set<string>();
+      if (ADMIN_CHAT_ID) recipients.add(String(ADMIN_CHAT_ID));
+      if (newPendingViaRef) {
+        try {
+          const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+          for (const c of core || []) {
+            const cid = Number((c as any).telegram_id);
+            if (Number.isFinite(cid) && cid > 0) recipients.add(String(cid));
+          }
+        } catch { /* нет доступа — остаётся чат */ }
+      }
+      for (const chat of recipients) {
+        try {
+          const tg = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chat, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: replyMarkup }),
+          });
+          if ((await tg.json()).ok === true) delivered = true;
+        } catch (e) { slog('error', 'Telegram notify failed', e); }
       }
     }
 
