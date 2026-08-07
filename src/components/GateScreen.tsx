@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import { Lock, KeyRound, ArrowRight, Loader2, UserPlus, X, CheckCircle } from 'lucide-react';
 import { LogoMain } from './VectorIcons';
-import { getInitData, getStartParam, haptic, openBot, closeToBot } from '../telegram';
+import { getInitData, getStartParam, haptic, openBot, closeToBot, isInsideTelegram } from '../telegram';
 import { submitClubApplication } from '../api';
 
 /**
@@ -311,12 +311,23 @@ export default function GateScreen({ onPass, onAdmin, applyOnly }: { onPass: () 
               <p className="text-[10px] text-white/30 uppercase font-mono tracking-wider mb-3">
                 Нет приглашения?
               </p>
+              {/* Заявку принимаем ТОЛЬКО внутри Telegram: личность заявителя
+                  берётся из его аккаунта, а при одобрении ответ приходит в бот.
+                  На сайте (без Telegram) отправляем человека в бота. */}
               <button
-                onClick={() => { setShowApplyForm(true); setError(''); }}
+                onClick={() => {
+                  if (isInsideTelegram()) { setShowApplyForm(true); setError(''); }
+                  else openBot('https://t.me/campsflint_bot?start=apply');
+                }}
                 className="w-full bg-white/5 hover:bg-white/10 border border-white/10 text-white font-mono text-xs uppercase tracking-widest py-3.5 rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
               >
                 <UserPlus className="w-4 h-4" /> Подать заявку на вступление
               </button>
+              {!isInsideTelegram() && (
+                <p className="text-[10px] text-white/30 mt-2 leading-relaxed">
+                  Вступление в клуб — через Telegram-бота: так заявка привяжется к твоему аккаунту, и придёт ответ.
+                </p>
+              )}
             </div>
 
             <button

@@ -76,19 +76,6 @@ function escHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-/**
- * Синтетический id для заявок без Telegram (сайт вне Mini App): `telegram_id`
- * в members — PRIMARY KEY NOT NULL, upsert без него падает. Тот же приём,
- * что в api/register.ts (idFromHandle) — детерминированный отрицательный id
- * по телефону, чтобы повторная заявка с тем же номером не плодила дубли.
- */
-function idFromHandle(handle: string): number {
-  let hash = 0;
-  for (let i = 0; i < handle.length; i++) {
-    hash = (hash * 31 + handle.charCodeAt(i)) | 0;
-  }
-  return -Math.abs(hash) - 1;
-}
 
 // Базовый чек-лист продуктов по категориям
 const FOOD_CATEGORIES = [
@@ -691,17 +678,26 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, events: result });
     }
 
-    // === APPLY (заявка на вступление с сайта) ===
+    // === APPLY (заявка на вступление — ТОЛЬКО через Telegram) ===
     if (action === 'apply') {
       const { firstName, lastName, phone, sourceHint } = body;
       if (!firstName || !phone) {
         return res.status(200).json({ ok: false, error: 'Имя и телефон обязательны' });
       }
 
+      // Telegram ОБЯЗАТЕЛЕН: личность заявителя берём из подписанного initData,
+      // а не с его слов. Иначе (а) при одобрении некуда прислать уведомление,
+      // (б) человек не сможет авторизоваться и войти в клуб, (в) можно
+      // назваться кем угодно. Аккаунты без @ника пропускаем — идентификатор
+      // это telegram_id (его сменить нельзя), ник лишь для показа.
       const user = verifyInitData(body.initData);
-      // Заявка с сайта вне Telegram (обычный браузер) не даёт настоящий id —
-      // telegram_id тут PRIMARY KEY NOT NULL, поэтому синтезируем свой.
-      const telegramId: number = user ? user.id : idFromHandle(phone);
+      if (!user || !user.id) {
+        return res.status(200).json({
+          ok: false, code: 'need_telegram',
+          message: 'Вступление в клуб — только через Telegram. Открой @campsflint_bot и подай заявку там: так мы свяжем заявку с твоим аккаунтом и сможем прислать ответ.',
+        });
+      }
+      const telegramId: number = user.id;
 
       // 0) Текущий Telegram-аккаунт УЖЕ в клубе → впускаем сразу, а не блокируем
       //    формой. Раньше одобренный участник, попавший на экран анкеты, получал
@@ -718,14 +714,15 @@ export default async function handler(req: any, res: any) {
       }
 
       /**
-       * Реф-ссылка = доверие пригласившего, снимает ручную модерацию — как
-       * bindReferrer в боте и api/register.ts. Без этого воронка вступления
-       * была ТУПИКОМ (30.07–02.08 застряли 22 человека). Требуем подписанный
-       * initData: код можно переслать, а подпись Telegram — нет.
+       * Реф-ссылка больше НЕ впускает автоматически — фиксирует лишь того, кто
+       * пригласил (для атрибуции). Костяк решает по КАЖДОЙ заявке вручную
+       * кнопками «Принять / Отклонить / Написать» (требование владельца 06.08:
+       * «вход только по приглашению», но всех проверять лично). Безопасно, т.к.
+       * уведомление костяку в личку теперь доставляется надёжно.
        */
       let inviterId: number | null = null;
       const applyRef = String(body.refCode || '').trim();
-      if (applyRef && user) {
+      if (applyRef) {
         const { data: inv } = await supabase
           .from('members').select('telegram_id,status,is_core').eq('ref_code', applyRef).maybeSingle();
         const inviterInside = !!inv && ((inv as any).status === 'approved' || (inv as any).is_core === true);
@@ -749,10 +746,10 @@ export default async function handler(req: any, res: any) {
       if (existOther && (existing as any).status === 'blocked') {
         return res.status(200).json({ ok: false, code: 'blocked', message: 'Ваш доступ заблокирован. Обратитесь в поддержку.' });
       }
-      // Своя заявка уже на модерации и нового приглашения нет — не плодим шум.
+      // Своя заявка уже на модерации — не плодим дубли-уведомления костяку.
       if (existing && Number((existing as any).telegram_id) === telegramId
-          && (existing as any).status === 'pending_review' && !inviterId) {
-        return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении' });
+          && (existing as any).status === 'pending_review') {
+        return res.status(200).json({ ok: false, code: 'already_pending', message: 'Ваша заявка уже на рассмотрении — костяк ответит в бот.' });
       }
 
       const refCode = Math.random().toString(36).slice(2, 9);
@@ -762,15 +759,13 @@ export default async function handler(req: any, res: any) {
         first_name: firstName,
         last_name: lastName || null,
         phone,
-        status: inviterId ? 'approved' : 'pending_review',
+        status: 'pending_review',   // всегда на ручное решение костяка
         ref_code: refCode,
         agreed_pd: true,
         username: user?.username || null,
       };
-      if (inviterId) {
-        memberData.approved_by = inviterId;
-        if (!(existing as any)?.referred_by) memberData.referred_by = inviterId;
-      }
+      // Реф-ссылка фиксирует пригласившего (атрибуция), но НЕ впускает сама.
+      if (inviterId && !(existing as any)?.referred_by) memberData.referred_by = inviterId;
       // «Откуда узнал» — в members НЕТ колонки source_hint (именно из-за неё
       // КАЖДАЯ заявка падала на upsert 02–03.08). Кладём в prefs (jsonb).
       if (sourceHint) {
@@ -802,27 +797,28 @@ export default async function handler(req: any, res: any) {
       if (!BOT_TOKEN) {
         adminNotifyErr = 'TELEGRAM_BOT_TOKEN не задан в окружении';
       } else {
-        const uname = user?.username ? '@' + escHtml(user.username) : 'ника нет';
+        const uname = user?.username ? '@' + escHtml(user.username) : 'ника нет (вход по id)';
+        // Пригласивший — справочно (кто ручается), но решает всё равно костяк.
+        let invLine = '';
+        if (inviterId) {
+          const { data: invM } = await supabase.from('members').select('first_name,username').eq('telegram_id', inviterId).maybeSingle();
+          const invName = (invM as any)?.first_name || ((invM as any)?.username ? '@' + (invM as any).username : `id ${inviterId}`);
+          invLine = `\n🔗 Пригласил: ${escHtml(invName)}`;
+        }
         const who =
           `👤 ${escHtml(firstName)} ${escHtml(lastName || '')}\n` +
           `📞 <code>${escHtml(phone)}</code>\n` +
-          `✈️ ${uname}${telegramId > 0 ? ` (id ${telegramId})` : ' — заявка с сайта, без Telegram'}` +
+          `✈️ ${uname} (id ${telegramId})` +
+          invLine +
           (sourceHint ? `\n💬 Откуда: ${escHtml(sourceHint)}` : '');
-        // Кнопки — тот же callback approve_/reject_/reply_<telegram_id>, что и у
-        // заявок из бота: костяк решает в один тап (работает и в личке, и в чате).
-        let text: string;
-        let replyMarkup: any = undefined;
-        if (inviterId) {
-          text = `✅ <b>Новый участник по приглашению</b>\n\n${who}\nПригласил: id ${inviterId}\n\nВступил автоматически — реф-ссылка действующего участника.`;
-        } else if (telegramId > 0) {
-          text = `🚪 <b>Новая заявка в клуб</b>\n\n${who}\n\nРешение — кнопками ниже, ответ придёт заявителю в бот.`;
-          replyMarkup = { inline_keyboard: [
-            [{ text: '✅ Принять', callback_data: `approve_${telegramId}` }, { text: '❌ Отклонить', callback_data: `reject_${telegramId}` }],
-            [{ text: '✍️ Написать заявителю', callback_data: `reply_${telegramId}` }],
-          ] };
-        } else {
-          text = `🚪 <b>Новая заявка в клуб (с сайта)</b>\n\n${who}\n\n⚠️ Без Telegram — бот ответить не сможет, свяжитесь по телефону.\nОдобрить: /approve_${refCode}`;
-        }
+        // Кнопки Принять/Отклонить/Написать — callback approve_/reject_/reply_
+        // по telegram_id (стабильный, работает и без @ника). Костяк решает в
+        // один тап и в личке, и в групповом чате.
+        const text = `🚪 <b>Новая заявка в клуб</b>\n\n${who}\n\nРешай кнопками ниже — ответ придёт заявителю в бот.`;
+        const replyMarkup = { inline_keyboard: [
+          [{ text: '✅ Принять', callback_data: `approve_${telegramId}` }, { text: '❌ Отклонить', callback_data: `reject_${telegramId}` }],
+          [{ text: '✍️ Написать заявителю', callback_data: `reply_${telegramId}` }],
+        ] };
 
         // Получатели: групповой админ-чат + личка всем костякам (без дублей).
         const recipients = new Set<string>();
@@ -855,11 +851,9 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      // `approved: true` — сигнал фронту сразу открыть афишу, а не показывать
-      // экран «ждите рассмотрения»: человек уже в клубе.
-      return inviterId
-        ? res.status(200).json({ ok: true, approved: true, message: 'Добро пожаловать в клуб!', _adminNotified: adminNotified, _adminNotifyErr: adminNotifyErr })
-        : res.status(200).json({ ok: true, message: 'Заявка отправлена! Мы свяжемся с вами.', _adminNotified: adminNotified, _adminNotifyErr: adminNotifyErr });
+      // Авто-впуска больше нет: всегда «заявка на рассмотрении», костяк решит
+      // кнопками и ответит в бот.
+      return res.status(200).json({ ok: true, message: 'Заявка отправлена! Костяк рассмотрит её и ответит в бот.', _adminNotified: adminNotified, _adminNotifyErr: adminNotifyErr });
     }
 
     // === ONBOARD ===
