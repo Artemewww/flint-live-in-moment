@@ -6371,6 +6371,50 @@ export default async function handler(req: any, res: any) {
       // они не начинаются с '/', поэтому сюда не доходят.
       const cmd = text.split(' ')[0].split('@')[0];
 
+      // Одобрить/отклонить заявку ПО КОДУ (текстовая команда /approve_<ref>).
+      // Веб-заявки (без Telegram) уведомляют костяк именно так — кнопки там
+      // бесполезны (некуда слать callback). Раньше команда рекламировалась в
+      // уведомлении, но НЕ обрабатывалась — костяк жал и ничего не происходило.
+      if (cmd.startsWith('/approve_') || cmd.startsWith('/reject_')) {
+        if (!(await isCore(msg.from.id))) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Решать может только костяк клуба.' });
+          return res.status(200).json({ ok: true });
+        }
+        const approve = cmd.startsWith('/approve_');
+        const code = cmd.slice(approve ? '/approve_'.length : '/reject_'.length).replace(/[^a-zA-Z0-9]/g, '');
+        const { data: applicant } = await supabase
+          .from('members').select('telegram_id,first_name,phone,status').eq('ref_code', code).maybeSingle();
+        if (!applicant) {
+          await tg('sendMessage', { chat_id: chatId, text: `Заявка по коду ${code} не найдена (возможно, уже обработана).` });
+          return res.status(200).json({ ok: true });
+        }
+        const applId = Number((applicant as any).telegram_id);
+        await supabase.from('members')
+          .update({ status: approve ? 'approved' : 'blocked', approved_by: msg.from.id })
+          .eq('ref_code', code);
+        const nm = (applicant as any).first_name || (applicant as any).phone || `код ${code}`;
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: approve
+            ? `✅ <b>${esc(nm)}</b> принят(а) в клуб.${applId > 0 ? ' Сообщаю ему в бот.' : ' Заявка без Telegram — свяжись по телефону, бот написать не может.'}`
+            : `❌ <b>${esc(nm)}</b> отклонён(а).`,
+        });
+        // Уведомляем заявителя ТОЛЬКО если у него настоящий Telegram (id > 0).
+        if (applId > 0) {
+          try {
+            await tg('sendMessage', {
+              chat_id: applId, parse_mode: 'HTML',
+              text: approve
+                ? '🎉 <b>Тебя приняли в клуб!</b>\n\nОткрывай афишу — события и запись уже доступны.'
+                : '🚪 К сожалению, заявка в клуб отклонена. Если это ошибка — напиши в поддержку.',
+              reply_markup: approve ? kb([[openBtn]]) : kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
+            });
+            if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }); } catch { /* no-op */ } }
+          } catch { /* заявитель мог не начинать чат */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       // Профиль: баллы, реф-ссылка, счётчик приглашённых.
       if (cmd === '/profile') {
         await handleProfileCommand(msg, chatId, openBtn);
