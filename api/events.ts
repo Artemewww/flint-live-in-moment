@@ -666,9 +666,10 @@ export default async function handler(req: any, res: any) {
         const user = verifyInitData(body.initData, BOT_TOKEN);
         if (!user) return res.status(401).json({ error: 'Unauthorized' });
         const { data: m } = await supabase
-          .from('members').select('status,is_core,prefs').eq('telegram_id', user.id).maybeSingle();
-        // Правила обязательны и для голосования в галерее.
-        if (!m || !(m.is_core === true || (m.status === 'approved' && !!m.prefs?.rules_accepted))) return res.status(403).json({ error: 'members_only' });
+          .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+        // Голосовать может любой принятый участник/костяк (кодекс не требуем —
+        // он обязателен при записи на событие, см. фикс гейта афиши 07.08).
+        if (!m || !(m.is_core === true || m.status === 'approved')) return res.status(403).json({ error: 'members_only' });
         const mediaId = String(body.mediaId || '');
         if (!mediaId) return res.status(400).json({ error: 'Missing mediaId' });
         await supabase.from('event_media_votes').upsert(
