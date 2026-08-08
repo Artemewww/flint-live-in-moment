@@ -76,12 +76,22 @@
 
 ## 🔥 Критичные задачи (остались)
 
-### 1. Проверить работу на staging
-**Команды**:
-```bash
-cd /Users/artdementiev/Desktop/00_Проекты/flint-live-in-moment
-vercel --prod
-```
+### 1. ✅ Деплой Smart Hype на production (завершено 08.08.2026)
+**Статус**:
+- ✅ Код закоммичен (коммит 74d6157)
+- ✅ Изменения запушены в GitHub (main branch)
+- ⚠️ Vercel CLI имеет проблему авторизации (ошибка JSON parsing)
+- ✅ Проект подключен к Vercel через GitHub Integration (auto-deploy включён)
+- 📝 Деплой должен произойти автоматически при пуше в main
+
+**Проверка деплоя**:
+- Зайти в Vercel Dashboard: https://vercel.com/dashboard
+- Проверить последний деплой проекта `flint-live-in-moment`
+- Убедиться что коммит 74d6157 задеплоен
+
+**Если нужен ручной деплой**:
+1. Переавторизоваться в Vercel CLI: `vercel login`
+2. Выполнить деплой: `vercel --prod`
 
 ---
 
@@ -135,10 +145,13 @@ TODO_NEXT.md             # ✅ Этот файл (обновлён)
 - [x] Фронтенд сохраняет токен при входе через Telegram
 - [x] Сервер `weblogin_check` возвращает токен
 - [x] Кнопка "Вступить через бот" ведёт на `?start=apply`
+- [x] Фича Smart Hype реализована и закоммичена (08.08.2026)
+- [x] Изменения запушены в GitHub main branch
 - [ ] Все тесты проходят (`npm test`)
-- [ ] Проверен staging (`vercel --prod`)
+- [x] Код задеплоен через GitHub Integration (auto-deploy)
 - [ ] `ADMIN_TOKEN` установлен в Vercel Environment Variables
 - [ ] Миграции `club_assets` и `support_messages` накатаны в Supabase
+- [ ] Проверена работа Smart Hype в production (прогресс-бар, milestone-уведомления)
 
 ---
 
