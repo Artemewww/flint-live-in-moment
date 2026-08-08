@@ -36,12 +36,18 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
   const [formData, setFormData] = useState({
     hasTransport: false,
     // Обязательный выбор способа добраться: null = ещё не ответил (не пропустить).
-    transportMode: null as null | 'car' | 'seek' | 'self',
+    transportMode: null as null | 'car' | 'carsharing' | 'seek' | 'self',
     // Права — ОБЯЗАТЕЛЬНО для событий с квадроциклами/авто: без них не узнать,
     // кто может вести машину/квадроцикл. null = ещё не ответил.
     hasLicense: null as null | 'yes' | 'no',
     transportDetails: '',
+    // Марка и цвет авто — отдельные поля
+    carBrand: '',
+    carColor: '',
+    carColorCustom: '',
     transportSeats: 0,
+    // Кого готов взять: 'any' | 'male' | 'female'
+    seatGender: 'any' as 'any' | 'male' | 'female',
     inventory: '',
     category: 'male' as 'male' | 'female',
     dietary: 'omnivore' as 'omnivore' | 'vegetarian' | 'vegan',

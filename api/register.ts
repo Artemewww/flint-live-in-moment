@@ -343,6 +343,37 @@ export default async function handler(req: any, res: any) {
     // Счётчик участников (не критично, если RPC нет).
     try { await supabase.rpc('increment_participants', { event_id: eventId }); } catch {}
 
+    // Smart Hype: milestone-уведомления в чат при достижении порогов участников.
+    // Запрашиваем актуальный счётчик и шлём сообщение ОДИН РАЗ при переходе
+    // через 5 или 10 (т.е. только когда новый участник стал ровно пятым/десятым).
+    if (BOT_TOKEN && ADMIN_CHAT_ID) {
+      try {
+        const { data: evData } = await supabase
+          .from('events')
+          .select('participants_count, title')
+          .eq('id', eventId)
+          .maybeSingle();
+        const currentCount = Number((evData as any)?.participants_count ?? 0);
+        const milestones: Record<number, string> = {
+          5: `🎯 <b>Milestone: 5 участников</b> на «${escapeHtml(eventTitle || eventId)}»!\n\nПять человек уже едут — событие набирает силу. Самое время напомнить об оставшихся местах.`,
+          10: `🔥 <b>Milestone: 10 участников</b> на «${escapeHtml(eventTitle || eventId)}»!\n\nДесять человек в круге — это уже мощная группа. Проверь логистику и транспорт.`,
+        };
+        const milestoneText = milestones[currentCount];
+        if (milestoneText) {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: ADMIN_CHAT_ID,
+              text: milestoneText,
+              parse_mode: 'HTML',
+              disable_web_page_preview: true,
+            }),
+          });
+        }
+      } catch (e) { slog('warn', 'milestone notify skipped', e); }
+    }
+
     // Водитель из регистрации → строка в rides, чтобы машина была ВИДНА везде:
     // бот «Кто едет», статистика события и админ-логистика читают таблицу rides.
     // Раньше has_transport оставался невидимым — rides создавал только бот-флоу

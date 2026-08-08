@@ -370,15 +370,52 @@ export default function EventDetailModal({
 
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Users className="w-5 h-5 text-brand shrink-0" />
-                <div className="space-y-1 w-full">
+                <div className="space-y-2 w-full">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">СОСТОЯНИЕ МЕСТ</span>
-                  <div className="text-white font-bold flex justify-between items-center w-full">
-                    <span>Забронировано {totalRegistered} из {maxSpots}</span>
-                    <span className="text-brand font-mono text-[10px]">{percentFull}%</span>
+
+                  {/* Smart Hype: мотивирующий текст при малом числе участников */}
+                  {totalRegistered < 3 ? (
+                    <div className="space-y-1">
+                      <p className="text-brand text-xs font-bold leading-snug">🔥 Будь первым — костяк уже едет</p>
+                      <p className="text-white/50 text-[10px]">Запись открыта · {maxSpots} мест · присоединяйся к первым</p>
+                    </div>
+                  ) : (
+                    <div className="text-white font-bold flex justify-between items-center w-full">
+                      <span>Забронировано {totalRegistered} из {maxSpots}</span>
+                      <span className={`font-mono text-[10px] ${percentFull >= 80 ? 'text-red-400' : percentFull >= 50 ? 'text-amber-400' : 'text-brand'}`}>
+                        {percentFull}%
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Прогресс-бар [██████░░░░] */}
+                  {totalRegistered >= 3 && (
+                    <div className="font-mono text-[11px] tracking-tight select-none flex items-center gap-1">
+                      <span className="text-white/40">[</span>
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <span key={i} className={i < Math.round(percentFull / 10) ? (percentFull >= 80 ? 'text-red-400' : percentFull >= 50 ? 'text-amber-400' : 'text-brand') : 'text-white/20'}>
+                          {i < Math.round(percentFull / 10) ? '█' : '░'}
+                        </span>
+                      ))}
+                      <span className="text-white/40">]</span>
+                      <span className="text-white/50 ml-1">{totalRegistered}/{maxSpots}</span>
+                    </div>
+                  )}
+
+                  {/* Тонкий визуальный бар */}
+                  <div className="w-full bg-white/10 h-1 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${percentFull >= 80 ? 'bg-red-400' : percentFull >= 50 ? 'bg-amber-400' : 'bg-[#E6FD3A]'}`}
+                      style={{ width: `${Math.max(totalRegistered > 0 ? 4 : 0, percentFull)}%` }}
+                    />
                   </div>
-                  <div className="w-full bg-white/10 h-1 rounded-full mt-2 overflow-hidden">
-                    <div className="bg-[#E6FD3A] h-full" style={{ width: `${percentFull}%` }} />
-                  </div>
+
+                  {/* Срочность при высокой заполненности */}
+                  {percentFull >= 80 && !spotsFull && (
+                    <p className="text-red-400 text-[10px] font-mono">
+                      ⚡ Осталось {spotsRemaining} {spotsRemaining === 1 ? 'место' : spotsRemaining < 5 ? 'места' : 'мест'} — торопись
+                    </p>
+                  )}
                 </div>
               </div>
             </div>
