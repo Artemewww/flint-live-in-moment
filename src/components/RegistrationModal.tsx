@@ -89,6 +89,37 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         setTgUsername(u.username || `id${u.id}`);
         setFullName([u.first_name, u.last_name].filter(Boolean).join(' '));
       }
+      
+      // Автозаполнение из профиля + последней регистрации
+      (async () => {
+        try {
+          const { getPrefillData } = await import('../api');
+          const prefill = await getPrefillData();
+          if (prefill.ok && prefill.prefill) {
+            const p = prefill.prefill;
+            // Автозаполняем только если еще не установлено
+            if (p.name && !fullName) setFullName(p.name);
+            if (p.phone) setPhone(p.phone);
+            if (p.transportDetails || p.hasTransport || p.transportSeats > 0) {
+              setFormData(prev => ({
+                ...prev,
+                transportMode: p.hasTransport ? 'car' : prev.transportMode,
+                transportDetails: p.transportDetails || prev.transportDetails,
+                transportSeats: p.transportSeats || prev.transportSeats,
+                hasLicense: p.hasLicense || prev.hasLicense,
+                category: p.category || prev.category,
+                dietary: p.dietary || prev.dietary,
+                equipment: p.equipment || prev.equipment,
+                roles: p.roles || prev.roles,
+              }));
+            }
+          }
+        } catch (err) {
+          // Не критично — просто не автозаполнится
+          console.log('Prefill не загружен:', err);
+        }
+      })();
+      
       // Небольшая пауза для плавного появления «подтверждено», дальше — ЕДИНАЯ
       // анкета (та же, что в браузере). Отдельного короткого пути для Mini App
       // больше нет: раньше он спрашивал только имя и пригласившего, из-за чего

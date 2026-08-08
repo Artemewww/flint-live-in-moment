@@ -1210,6 +1210,45 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // === GET PREFILL DATA (для автозаполнения формы регистрации) ===
+    if (action === 'get_prefill') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      // Получаем профиль
+      const { data: member } = await supabase
+        .from('members')
+        .select('first_name,phone')
+        .eq('telegram_id', user.id)
+        .maybeSingle();
+
+      // Получаем последнюю регистрацию для автозаполнения транспорта
+      const { data: lastReg } = await supabase
+        .from('registrations')
+        .select('has_transport,transport_details,transport_seats,has_license,category,dietary,equipment,roles')
+        .eq('telegram_id', user.id)
+        .neq('status', 'cancelled')
+        .order('registered_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      return res.status(200).json({
+        ok: true,
+        prefill: {
+          name: member?.first_name || '',
+          phone: member?.phone || '',
+          hasTransport: lastReg?.has_transport || false,
+          transportDetails: lastReg?.transport_details || '',
+          transportSeats: lastReg?.transport_seats || 0,
+          hasLicense: lastReg?.has_license === true ? 'yes' : lastReg?.has_license === false ? 'no' : null,
+          category: lastReg?.category || 'male',
+          dietary: lastReg?.dietary || 'omnivore',
+          equipment: Array.isArray(lastReg?.equipment) ? lastReg.equipment.join(',') : '',
+          roles: Array.isArray(lastReg?.roles) ? lastReg.roles.join(',') : '',
+        },
+      });
+    }
+
     // === ADD POINTS ===
     if (action === 'add_points') {
       const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';

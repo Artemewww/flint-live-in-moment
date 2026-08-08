@@ -154,3 +154,36 @@ export async function submitFeedback(payload: {
     return { ok: false, delivered: false, message: (err as Error).message };
   }
 }
+
+/**
+ * Получает данные для автозаполнения формы регистрации из профиля пользователя
+ * и его последней регистрации (имя, телефон, транспорт).
+ */
+export async function getPrefillData(): Promise<{
+  ok: boolean;
+  prefill?: {
+    name: string;
+    phone: string;
+    hasTransport: boolean;
+    transportDetails: string;
+    transportSeats: number;
+    hasLicense: 'yes' | 'no' | null;
+    category: 'male' | 'female';
+    dietary: 'omnivore' | 'vegetarian' | 'vegan';
+    equipment: string;
+    roles: string;
+  };
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'get_prefill', initData: getInitData() }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    return await res.json();
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
