@@ -295,7 +295,15 @@ export default async function handler(req: any, res: any) {
 
     if (task === 'generate_event') {
       const prompt = body.prompt || '';
+      // Текущая дата по Минску (UTC+3) — БЕЗ неё модель ставит год из обучения
+      // (был баг: «12–13 августа» → 2025 вместо 2026, событие уезжало в архив).
+      const nowMinsk = new Date(Date.now() + 3 * 3600 * 1000);
+      const todayStr = nowMinsk.toISOString().slice(0, 10);
       const sys =
+        `СЕГОДНЯ: ${todayStr} (год ${nowMinsk.getUTCFullYear()}). Все даты событий — ` +
+        `в БУДУЩЕМ относительно сегодня. Если в идее указан месяц/число без года — ` +
+        `бери БЛИЖАЙШИЙ будущий такой день (обычно текущий год ${nowMinsk.getUTCFullYear()}, ` +
+        `а если он уже прошёл — следующий). НИКОГДА не ставь прошедшую дату.\n\n` +
         `Ты — чуткий наставник сообщества «Живи в моменте» (Минск). ` +
         `Твоя миссия — создавать события, которые дарят людям радость, вдохновение и пространство для роста.\n\n` +
         `Человек поделился своей идеей: «${prompt}». ` +
@@ -373,13 +381,32 @@ export default async function handler(req: any, res: any) {
       });
       const allowedTypes = ['male', 'mixed', 'intellectual', 'active'];
       const allowedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'];
+      /**
+       * Страховка от прошедшей даты: если модель всё же поставила дату в прошлом
+       * (день/месяц верные, год прошлогодний) — двигаем год вперёд, пока дата не
+       * станет сегодня/в будущем. dateEnd двигаем на столько же лет.
+       */
+      const bumpToFuture = (d: string): string => {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+        const today = new Date(todayStr + 'T00:00:00Z');
+        let dt = new Date(d + 'T00:00:00Z');
+        let guard = 0;
+        while (dt < today && guard < 6) { dt = new Date(Date.UTC(dt.getUTCFullYear() + 1, dt.getUTCMonth(), dt.getUTCDate())); guard++; }
+        return dt.toISOString().slice(0, 10);
+      };
+      const fixedDate = bumpToFuture(p.date || '');
+      const yearShift = (p.date && fixedDate) ? new Date(fixedDate).getUTCFullYear() - new Date(p.date + 'T00:00:00Z').getUTCFullYear() : 0;
+      const fixedDateEnd = p.dateEnd && /^\d{4}-\d{2}-\d{2}$/.test(p.dateEnd)
+        ? new Date(Date.UTC(new Date(p.dateEnd + 'T00:00:00Z').getUTCFullYear() + yearShift, new Date(p.dateEnd + 'T00:00:00Z').getUTCMonth(), new Date(p.dateEnd + 'T00:00:00Z').getUTCDate())).toISOString().slice(0, 10)
+        : (p.dateEnd || '');
+
       const draft: any = {
         title: p.title || '',
         type: allowedTypes.includes(p.type) ? p.type : 'mixed',
         description: p.description || '',
         painPoint: p.painPoint || '',
-        date: p.date || '',
-        dateEnd: p.dateEnd || '',
+        date: fixedDate,
+        dateEnd: fixedDateEnd,
         time: p.time || '',
         timeEnd: p.timeEnd || '',
         location: p.location || '',
