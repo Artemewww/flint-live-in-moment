@@ -5478,7 +5478,19 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        if (sess && sess.state === 'support_text') {
+        // Нажатие кнопки нижнего меню — это НАВИГАЦИЯ, а не текст в поддержку.
+        // Раньше зависшее состояние support_text перехватывало «👤 Профиль» и др.
+        // → человек жал Профиль, а сообщение улетало костяку (жалоба Яны 11.08).
+        // Сбрасываем состояние и пропускаем к обработчику кнопки ниже.
+        const MENU_BTNS = new Set([
+          '🗓 Мои события', '📅 Все события', '📅 Ближайшие события', '👤 Профиль', '👤 Мой статус',
+          'ℹ️ Как это работает', 'ℹ️ Помощь', '❓ Помощь', '💬 Поддержка', '💬 Написать в поддержку',
+          '🆘 SOS', '🏠 Главная', '⚙️ Панель организатора', '🎒 Чек-лист',
+        ]);
+        if (sess && sess.state === 'support_text' && MENU_BTNS.has(text)) {
+          await clearSession(msg.from.id);
+          // не return — падаем в обработчики кнопок меню ниже
+        } else if (sess && sess.state === 'support_text') {
           await clearSession(msg.from.id);
           const supAuthor = `${msg.from.first_name || ''}${msg.from.username ? ' @' + msg.from.username : ''}`.trim() || `id${msg.from.id}`;
           await logSupport(Number(msg.from.id), 'in', text, supAuthor);
