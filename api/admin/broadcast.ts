@@ -96,6 +96,8 @@ export default async function handler(req: any, res: any) {
     const toPicked = body.audience === 'picked';
     let ids: number[];
     let total: number;
+    /** Почему получателей меньше, чем людей в базе (для честного отчёта в админке). */
+    let breakdown: { base: number; reach: number; notApproved: number; botOff: number; blocked: number } | null = null;
     if (toPicked) {
       // Список приходит с клиента, поэтому пересекаем его с реальной базой:
       // шлём только одобренным, не заблокированным и не отключившим бота.
@@ -114,16 +116,26 @@ export default async function handler(req: any, res: any) {
         .map((m: any) => Number(m.telegram_id));
       total = wanted.length;
     } else if (toAll) {
+      // Берём ВСЮ базу, а не только approved: организатор видит «в базе 72,
+      // ушло 40» и не понимает, куда делись остальные. Теперь возвращаем
+      // разбор по причинам — кто не одобрен, кто отключил бота, кто в бане.
       const { data: members } = await supabase
         .from('members')
-        .select('telegram_id, status, bot_active')
-        .eq('status', 'approved');
+        .select('telegram_id, status, bot_active');
+      const all = (members || []).filter((m: any) => Number(m.telegram_id) > 0);
+      const approved = all.filter((m: any) => m.status === 'approved');
       ids = Array.from(new Set(
-        (members || [])
+        approved
           .filter((m: any) => m.bot_active !== false)
           .map((m: any) => Number(m.telegram_id))
-          .filter((id: number) => Number.isFinite(id) && id > 0)
       ));
+      breakdown = {
+        base: all.length,
+        reach: ids.length,
+        notApproved: all.filter((m: any) => m.status !== 'approved' && m.status !== 'blocked').length,
+        botOff: approved.filter((m: any) => m.bot_active === false).length,
+        blocked: all.filter((m: any) => m.status === 'blocked').length,
+      };
       total = ids.length;
     } else {
       const { data: regs } = await supabase
@@ -151,6 +163,7 @@ export default async function handler(req: any, res: any) {
         ok: false,
         sent: 0,
         total,
+        breakdown,
         message: toPicked
           ? 'Никому не ушло: выбранные не одобрены в клубе или отключили бота.'
           : toAll
@@ -239,7 +252,7 @@ export default async function handler(req: any, res: any) {
       await supabase.from('members').update({ bot_active: false }).in('telegram_id', blocked);
     }
 
-    return res.status(200).json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, allRegistrations: total });
+    return res.status(200).json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, allRegistrations: total, breakdown });
   } catch (error) {
     return res.status(500).json({ ok: false, error: (error as Error).message });
   }

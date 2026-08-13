@@ -1365,26 +1365,49 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [inviteQuery, setInviteQuery] = useState('');
   const [inviteSending, setInviteSending] = useState(false);
 
+  /**
+   * Кто уже записан на приглашаемое событие — их не показываем в списке.
+   * Просили прямо: «нужно исключить ребят приглашать, которые уже
+   * зарегистрировались» — иначе едущим прилетает «тебя приглашают».
+   */
+  const [inviteAlready, setInviteAlready] = useState<number[]>([]);
+
   /** Открыть выбор приглашённых: подтягиваем аудиторию, если ещё не загружена. */
   const openInvite = (event: CommunityEvent) => {
     setInvitingEvent(event);
     setInviteIds([]);
     setInviteQuery('');
+    setInviteAlready([]);
     if (!audience) loadAudience();
+    adminFetch(`/api/admin/registrations?eventId=${encodeURIComponent(event.id)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (!d) return;
+        setInviteAlready(
+          (d.registrations || [])
+            .filter((r: any) => r.status !== 'cancelled')
+            .map((r: any) => Number(r.telegram_id ?? r.telegramId))
+            .filter((id: number) => Number.isFinite(id) && id > 0)
+        );
+      })
+      .catch(() => { /* не смогли узнать — покажем всех, это не блокер */ });
   };
 
   /**
    * Кого вообще можно пригласить: одобренные члены клуба с настоящим Telegram id
-   * (веб-заявки без бота имеют отрицательный хеш — им доставить нечем).
+   * (веб-заявки без бота имеют отрицательный хеш — им доставить нечем),
+   * за вычетом тех, кто уже записался на это событие.
    */
   const inviteCandidates = React.useMemo(() => {
     const q = inviteQuery.trim().toLowerCase();
+    const going = new Set(inviteAlready);
     return ((audience?.members || []) as any[])
       .filter((m) => m.status === 'approved' && Number(m.telegramId) > 0)
+      .filter((m) => !going.has(Number(m.telegramId)))
       .filter((m) => !q
         || String(m.firstName || '').toLowerCase().includes(q)
         || String(m.username || '').toLowerCase().includes(q));
-  }, [audience, inviteQuery]);
+  }, [audience, inviteQuery, inviteAlready]);
 
   const sendInvites = async () => {
     if (!invitingEvent || inviteIds.length === 0 || inviteSending) return;
@@ -1967,14 +1990,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       });
       if (res.status === 401) { handleLogout(); return; }
       const data = await res.json().catch(() => ({}));
+      // Почему ушло меньше, чем людей в базе: раньше «Отправлено 40/40» при 72
+      // в базе выглядело как потеря 30 человек. Теперь причины названы.
+      const b = data.breakdown;
+      const why = b
+        ? ` · в базе ${b.base}: ${[
+            b.notApproved ? `${b.notApproved} ждут одобрения` : '',
+            b.botOff ? `${b.botOff} отключили бота` : '',
+            b.blocked ? `${b.blocked} заблокированы` : '',
+          ].filter(Boolean).join(', ') || 'все получили'}`
+        : '';
       setBroadcastResult({
         eventId: event.id,
         success: !!data.ok,
         message: data.ok
-          ? `Отправлено ${data.sent}/${data.total} ${toAll ? 'членам клуба' : 'участникам'}`
+          ? `Отправлено ${data.sent}/${data.total} ${toAll ? 'членам клуба' : 'участникам'}${why}`
           : (data.message || data.error || 'Некому слать (нет Telegram-получателей)'),
       });
-      setTimeout(() => setBroadcastResult(null), 6000);
+      setTimeout(() => setBroadcastResult(null), 10000);
     } catch (error) {
       setBroadcastResult({ eventId: event.id, success: false, message: 'Ошибка рассылки' });
     } finally {
@@ -4276,6 +4309,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] text-white/40 font-mono uppercase">
                         выбрано {inviteIds.length} из {list.length}
+                        {inviteAlready.length > 0 ? ` · ${inviteAlready.length} уже едут — скрыты` : ''}
                       </span>
                       <button
                         onClick={() => setInviteIds(allPicked ? [] : list.map((m) => m.telegramId))}

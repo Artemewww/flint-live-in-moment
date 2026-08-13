@@ -1846,7 +1846,7 @@ export default async function handler(req: any, res: any) {
     // Кнопки: запись + пошаговый умный опрос под событие.
     if (update.callback_query) {
       const cq = update.callback_query;
-      const data = cq.data || '';
+      let data = cq.data || '';
       const chatId = cq.message?.chat?.id;
       const msgId = cq.message?.message_id;
       const tgId = cq.from.id;
@@ -1867,6 +1867,43 @@ export default async function handler(req: any, res: any) {
           reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }], [{ text: '💬 Поддержка', callback_data: 'support' }]]),
         });
         return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * Разрушающие кнопки — только через подтверждение.
+       * Участница, «случайно листая ленту», нажала «Освободить место» — место
+       * тут же ушло другому, вернуться было некуда (жалоба 12.08). Один тап
+       * больше ничего не отменяет: сначала вопрос, работу делает шаг `cyes_`.
+       * Префикс снимается здесь, поэтому обработчики ниже не меняются.
+       */
+      const CANCEL_CONFIRM: Array<[RegExp, string]> = [
+        [/^rideunbook_/, 'Освободить место в машине? Оно сразу станет доступно другим — вернуть не получится.'],
+        [/^tunbook_/, 'Освободить место в палатке? Оно сразу станет доступно другим.'],
+        [/^regcancel_/, 'Отказаться от участия в событии? Место освободится для другого человека.'],
+        [/^ridecancel_/, 'Отменить свою поездку? Все, кто занял места, получат уведомление.'],
+      ];
+      if (data === 'cno') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ничего не меняем' });
+        try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '✅ Оставили как есть.' }); } catch { /* сообщение могли удалить */ }
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('cyes_')) {
+        data = data.slice('cyes_'.length);
+      } else {
+        const ask = CANCEL_CONFIRM.find(([re]) => re.test(data));
+        if (ask) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await tg('sendMessage', {
+            chat_id: chatId,
+            parse_mode: 'HTML',
+            text: `⚠️ <b>Подтверди</b>\n\n${ask[1]}`,
+            reply_markup: kb([
+              [{ text: '❌ Да, отменить', callback_data: `cyes_${data}` }],
+              [{ text: '← Нет, оставить', callback_data: 'cno' }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
       }
 
       const payRow = (ev: any) => (ev?.price_type === 'paid' ? [{ text: '💳 Оплатить участие', callback_data: `pay_${ev.id}` }] : null);

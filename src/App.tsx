@@ -139,9 +139,65 @@ function PhilosophyModal({ open, onClose }: { open: boolean; onClose: () => void
   );
 }
 
+/**
+ * Загрузка афиши: пульсирующий знак клуба + скелетоны карточек.
+ * Просили дословно: «чтобы иконка камня с молнией пульсировала и человек
+ * видел, что нужно подождать, а не думал, что ничего не работает».
+ */
+function EventsLoading() {
+  return (
+    <div id="events-loading" className="py-10 space-y-8">
+      <div className="flex flex-col items-center gap-4">
+        <LogoEmblem size={64} className="animate-pulse" />
+        <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-white/40">
+          Собираем афишу…
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {[0, 1, 2].map((i) => (
+          <div
+            key={i}
+            className="rounded-2xl border border-white/10 bg-[#151515] p-5 space-y-3 animate-pulse"
+            style={{ animationDelay: `${i * 150}ms` }}
+          >
+            <div className="h-3 w-24 rounded bg-white/10" />
+            <div className="h-5 w-3/4 rounded bg-white/15" />
+            <div className="h-3 w-1/2 rounded bg-white/10" />
+            <div className="h-24 rounded-xl bg-white/5" />
+            <div className="h-9 rounded-xl bg-white/10" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Афиша не пришла совсем: объясняем и даём повторить, а не молчим. */
+function EventsFailed({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div id="events-failed" className="py-16 flex flex-col items-center gap-4 text-center">
+      <LogoEmblem size={56} className="opacity-40" />
+      <h2 className="font-display font-black text-xl uppercase text-white">Афиша не загрузилась</h2>
+      <p className="text-white/50 text-sm max-w-sm">
+        Сервер не ответил. Обычно помогает повторить — связь могла моргнуть.
+      </p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-2 bg-brand hover:bg-brand-hover text-black px-6 py-3 rounded-xl text-xs font-black uppercase tracking-widest border-none cursor-pointer"
+      >
+        Повторить
+      </button>
+    </div>
+  );
+}
+
 export default function App() {
   const [events, setEvents] = useState<CommunityEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
+  // Афиша не догрузилась совсем: показываем понятный экран с «Повторить»,
+  // а не пустоту — люди писали «ничего не работает», хотя это была загрузка.
+  const [eventsError, setEventsError] = useState(false);
   const [registeredEventIds, setRegisteredEventIds] = useState<string[]>([]);
   const [userRegistrations, setUserRegistrations] = useState<Registration[]>([]);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -234,6 +290,8 @@ export default function App() {
   // На 403 фолбэки НЕ используем — иначе статический JSON обходил бы гейт.
   useEffect(() => {
     const ref = (() => { try { return localStorage.getItem('flint_ref') || ''; } catch { return ''; } })();
+    setEventsLoading(true);
+    setEventsError(false);
     fetch(`/api/events${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`, {
       headers: { 'X-Telegram-Init-Data': getInitData() },
     })
@@ -264,11 +322,15 @@ export default function App() {
           })
           .catch(() => {
             // Fallback на локальные данные
-            import('./data').then(module => {
-              const localEvents = (module.INITIAL_EVENTS || []).map(mapEventToCamelCase);
-              setEvents(localEvents);
-              setEventsLoading(false);
-            });
+            import('./data')
+              .then(module => {
+                const localEvents = (module.INITIAL_EVENTS || []).map(mapEventToCamelCase);
+                setEvents(localEvents);
+                // Пусто и здесь — значит показать нечего: честный экран ошибки.
+                if (localEvents.length === 0) setEventsError(true);
+                setEventsLoading(false);
+              })
+              .catch(() => { setEventsError(true); setEventsLoading(false); });
           });
       });
     // Перезапрашиваем после прохождения гейта и по событию рефетча (логин админа).
@@ -938,37 +1000,48 @@ export default function App() {
 
       {/* Central Content Canvas */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-10 relative z-10" id="main-content">
-        
-        {/* Compact Calendar Grid with no headers */}
-        <section id="calendar-widget-block" className="pt-2">
-          <CalendarGrid
-            events={events}
-            selectedEventId={selectedEventId}
-            onSelectEvent={setSelectedEventId}
-            onOpenDetail={setActiveDetailEvent}
-          />
-        </section>
 
-        {/* Row 2: COMPONENT 2 - Featured Highlight Event Hero Card */}
-        <section id="featured-hero-banner-block" className="pt-2">
-          <InfoSection
-            events={events}
-            registeredEventIds={registeredEventIds}
-            onRegisterClick={(evt) => setRegisteringEvent(evt)}
-            onOpenManifesto={() => setShowManifestoModal(true)}
-            onOpenDetails={(evt) => setActiveDetailEvent(evt)}
-          />
-        </section>
+        {/* Пока афиша грузится — живой лоадер вместо пустого экрана.
+            Люди писали «ничего не работает»: список приходил через 1-3 с,
+            а до этого страница выглядела мёртвой. */}
+        {eventsLoading ? (
+          <EventsLoading />
+        ) : eventsError ? (
+          <EventsFailed onRetry={() => setEventsReloadTick((t) => t + 1)} />
+        ) : (
+          <>
+            {/* Compact Calendar Grid with no headers */}
+            <section id="calendar-widget-block" className="pt-2">
+              <CalendarGrid
+                events={events}
+                selectedEventId={selectedEventId}
+                onSelectEvent={setSelectedEventId}
+                onOpenDetail={setActiveDetailEvent}
+              />
+            </section>
 
-        {/* Row 3: COMPONENT 3 - Event Listing Filter Catalog */}
-        <section id="event-feed-catalog" className="pt-6 border-t border-white/10">
-          <EventFeed 
-            events={events} 
-            registeredEventIds={registeredEventIds}
-            onRegisterClick={(evt) => setRegisteringEvent(evt)}
-            selectedEventId={selectedEventId}
-          />
-        </section>
+            {/* Row 2: COMPONENT 2 - Featured Highlight Event Hero Card */}
+            <section id="featured-hero-banner-block" className="pt-2">
+              <InfoSection
+                events={events}
+                registeredEventIds={registeredEventIds}
+                onRegisterClick={(evt) => setRegisteringEvent(evt)}
+                onOpenManifesto={() => setShowManifestoModal(true)}
+                onOpenDetails={(evt) => setActiveDetailEvent(evt)}
+              />
+            </section>
+
+            {/* Row 3: COMPONENT 3 - Event Listing Filter Catalog */}
+            <section id="event-feed-catalog" className="pt-6 border-t border-white/10">
+              <EventFeed
+                events={events}
+                registeredEventIds={registeredEventIds}
+                onRegisterClick={(evt) => setRegisteringEvent(evt)}
+                selectedEventId={selectedEventId}
+              />
+            </section>
+          </>
+        )}
 
       </main>
 
