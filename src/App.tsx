@@ -311,27 +311,19 @@ export default function App() {
       .catch(err => {
         if (err === 'members_only') return; // закрытый клуб: без фолбэков
         console.log('API not available, loading from JSON:', err);
-        // Fallback на статический JSON
+        // Fallback на статический JSON.
+        // ⚠️ Дальше фолбэка НЕТ: раньше на этом месте подставлялись
+        // демо-события из src/data (баня «4 июня» и т.п.) — при сбое API
+        // человек видел несуществующие мероприятия и пытался в них попасть.
+        // Лучше честный экран «не загрузилось» с кнопкой «Повторить».
         fetch('/events.json')
           .then(res => res.json())
           .then(data => {
-            if (data && data.length > 0) {
-              setEvents(data.map(mapEventToCamelCase));
-            }
+            if (data && data.length > 0) setEvents(data.map(mapEventToCamelCase));
+            else setEventsError(true);
             setEventsLoading(false);
           })
-          .catch(() => {
-            // Fallback на локальные данные
-            import('./data')
-              .then(module => {
-                const localEvents = (module.INITIAL_EVENTS || []).map(mapEventToCamelCase);
-                setEvents(localEvents);
-                // Пусто и здесь — значит показать нечего: честный экран ошибки.
-                if (localEvents.length === 0) setEventsError(true);
-                setEventsLoading(false);
-              })
-              .catch(() => { setEventsError(true); setEventsLoading(false); });
-          });
+          .catch(() => { setEventsError(true); setEventsLoading(false); });
       });
     // Перезапрашиваем после прохождения гейта и по событию рефетча (логин админа).
   }, [gatePassed, eventsReloadTick]);
