@@ -367,7 +367,11 @@ async function notifyQuotaExhausted() {
 async function geminiJSON(prompt: string): Promise<any | null> {
   const key = await getActiveGeminiKey();
   if (!key) return null;
-  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  // У каждой модели свой суточный лимит бесплатного тира (20 запросов),
+  // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
+  // замолкаем на весь день. gemini-2.5-flash для новых ключей отдаёт 404.
+  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
+    'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
   const attempt = async (model: string): Promise<any | null> => {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
@@ -392,7 +396,11 @@ async function geminiText(prompt: string): Promise<string> {
   const key = await getActiveGeminiKey();
   if (!key) return '';
   // У gemini-2.0-flash free-квота нулевая (limit: 0), у -latest — есть.
-  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+  // У каждой модели свой суточный лимит бесплатного тира (20 запросов),
+  // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
+  // замолкаем на весь день. gemini-2.5-flash для новых ключей отдаёт 404.
+  const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
+    'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
   const attempt = async (model: string, fast: boolean): Promise<string> => {
     const body: any = { contents: [{ parts: [{ text: prompt }] }] };
@@ -5175,8 +5183,23 @@ export default async function handler(req: any, res: any) {
           const [{ data: regs3 }, { data: rides3 }, { data: tasks3 }] = await Promise.all([
             supabase.from('registrations').select('name,telegram_id,guest_count,status').eq('event_id', evId).neq('status', 'cancelled'),
             supabase.from('rides').select('id,driver_id,driver_name,seats_total,seats_taken,from_point,kind').eq('event_id', evId).eq('active', true),
-            supabase.from('tasks').select('title,taker_name,done').eq('event_id', evId),
+            supabase.from('tasks').select('title,taken_by,done').eq('event_id', evId),
           ]);
+          /**
+           * В tasks лежит только telegram_id взявшего (`taken_by`) — колонки
+           * с именем в таблице НЕТ, хотя код её запрашивал и молча получал
+           * пустоту. Имя берём из регистраций, иначе из members.
+           */
+          const nameById = new Map<number, string>();
+          for (const r of (regs3 || []) as any[]) nameById.set(Number(r.telegram_id), r.name || '');
+          const unknownTakers = Array.from(new Set((tasks3 || [])
+            .map((t: any) => Number(t.taken_by))
+            .filter((id: number) => id > 0 && !nameById.get(id))));
+          if (unknownTakers.length) {
+            const { data: mm } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', unknownTakers);
+            for (const m of (mm || []) as any[]) nameById.set(Number(m.telegram_id), m.first_name || m.username || '');
+          }
+          const takerName = (id: any): string => nameById.get(Number(id)) || '';
           const cars = (rides3 || []).filter((r: any) => r.kind !== 'tent');
           const { data: bookings3 } = cars.length
             ? await supabase.from('ride_bookings').select('passenger_id').in('ride_id', cars.map((c: any) => c.id))
@@ -5205,7 +5228,7 @@ export default async function handler(req: any, res: any) {
               : '\n✅ Все с транспортом.') + '\n' +
             `\n🎒 <b>Кто что везёт:</b>\n` +
             ((tasks3 || []).length
-              ? (tasks3 || []).map((t: any) => `• ${esc(t.title)}${t.taker_name ? ` — ${esc(t.taker_name)}` : ' — <b>никто не взял</b>'}${t.done ? ' ✅' : ''}`).join('\n')
+              ? (tasks3 || []).map((t: any) => `• ${esc(t.title)}${takerName(t.taken_by) ? ` — ${esc(takerName(t.taken_by))}` : ' — <b>никто не взял</b>'}${t.done ? ' ✅' : ''}`).join('\n')
               : '• список пуст — напишите «я возьму …», и я запишу');
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML', text: txt,
@@ -5366,7 +5389,7 @@ export default async function handler(req: any, res: any) {
         // Gemini их съедают — Telegram посчитает доставку неудачной и пришлёт
         // апдейт повторно, участник получит дубль ответа.
         let aiUsed = false;
-        const carOffer = /(?<![а-яёa-z])(каршеринг|каршер|на\s+своей|на\s+машине|на\s+авто|за\s+рулём|за\s+рулем|подвезу|заберу|могу\s+взять|свободн\w*\s+мест)/i;
+        const carOffer = /(?<![а-яёa-z])(каршеринг|каршер|на\s+своей|на\s+машине|на\s+авто|за\s+рулём|за\s+рулем|подвезу|заберу|могу\s+взять|свободн[а-яё]*\s+мест)/i;
         if (linkedEvent && carOffer.test(text) && text.length > 12 && !text.trim().endsWith('?')) {
           aiUsed = true;
           try {
@@ -5425,7 +5448,17 @@ export default async function handler(req: any, res: any) {
          */
         const looksLikeQuestion = text.includes('?')
           || /^(а\s+)?(кто|что|где|когда|во\s+сколько|как|сколько|какой|какая|какие|можно|нужно|надо|брать\s+ли)/i.test(text);
-        if (linkedEvent && looksLikeQuestion && text.length > 8 && !aiUsed) {
+        /**
+         * Решение «отвечать или молчать» принимает КОД, а не модель.
+         * Когда выбор отдавали ИИ («верни пустую строку, если вопрос не
+         * к тебе»), он вёл себя непредсказуемо: на «во сколько выезд?» то
+         * отвечал, то молчал. Здесь тема проверяется регуляркой, а модель
+         * только формулирует ответ по данным.
+         */
+        const orgTopic = /(во\s*сколько|когда|где|куда|скольк|брать|взять|снаряж|спальник|палатк|выезд|сбор|парков|купа|костр|костёр|костер|еда|еду|едой|вода|воду|воды|взнос|стоит|цена|мест|машин|попутк|програм|бан[яию]|связь|интернет|вайфай|wi-?fi|зарядк|розетк|дожд|погод|привез|нужно\s+ли|можно\s+ли|обратно|вернём|вернем)/i;
+        // «Даня, ты выехал?» — обращение к человеку, бот не влезает.
+        const addressedToPerson = /^@?[А-ЯЁ][а-яё]{2,}\s*[,!]/.test(text.trim());
+        if (linkedEvent && looksLikeQuestion && orgTopic.test(text) && !addressedToPerson && text.length > 8 && !aiUsed) {
           const { data: lastReply } = await supabase
             .from('bot_group_actions').select('created_at')
             .eq('chat_id', chatId).eq('action_type', 'info_reply')
@@ -5439,17 +5472,75 @@ export default async function handler(req: any, res: any) {
                 .from('rides').select('driver_name,seats_total,seats_taken,from_point,kind')
                 .eq('event_id', (linkedEvent as any).id).eq('active', true);
               const { data: tsk } = await supabase
-                .from('tasks').select('title,taker_name,done').eq('event_id', (linkedEvent as any).id).limit(20);
+                .from('tasks').select('title,taken_by,done').eq('event_id', (linkedEvent as any).id).limit(20);
               const { data: regs2 } = await supabase
-                .from('registrations').select('name,guest_count').eq('event_id', (linkedEvent as any).id).neq('status', 'cancelled');
+                .from('registrations').select('name,telegram_id,guest_count').eq('event_id', (linkedEvent as any).id).neq('status', 'cancelled');
               const { data: hist } = await supabase
                 .from('group_messages').select('first_name,text')
                 .eq('chat_id', chatId).order('created_at', { ascending: false }).limit(15);
+              // tasks хранит только telegram_id взявшего — имя достаём из регистраций.
+              const takerBy = new Map<number, string>();
+              for (const r of (regs2 || []) as any[]) takerBy.set(Number(r.telegram_id), r.name || '');
+              // Точку сбора отдаём ИИ по-человечески: строку вида «Точка на
+              // карте (53.9…,27.6…)» модель считала мусором и молчала на самый
+              // частый вопрос — «во сколько выезд и где сбор».
+              const asmRaw = String(lg.assemblyPoint || '');
+              const asmC = pointCoords(asmRaw);
+              const asmTxt = asmRaw
+                ? (asmC ? `координаты ${asmC}${(ev as any)?.location ? ` (район: ${(ev as any).location})` : ''}` : asmRaw)
+                : 'не назначена';
+
+              /**
+               * САМЫЕ ЧАСТЫЕ ВОПРОСЫ — БЕЗ ИИ.
+               * У бесплатного ключа Gemini лимит 20 запросов в СУТКИ на модель:
+               * на живой чат этого не хватает, и после исчерпания бот замолкал
+               * бы весь день. «Во сколько выезд», «где сбор», «сколько стоит»,
+               * «есть места» и «кто едет» — это данные, а не рассуждение:
+               * отвечаем прямо из базы, мгновенно и без квоты. ИИ остаётся
+               * для всего остального.
+               */
+              const freeSeatsNow = (rides || [])
+                .filter((r: any) => r.kind !== 'tent')
+                .reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
+              let quick = '';
+              if (/во\s*сколько|когда\s+(выезд|выезжаем|стартуем|сбор|собираемся)|время\s+выезда/i.test(text)) {
+                quick = `🕗 Выезд ${lg.departureTime ? `в <b>${esc(lg.departureTime)}</b>` : 'время уточняется'}`
+                  + `${(ev as any)?.date ? `, ${esc(dayPhrase((ev as any).date))}` : ''}`
+                  + `${asmRaw ? `.\n🚩 Сбор: ${esc(asmTxt)}` : ''}`;
+              } else if (/где\s+(сбор|встреча|встречаемся|выезд|стартуем)|точк[аиу]\s+сбора|откуда\s+(едем|выезжаем)/i.test(text)) {
+                quick = asmRaw
+                  ? `🚩 Сбор: ${esc(asmTxt)}${lg.departureTime ? `, выезд в <b>${esc(lg.departureTime)}</b>` : ''}`
+                  : 'Точку сбора организатор ещё не назначил — как назначит, пришлю сюда.';
+              } else if (/скольк[а-яё]*\s+(стоит|взнос)|какой\s+взнос|цена|платить/i.test(text)) {
+                quick = `💰 ${esc((ev as any)?.price_label || 'Взнос не указан — уточню у организатора')}`;
+              } else if (/(свободн[а-яё]*\s+мест|есть\s+мест|мест[оа]?\s+в\s+машин|нужна\s+попутка|подвез)/i.test(text)) {
+                quick = freeSeatsNow > 0
+                  ? `🚗 Свободных мест: <b>${freeSeatsNow}</b>. Занять — кнопкой «Логистика и брони» в боте.`
+                  : `🚗 Свободных мест сейчас нет. Если поедешь своей машиной — напиши тут «еду на машине, N мест», я запишу.`;
+              } else if (/кто\s+(едет|поедет|записал|будет)|скольк[а-яё]*\s+(человек|нас|едет)/i.test(text)) {
+                const names = (regs2 || []).map((r: any) => r.name).filter(Boolean);
+                quick = `👥 Едут (${names.length}): ${esc(names.join(', ') || '—')}`;
+              }
+              if (quick) {
+                await tg('sendMessage', {
+                  chat_id: chatId, parse_mode: 'HTML', reply_to_message_id: msg.message_id,
+                  text: quick,
+                  reply_markup: asmC && /сбор|выезд|откуда/i.test(text)
+                    ? kb([[{ text: '🧭 Маршрут к точке сбора', url: pointMapUrl(asmRaw) }]])
+                    : undefined,
+                });
+                await supabase.from('bot_group_actions').insert({
+                  chat_id: chatId, event_id: (linkedEvent as any).id, action_type: 'info_reply',
+                  trigger_text: text.slice(0, 300), response_text: quick.slice(0, 500), data: { source: 'rules' },
+                });
+                return res.status(200).json({ ok: true });
+              }
               const facts =
                 `СОБЫТИЕ: ${(ev as any)?.title}\n` +
                 `Даты: ${(ev as any)?.date}${(ev as any)?.date_end && (ev as any).date_end !== (ev as any).date ? ` — ${(ev as any).date_end}` : ''}, время ${(ev as any)?.time || '—'}\n` +
                 `Место: ${(ev as any)?.location || '—'}\n` +
-                `Точка сбора: ${lg.assemblyPoint || 'не назначена'}${lg.departureTime ? `, выезд в ${lg.departureTime}` : ''}\n` +
+                `Точка сбора: ${asmTxt}${lg.departureTime ? `, выезд в ${lg.departureTime}` : ''}\n` +
+                (lg.prep ? `ПАМЯТКА УЧАСТНИКУ (снаряжение, правила, еда, условия — отвечай по ней):\n${String(lg.prep).slice(0, 2500)}\n` : '') +
                 (lg.returnInfo ? `Обратно: ${lg.returnInfo}\n` : '') +
                 (lg.fuelCost ? `Бензин: ~${lg.fuelCost} Br с человека\n` : '') +
                 (lg.notes ? `Заметки: ${String(lg.notes).slice(0, 300)}\n` : '') +
@@ -5457,17 +5548,24 @@ export default async function handler(req: any, res: any) {
                 `Взнос: ${(ev as any)?.price_label || 'не указан'}\n` +
                 `Записалось: ${(regs2 || []).length} чел (+${(regs2 || []).reduce((s: number, r: any) => s + (Number(r.guest_count) || 0), 0)} гостей)\n` +
                 `МАШИНЫ:\n${(rides || []).filter((r: any) => r.kind !== 'tent').map((r: any) => `- ${r.driver_name}: ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} своб. из ${r.seats_total || 0}, старт ${r.from_point || '—'}`).join('\n') || '- машин пока нет'}\n` +
-                `КТО ЧТО ВЕЗЁТ:\n${(tsk || []).map((t: any) => `- ${t.title}${t.taker_name ? ` — ${t.taker_name}` : ' — никто не взял'}${t.done ? ' ✅' : ''}`).join('\n') || '- пока ничего не расписано'}\n` +
+                `КТО ЧТО ВЕЗЁТ:\n${(tsk || []).map((t: any) => `- ${t.title}${takerBy.get(Number(t.taken_by)) ? ` — ${takerBy.get(Number(t.taken_by))}` : ' — никто не взял'}${t.done ? ' ✅' : ''}`).join('\n') || '- пока ничего не расписано'}\n` +
                 `ПРОГРАММА: ${((ev as any)?.program || []).slice(0, 8).map((p: any) => p.title || p).join('; ') || '—'}`;
               const chat = (hist || []).reverse().map((m: any) => `${m.first_name || 'участник'}: ${m.text}`).join('\n').slice(0, 2000);
+              // Модель только ФОРМУЛИРУЕТ: решение «это вопрос к боту» уже
+              // принято кодом выше. Права промолчать у неё нет — вместо этого
+              // она обязана честно сказать, чего в данных нет.
               const ans = await geminiJSON(
-                `Ты — организатор клуба «Живи в моменте», отвечаешь в чате поездки. Пиши коротко, по-русски, грамотно, дружелюбно, без воды.\n\n` +
-                `ДАННЫЕ СОБЫТИЯ (единственный источник правды):\n${facts}\n\n` +
+                `Ты — организатор клуба «Живи в моменте» в чате поездки. Ответь участнику по данным поездки.\n\n` +
+                `ДАННЫЕ (единственный источник правды):\n${facts}\n\n` +
                 `ПОСЛЕДНИЕ СООБЩЕНИЯ ЧАТА:\n${chat}\n\n` +
-                `ВОПРОС УЧАСТНИКА (${msg.from.first_name || 'участник'}): «${text}»\n\n` +
-                `Ответь ТОЛЬКО если ответ есть в данных выше. Ничего не выдумывай: ни цен, ни времени, ни имён.\n` +
-                `Если данных не хватает, вопрос личный, это шутка или обращение к конкретному человеку — верни answer="".\n` +
-                `Верни JSON: {"answer": "ответ до 400 знаков или пустая строка"}`
+                `ВОПРОС (${msg.from.first_name || 'участник'}): «${text}»\n\n` +
+                `Правила ответа:\n` +
+                `- 1–3 предложения, по-русски, грамотно, дружелюбно, без воды.\n` +
+                `- Только факты из данных выше. Координаты точки сбора — нормальный ответ, называй их.\n` +
+                `- Про снаряжение, купание, костёр, еду, воду, парковку отвечай по ПАМЯТКЕ.\n` +
+                `- Ничего не выдумывай: ни цен, ни времени, ни погоды, ни имён.\n` +
+                `- Если ответа в данных нет — одной фразой скажи, чего именно нет, и что уточнит организатор.\n\n` +
+                `Верни JSON: {"answer": "текст ответа"}`
               );
               const answer = String(ans?.answer || '').trim().slice(0, 700);
               if (answer.length > 3) {
