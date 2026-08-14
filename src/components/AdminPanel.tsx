@@ -1532,6 +1532,28 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     finally { setReplySending(false); }
   };
 
+  /**
+   * Причесать черновик ответа перед отправкой: пунктуация, заглавные, тон.
+   * Отправку не запускает — организатор видит результат и решает сам.
+   */
+  const [polishing, setPolishing] = useState(false);
+  const polishReply = async () => {
+    const text = replyText.trim();
+    if (!text || polishing) return;
+    setPolishing(true);
+    try {
+      const res = await adminFetch('/api/ai', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'polish', text }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      if (j.text) setReplyText(j.text);
+      else setActionMsg({ ok: false, text: j.error || 'ИИ не ответил — текст оставлен как был' });
+    } catch { setActionMsg({ ok: false, text: 'Ошибка сети — текст оставлен как был' }); }
+    finally { setPolishing(false); }
+  };
+
   /** Ручная правка «от кого пришёл»: защита очков (ссылку могли переслать). */
   /**
    * Пол по кругу: мужчина → женщина → не указан. Прompt здесь лишний — вариантов
@@ -3960,6 +3982,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       placeholder="Ответ участнику… (Ctrl+Enter — отправить)"
                       className="flex-1 bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none resize-none max-h-32"
                     />
+                    {/* «Причесать»: участница написала «я не понимаю суть
+                        сообщения без пунктуации». ИИ правит только грамотность
+                        и тон, смысл и факты не трогает. */}
+                    <button
+                      onClick={polishReply}
+                      disabled={polishing || !replyText.trim()}
+                      title="Расставить знаки препинания и причесать тон (смысл не меняется)"
+                      className="bg-white/5 hover:bg-white/10 text-white/70 rounded-xl px-3 py-2.5 cursor-pointer border border-white/10 text-xs disabled:opacity-40 shrink-0"
+                    >
+                      {polishing ? '…' : '✨'}
+                    </button>
                     <button
                       onClick={sendReply}
                       disabled={replySending || !replyText.trim() || Number(activeThread.telegramId) <= 0}
