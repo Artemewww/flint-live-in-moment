@@ -168,10 +168,14 @@ export async function getPrefillData(): Promise<{
     transportDetails: string;
     transportSeats: number;
     hasLicense: 'yes' | 'no' | null;
-    category: 'male' | 'female';
-    dietary: 'omnivore' | 'vegetarian' | 'vegan';
+    // null = не знаем. Дефолта 'male'/'omnivore' здесь быть не должно:
+    // подставленный дефолт уезжал в базу как ответ человека.
+    category: 'male' | 'female' | null;
+    dietary: 'omnivore' | 'vegetarian' | 'vegan' | null;
     equipment: string;
     roles: string;
+    /** Есть прошлая регистрация — значит анкету реально есть чем заполнить. */
+    hasHistory?: boolean;
   };
   error?: string;
 }> {

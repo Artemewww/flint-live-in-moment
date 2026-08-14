@@ -374,6 +374,12 @@ export default function EventDetailModal({
                     {event.location && (
                       <div className="text-white/70 text-xs font-bold">{event.location}</div>
                     )}
+                    {/* Время выезда показываем ДО записи: «во сколько выезд?» —
+                        вопрос, на который человек решает, идти ли вообще. Само
+                        место сбора остаётся закрытым. */}
+                    {event.logistics?.departureTime && (
+                      <div className="text-white/70 text-[11px] font-mono">🕗 Выезд в {event.logistics.departureTime}</div>
+                    )}
                     <div className="text-white/50 text-[10px] italic">
                       Точное место сбора и карта откроются после подтверждения участия
                     </div>

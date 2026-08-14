@@ -1215,10 +1215,12 @@ export default async function handler(req: any, res: any) {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
 
-      // Получаем профиль
+      // Получаем профиль. Пол и питание берём и отсюда: у новичка прошлой
+      // регистрации нет, а в профиле эти поля уже могут быть — переспрашивать
+      // одно и то же на каждой записи и было главной претензией к анкете.
       const { data: member } = await supabase
         .from('members')
-        .select('first_name,phone')
+        .select('first_name,phone,gender,dietary')
         .eq('telegram_id', user.id)
         .maybeSingle();
 
@@ -1232,6 +1234,13 @@ export default async function handler(req: any, res: any) {
         .limit(1)
         .maybeSingle();
 
+      // Пол: сначала прошлая регистрация, потом профиль. НИКАКОГО дефолта
+      // 'male' — раньше он молча подставлялся всем, включая женщин, и уезжал
+      // в базу как их ответ.
+      const gender = (member as any)?.gender;
+      const category = lastReg?.category
+        || (gender === 'female' ? 'female' : gender === 'male' ? 'male' : null);
+
       return res.status(200).json({
         ok: true,
         prefill: {
@@ -1241,10 +1250,12 @@ export default async function handler(req: any, res: any) {
           transportDetails: lastReg?.transport_details || '',
           transportSeats: lastReg?.transport_seats || 0,
           hasLicense: lastReg?.has_license === true ? 'yes' : lastReg?.has_license === false ? 'no' : null,
-          category: lastReg?.category || 'male',
-          dietary: lastReg?.dietary || 'omnivore',
+          category,
+          dietary: lastReg?.dietary || (member as any)?.dietary || null,
           equipment: Array.isArray(lastReg?.equipment) ? lastReg.equipment.join(',') : '',
           roles: Array.isArray(lastReg?.roles) ? lastReg.roles.join(',') : '',
+          // Есть ли что подставлять вообще — фронт показывает «данные из профиля».
+          hasHistory: !!lastReg,
         },
       });
     }

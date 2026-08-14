@@ -49,7 +49,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     // Кого готов взять: 'any' | 'male' | 'female'
     seatGender: 'any' as 'any' | 'male' | 'female',
     inventory: '',
-    category: 'male' as 'male' | 'female',
+    // Пол НЕ предвыбран: раньше стояло 'male', и женщины, не тронувшие
+    // переключатель, уезжали в базу мужчинами — состав события и размещение
+    // считались по кривым данным.
+    category: null as null | 'male' | 'female',
     dietary: 'omnivore' as 'omnivore' | 'vegetarian' | 'vegan',
     guestCount: 0,
     equipment: '',
@@ -71,6 +74,8 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
   const [delivered, setDelivered] = useState<boolean | null>(null);
   const [error, setError] = useState('');
   const [consentGiven, setConsentGiven] = useState(false);
+  /** Анкета подставлена из профиля/прошлой записи — говорим об этом человеку. */
+  const [prefilled, setPrefilled] = useState(false);
   // Строгий допуск: правила клуба + программа события приняты поэтапно.
   // Пока не пройдено — к формам записи не пускаем.
   const [gatePassed, setGatePassed] = useState(false);
@@ -100,19 +105,27 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
             // Автозаполняем только если еще не установлено
             if (p.name && !fullName) setFullName(p.name);
             if (p.phone) setPhone(p.phone);
-            if (p.transportDetails || p.hasTransport || p.transportSeats > 0) {
-              setFormData(prev => ({
-                ...prev,
-                transportMode: p.hasTransport ? 'car' : prev.transportMode,
-                transportDetails: p.transportDetails || prev.transportDetails,
-                transportSeats: p.transportSeats || prev.transportSeats,
-                hasLicense: p.hasLicense || prev.hasLicense,
-                category: p.category || prev.category,
-                dietary: p.dietary || prev.dietary,
-                equipment: p.equipment || prev.equipment,
-                roles: p.roles || prev.roles,
-              }));
-            }
+            /**
+             * Профиль подставляем ВСЕГДА, а не только водителям. Раньше весь
+             * блок стоял под условием «есть данные о транспорте», и человеку
+             * без машины анкета каждый раз заново задавала пол, питание,
+             * снаряжение и роль — та самая претензия «бот спрашивает по
+             * десять раз одно и то же, из-за этого запись долгая».
+             */
+            setFormData(prev => ({
+              ...prev,
+              transportMode: p.hasTransport ? 'car' : prev.transportMode,
+              transportDetails: p.transportDetails || prev.transportDetails,
+              transportSeats: p.transportSeats || prev.transportSeats,
+              hasLicense: p.hasLicense || prev.hasLicense,
+              category: p.category || prev.category,
+              dietary: p.dietary || prev.dietary,
+              equipment: p.equipment || prev.equipment,
+              roles: p.roles || prev.roles,
+            }));
+            // Показываем, что данные подставлены — иначе человек не понимает,
+            // почему поля уже заполнены, и заполняет их заново.
+            if (p.hasHistory || p.phone) setPrefilled(true);
           }
         } catch (err) {
           // Не критично — просто не автозаполнится
@@ -228,6 +241,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
     if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
     if (formData.hasLicense === null) return setError('Укажите, есть ли у вас водительские права — это нужно для авто и квадроциклов');
+    if (formData.category === null) return setError('Укажите категорию участника — по ней считают состав и размещение');
     if (!consentGiven) return setError('Нужно согласие на обработку персональных данных');
 
     finishSuccess(
@@ -337,6 +351,16 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A]/60 block font-black border-b border-white/5 pb-2">
                         Анкета участника
                       </span>
+                    )}
+
+                    {prefilled && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-start gap-2 text-[10px] text-white/70 font-sans leading-normal">
+                        <Check className="w-4 h-4 text-brand shrink-0 mt-0.5" />
+                        <span>
+                          Мы тебя помним: телефон, транспорт, питание и роль подставлены из профиля.
+                          Проверь и жми «Записаться» — заново заполнять не нужно.
+                        </span>
+                      </div>
                     )}
 
                     {!insideTg && (
