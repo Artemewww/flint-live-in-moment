@@ -356,7 +356,15 @@ async function notifyQuotaExhausted() {
     if (ADMIN_CHAT_ID) {
       await tg('sendMessage', {
         chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
-        text: '⚠️ <b>Квота Gemini API закончилась</b>\n\nИИ-функции бота (разбор задач/расходов, точки, программа) сейчас не отвечают — идёт безопасный фолбэк, ничего не падает.\n\nВставь новый ключ: панель организатора → 🔑 ИИ-ключ (Gemini).',
+        text: '⚠️ <b>Квота Gemini закончилась</b>\n\n'
+          + 'ИИ-функции (разбор задач, ответы в чате, генерация события) молчат до следующих суток. '
+          + 'Остальное работает: частые вопросы в чате бот отвечает без ИИ.\n\n'
+          + '<b>Как починить за минуту:</b>\n'
+          + '1. Открой <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a>\n'
+          + '2. Create API key → выбери <b>другой проект</b> (в том же проекте квота та же) → скопируй ключ\n'
+          + '3. Панель организатора → <b>🔑 ИИ-ключ</b> → вставь и сохрани\n\n'
+          + 'Бесплатный тир — 20 запросов в сутки на модель. Чтобы не упираться совсем, включи оплату в Google Cloud для этого проекта.',
+        disable_web_page_preview: true,
       });
     }
   } catch { /* best-effort, таблицы может не быть */ }
@@ -5321,47 +5329,12 @@ export default async function handler(req: any, res: any) {
           } catch { /* ИИ недоступен — пропускаем */ }
         }
 
-        // 2. Вопрос про логистику (машина, места, доехать) → подсказка с кнопкой
-        const logisticsPattern = /(?<![а-яёa-z])(машин|мест|доехать|довезти|подвезти|попутка|как\s+добраться)/i;
-        if (linkedEvent && logisticsPattern.test(text)) {
-          const { data: rides } = await supabase
-            .from('rides')
-            .select('driver_name,from_point,seats_total,seats_taken')
-            .eq('event_id', (linkedEvent as any).id)
-            .eq('active', true)
-            .neq('kind', 'tent');
-          
-          const freeSeats = (rides || []).reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
-          
-          if (freeSeats > 0) {
-            await tg('sendMessage', {
-              chat_id: chatId,
-              parse_mode: 'HTML',
-              text: `🚗 Есть ${freeSeats} своб. ${freeSeats === 1 ? 'место' : 'мест'} в машинах. Открой бота → Логистика и бронируй 👇`,
-              reply_markup: kb([[{ text: '🚗 Логистика и брони', callback_data: `logi_${(linkedEvent as any).id}` }]]),
-            });
-          }
-        }
-
-        // 3. Обсуждение времени/места сбора → предложение голосования
-        const votingPattern = /(?<![а-яёa-z])(когда\s+(выезжаем|собираемся|встречаемся)|во\s+сколько|где\s+сбор|какое\s+время)/i;
-        if (linkedEvent && votingPattern.test(text) && text.includes('?')) {
-          // Только если нет активных голосований по этой теме
-          const { count } = await supabase
-            .from('polls')
-            .select('id', { count: 'exact', head: true })
-            .eq('event_id', (linkedEvent as any).id)
-            .or('options->>status.eq.open,options->>status.is.null');
-          
-          if ((count || 0) === 0) {
-            await tg('sendMessage', {
-              chat_id: chatId,
-              parse_mode: 'HTML',
-              text: `🗳 Вижу вопрос про время/место. Хотите запустить голосование? Откройте бота → событие → 🗳 Голосования → Предложить своё.`,
-            });
-          }
-        }
-
+        /**
+         * Блоки «подсказка про свободные места» и «предложить голосование по
+         * времени» удалены. На «во сколько выезд?» бот предлагал ГОЛОСОВАНИЕ,
+         * хотя время есть в программе — организатор справедливо назвал это
+         * неверным. Оба вопроса теперь закрывает быстрый ответ по данным ниже.
+         */
         // 4. Жалоба на проблему/нехватку чего-то → SOS организатору
         const problemPattern = /(?<![а-яёa-z])(проблема|беда|не\s+хватает|забыли|потеряли|сломалось)/i;
         if (linkedEvent && problemPattern.test(text)) {
@@ -5502,14 +5475,41 @@ export default async function handler(req: any, res: any) {
               const freeSeatsNow = (rides || [])
                 .filter((r: any) => r.kind !== 'tent')
                 .reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
+              /**
+               * Время сбора и время выезда — РАЗНОЕ, и правда лежит в программе.
+               * На Нарочи в программе «06:00 — сбор» и «07:00 — выезд», а в
+               * logistics.departureTime стояло 06:00: бот отвечал бы «выезд в
+               * 6», и люди приехали бы к разбору. Программу читаем первой,
+               * logistics — фолбэк.
+               */
+              const progLines: string[] = ((ev as any)?.program || [])
+                .map((p: any) => (typeof p === 'string' ? p : `${p.time || ''} ${p.title || ''}`))
+                .filter(Boolean);
+              const timeFrom = (re: RegExp, skip?: RegExp): string => {
+                for (const line of progLines) {
+                  if (!re.test(line) || (skip && skip.test(line))) continue;
+                  const m = line.match(/(\d{1,2}:\d{2})/);
+                  if (m) return m[1];
+                }
+                return '';
+              };
+              const gatherAt = timeFrom(/сбор|встречаемся|проверк[аи]\s+готовности/i) || String(lg.gatherTime || '');
+              // «Сбор и проверка готовности К ВЫЕЗДУ» — это ещё не выезд:
+              // без этого исключения бот называл временем выезда время сбора.
+              const departAt = timeFrom(/(выезд|выезжаем|стартуем|отправля)/i, /готовност|к\s+выезду/i)
+                || String(lg.departureTime || '');
+              const whenLine = [
+                gatherAt ? `🕕 Сбор в <b>${esc(gatherAt)}</b>` : '',
+                departAt ? `🚗 Выезд в <b>${esc(departAt)}</b>` : '',
+              ].filter(Boolean).join(' · ') || 'Время уточняется у организатора';
+
               let quick = '';
               if (/во\s*сколько|когда\s+(выезд|выезжаем|стартуем|сбор|собираемся)|время\s+выезда/i.test(text)) {
-                quick = `🕗 Выезд ${lg.departureTime ? `в <b>${esc(lg.departureTime)}</b>` : 'время уточняется'}`
-                  + `${(ev as any)?.date ? `, ${esc(dayPhrase((ev as any).date))}` : ''}`
-                  + `${asmRaw ? `.\n🚩 Сбор: ${esc(asmTxt)}` : ''}`;
+                quick = `${whenLine}${(ev as any)?.date ? `, ${esc(dayPhrase((ev as any).date))}` : ''}`
+                  + `${asmRaw ? `\n🚩 Место: ${esc(asmTxt)}` : ''}`;
               } else if (/где\s+(сбор|встреча|встречаемся|выезд|стартуем)|точк[аиу]\s+сбора|откуда\s+(едем|выезжаем)/i.test(text)) {
                 quick = asmRaw
-                  ? `🚩 Сбор: ${esc(asmTxt)}${lg.departureTime ? `, выезд в <b>${esc(lg.departureTime)}</b>` : ''}`
+                  ? `🚩 Сбор: ${esc(asmTxt)}\n${whenLine}`
                   : 'Точку сбора организатор ещё не назначил — как назначит, пришлю сюда.';
               } else if (/скольк[а-яё]*\s+(стоит|взнос)|какой\s+взнос|цена|платить/i.test(text)) {
                 quick = `💰 ${esc((ev as any)?.price_label || 'Взнос не указан — уточню у организатора')}`;

@@ -466,6 +466,9 @@ export default function EventDetailModal({
                         {prettyPlace(event.logistics.assemblyPoint)}
                       </div>
                       <div className="text-white/60 text-[11px] font-mono">
+                        {/* Сбор и выезд — разное время: на Нарочи сбор 06:00,
+                            выезд 07:00. Показываем оба, если сбор задан. */}
+                        {event.logistics.gatherTime && `Сбор в ${event.logistics.gatherTime} · `}
                         Выезд в {event.logistics.departureTime || event.time || 'уточняется'}
                       </div>
                     </div>

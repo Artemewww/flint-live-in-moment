@@ -194,6 +194,65 @@ function deny(res: any) {
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!isAdmin(req)) return deny(res);
+
+  /**
+   * Управление ключом Gemini прямо из панели.
+   * У бесплатного тира лимит 20 запросов в сутки на модель: когда он
+   * заканчивается, ИИ-функции молчат до следующих суток. Единственный быстрый
+   * выход — вставить новый ключ, и делать это надо без деплоя и без правки env.
+   * Ключ живёт в app_config и имеет приоритет над env (getActiveGeminiKey).
+   * ВАЖНО: эти действия обрабатываются ДО проверки наличия ключа — иначе
+   * вставить первый ключ было бы нечем.
+   */
+  const keyBody = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : (req.body || {});
+  if (keyBody.task === 'key_status' || keyBody.task === 'set_key') {
+    if (keyBody.task === 'set_key') {
+      const fresh = String(keyBody.key || '').trim();
+      // Ключи Google AI Studio выглядят как AIza… — грубая проверка от опечаток.
+      if (fresh.length < 20 || /\s/.test(fresh)) {
+        return res.status(200).json({ ok: false, error: 'Похоже, это не ключ: слишком короткий или с пробелами.' });
+      }
+      // Проверяем ключ боем, чтобы не сохранить нерабочий.
+      const probe = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(fresh)}&pageSize=1`);
+      if (probe.status !== 200) {
+        const j = await probe.json().catch(() => ({} as any));
+        return res.status(200).json({ ok: false, error: `Google отклонил ключ (HTTP ${probe.status}): ${String((j as any)?.error?.message || '').slice(0, 160)}` });
+      }
+      await supabase.from('app_config').upsert({ key: 'gemini_api_key', value: fresh }, { onConflict: 'key' });
+      // Снимаем метку «квота исчерпана», иначе уведомления молчат 2 часа.
+      await supabase.from('app_config').delete().eq('key', 'gemini_quota_notified_at');
+      keyCache = null;
+      return res.status(200).json({ ok: true, message: 'Ключ проверен и сохранён. ИИ снова работает.' });
+    }
+    const cur = await getActiveGeminiKey();
+    let live = false;
+    let detail = '';
+    if (cur) {
+      const probe = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(cur)}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: 'ok' }] }] }),
+      });
+      live = probe.status === 200;
+      if (!live) {
+        const j = await probe.json().catch(() => ({} as any));
+        detail = probe.status === 429
+          ? 'Суточная квота исчерпана (бесплатный тир — 20 запросов в сутки на модель). Нужен новый ключ или платный тариф.'
+          : `HTTP ${probe.status}: ${String((j as any)?.error?.message || '').slice(0, 160)}`;
+      }
+    }
+    const { data: src } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+    return res.status(200).json({
+      ok: true,
+      hasKey: !!cur,
+      // Секрет целиком в браузер не отдаём — только хвост для опознания.
+      masked: cur ? `…${cur.slice(-6)}` : '',
+      source: src?.value ? 'панель' : 'env',
+      live,
+      detail,
+      consoleUrl: 'https://aistudio.google.com/apikey',
+    });
+  }
+
   const apiKey = await getActiveGeminiKey();
   if (!apiKey) return res.status(200).json({ error: 'GEMINI_API_KEY не задан' });
 

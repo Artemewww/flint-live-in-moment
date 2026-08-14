@@ -424,7 +424,10 @@ function LogisticsEditor({ value, onChange, event }: { value: any; onChange: (v:
     <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
       <label className="text-[10px] text-white/40 uppercase font-mono block">🚗 Логистика / как добраться</label>
       <input value={v.assemblyPoint || ''} onChange={(e) => set('assemblyPoint', e.target.value)} placeholder="Точка сбора / выезда (напр. м. Каменная Горка)" className={inp} />
-      <div className="grid grid-cols-2 gap-2">
+      <div className="grid grid-cols-3 gap-2">
+        {/* Сбор и выезд — разное время: люди приезжали к «выезду», когда на
+            самом деле в этот час только собираются. */}
+        <input value={v.gatherTime || ''} onChange={(e) => set('gatherTime', e.target.value)} placeholder="Сбор (06:00)" className={inp} />
         <input value={v.departureTime || ''} onChange={(e) => set('departureTime', e.target.value)} placeholder="Время выезда (18:30)" className={inp} />
         <input type="number" value={v.fuelCost || ''} onChange={(e) => set('fuelCost', parseInt(e.target.value) || 0)} placeholder="Бензин Br/чел" className={inp} />
       </div>
@@ -1533,6 +1536,44 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   /**
+   * Ключ Gemini прямо из панели.
+   * У бесплатного тира 20 запросов в сутки на модель: когда он кончается,
+   * ИИ-функции молчат до следующих суток, и единственный быстрый выход —
+   * вставить новый ключ. Раньше это требовало правки env и деплоя.
+   */
+  const [showAiKey, setShowAiKey] = useState(false);
+  const [keyStatus, setKeyStatus] = useState<any>(null);
+  const [keyInput, setKeyInput] = useState('');
+  const [keySaving, setKeySaving] = useState(false);
+  const loadKeyStatus = async () => {
+    setKeyStatus(null);
+    try {
+      const res = await adminFetch('/api/ai', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'key_status' }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      setKeyStatus(await res.json());
+    } catch { setKeyStatus({ ok: false, error: 'Нет связи с сервером' }); }
+  };
+  const saveAiKey = async () => {
+    const key = keyInput.trim();
+    if (!key || keySaving) return;
+    setKeySaving(true);
+    try {
+      const res = await adminFetch('/api/ai', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task: 'set_key', key }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setActionMsg({ ok: !!j.ok, text: j.ok ? (j.message || 'Ключ сохранён') : (j.error || 'Не удалось сохранить ключ') });
+      if (j.ok) { setKeyInput(''); await loadKeyStatus(); }
+    } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+    finally { setKeySaving(false); }
+  };
+
+  /**
    * Причесать черновик ответа перед отправкой: пунктуация, заглавные, тон.
    * Отправку не запускает — организатор видит результат и решает сам.
    */
@@ -2216,6 +2257,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
               >
                 🎒 Инвентарь →
+              </button>
+              <button
+                onClick={() => { setShowAiKey(true); loadKeyStatus(); }}
+                className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
+              >
+                🔑 ИИ-ключ →
               </button>
             </div>
           </div>
@@ -3873,6 +3920,76 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     </div>
                   </div>
                 ))}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Ключ Gemini: статус + замена без деплоя */}
+      <AnimatePresence>
+        {showAiKey && (
+          <div className="fixed inset-0 z-[86] flex items-end md:items-center justify-center md:p-4">
+            <div className="absolute inset-0 bg-black/95 backdrop-blur-sm" onClick={() => setShowAiKey(false)} />
+            <motion.div
+              initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 40 }}
+              className="bg-[#121212] md:rounded-3xl rounded-t-3xl w-full max-w-lg relative z-10 border border-white/10 text-white max-h-[90dvh] overflow-y-auto"
+            >
+              <div className="p-4 md:p-6 border-b border-white/10 flex items-center justify-between gap-2">
+                <h3 className="font-display font-black text-lg uppercase">🔑 ИИ-ключ (Gemini)</h3>
+                <button onClick={() => setShowAiKey(false)} className="p-2 rounded-full bg-white/5 hover:bg-white/10 cursor-pointer border-none text-white shrink-0">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <div className="p-4 md:p-6 space-y-4">
+                {!keyStatus ? (
+                  <p className="text-white/40 text-xs font-mono">Проверяю ключ…</p>
+                ) : (
+                  <div className={`rounded-xl p-3 border text-xs ${keyStatus.live ? 'bg-brand/10 border-brand/30 text-brand' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'}`}>
+                    <div className="font-bold">
+                      {keyStatus.live ? '✅ Ключ работает' : keyStatus.hasKey ? '⚠️ Ключ не отвечает' : '❌ Ключа нет'}
+                    </div>
+                    {keyStatus.hasKey && (
+                      <div className="text-white/50 font-mono text-[10px] mt-1">
+                        ключ {keyStatus.masked} · источник: {keyStatus.source}
+                      </div>
+                    )}
+                    {keyStatus.detail && <div className="text-white/70 mt-1 leading-snug">{keyStatus.detail}</div>}
+                  </div>
+                )}
+
+                <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+                  <div className="text-[10px] uppercase font-mono text-white/40">Как получить новый ключ</div>
+                  <ol className="text-xs text-white/70 space-y-1 list-decimal list-inside leading-snug">
+                    <li>Открой <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-brand underline">aistudio.google.com/apikey</a> (войти тем же Google-аккаунтом).</li>
+                    <li>Нажми <b>Create API key</b> → выбери проект → ключ появится сразу.</li>
+                    <li>Скопируй его (начинается на <span className="font-mono">AIza…</span>) и вставь ниже.</li>
+                  </ol>
+                  <p className="text-[10px] text-white/40 leading-snug">
+                    Бесплатный тир — 20 запросов в сутки на модель. Новый ключ в том же проекте квоту НЕ обнуляет:
+                    нужен ключ из другого проекта либо включённая оплата в Google Cloud.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <input
+                    value={keyInput}
+                    onChange={(e) => setKeyInput(e.target.value)}
+                    placeholder="AIza…"
+                    className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-sm font-mono placeholder:text-white/30 outline-none focus:border-brand"
+                  />
+                  <button
+                    onClick={saveAiKey}
+                    disabled={keySaving || !keyInput.trim()}
+                    className="w-full bg-brand hover:bg-brand-hover text-black font-black py-3 rounded-xl uppercase text-xs tracking-wider cursor-pointer border-none disabled:opacity-40"
+                  >
+                    {keySaving ? 'Проверяю у Google…' : 'Проверить и сохранить'}
+                  </button>
+                  <p className="text-[10px] text-white/40">
+                    Ключ проверяется боем: нерабочий не сохранится. Хранится на сервере, в браузер не возвращается.
+                  </p>
+                </div>
               </div>
             </motion.div>
           </div>

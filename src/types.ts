@@ -47,6 +47,8 @@ export interface CommunityEvent {
   locationDetails?: string;
   logistics?: {
     assemblyPoint?: string;
+    /** Время общего сбора — раньше времени выезда (на Нарочи 06:00 против 07:00). */
+    gatherTime?: string;
     departureTime?: string;
     fuelCost?: number;
     returnInfo?: string;
