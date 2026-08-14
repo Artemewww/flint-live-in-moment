@@ -5410,6 +5410,59 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        /**
+         * `/задача <текст>` и `/голосование <вопрос>` прямо в группе.
+         * Организатор не нашёл ни задачи, ни голосования: они живут кнопками
+         * внутри карточки события, а карточка — девять рядов кнопок, и до
+         * середины никто не долистывает. Команды видны в меню «/» Telegram
+         * и работают там, где люди реально общаются.
+         */
+        if (gcmd === '/задача' || gcmd === '/task') {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) { await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link.' }); return res.status(200).json({ ok: true }); }
+          const title = text.slice(gcmd.length).trim().slice(0, 200);
+          if (title.length < 3) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'Напиши задачу одной строкой:\n<code>/задача Скачать фильм и привезти на флешке</code>' });
+            return res.status(200).json({ ok: true });
+          }
+          const { data: created } = await supabase.from('tasks')
+            .insert({ event_id: (gl as any).event_id, title, created_by: msg.from.id, done: false })
+            .select('id').single();
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📋 <b>Новая задача</b>\n\n${esc(title)}\n\nКто берёт — жми кнопку.`,
+            reply_markup: created ? kb([[{ text: '🙋 Беру', callback_data: `tktask_${(created as any).id}` }]]) : undefined,
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (gcmd === '/голосование' || gcmd === '/poll') {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) { await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link.' }); return res.status(200).json({ ok: true }); }
+          const raw = text.slice(gcmd.length).trim();
+          if (raw.length < 3) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: 'Формат:\n<code>/голосование Во сколько выезжаем? | 06:00 | 07:00 | 08:00</code>\n\nБез вариантов будет «Да / Нет».',
+            });
+            return res.status(200).json({ ok: true });
+          }
+          const parts = raw.split('|').map((p) => p.trim()).filter(Boolean);
+          const question = parts[0].slice(0, 200);
+          const list = parts.length > 1 ? parts.slice(1, 6) : ['Да', 'Нет'];
+          const { data: poll } = await supabase.from('polls')
+            .insert({ event_id: (gl as any).event_id, question, created_by: msg.from.id, options: { list, status: 'open' } })
+            .select('id').single();
+          if (!poll) { await tg('sendMessage', { chat_id: chatId, text: 'Не получилось создать голосование.' }); return res.status(200).json({ ok: true }); }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `🗳 <b>${esc(question)}</b>\n\nГолосуем прямо здесь.`,
+            reply_markup: pollKeyboard(Number((poll as any).id), list, new Array(list.length).fill(0), false),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         // ИИ-менеджер: анализ переписки → автоматические действия.
         // Определяем событие по чату: сначала жёсткая привязка event_groups
         // (ставится через /link), затем фолбэк по username чата — у ЗАКРЫТЫХ
