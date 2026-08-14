@@ -13,6 +13,14 @@ export interface HouseQuality {
 export type EventStatus = 'locked' | 'open' | 'closed';
 export type EventPhase = 'past' | 'locked' | 'open' | 'full' | 'closed';
 
+/** Строка состава события: только то, что можно показать кругу. */
+export interface EventParticipant {
+  name: string;
+  gender?: 'male' | 'female' | null;
+  isCore?: boolean;
+  guests?: number;
+}
+
 export interface CommunityEvent {
   id: string;
   title: string;
@@ -48,6 +56,12 @@ export interface CommunityEvent {
   telegramImage?: string;
   maxParticipants?: number;
   participantsCount: number;
+  /**
+   * Кто уже записан: имя, пол, метка костяка, число гостей.
+   * Отдаёт закрытый клубным гейтом /api/events — «люди идут на людей»,
+   * одной цифры «6 человек» участникам не хватало.
+   */
+  participants?: EventParticipant[];
   telegramBotUrl?: string;
   priceType: 'free' | 'paid';
   priceLabel: string;

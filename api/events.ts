@@ -138,6 +138,8 @@ function mapEventToCamelCase(event: any) {
     telegramImage: event.telegram_image || undefined,
     maxParticipants: event.max_participants,
     participantsCount: event.participants_count,
+    // Состав события: имя/пол/костяк каждого записавшегося (см. сборку выше).
+    participants: event.participants || [],
     telegramBotUrl: event.telegram_bot_url,
     priceType: event.price_type,
     priceLabel: event.price_label,
@@ -635,10 +637,51 @@ export default async function handler(req: any, res: any) {
       // participants_count (её задавали руками и она расходилась с реальностью).
       // Каждая регистрация = сам участник (1) + его гости (guest_count).
       const { data: regs } = await supabase
-        .from('registrations').select('event_id, guest_count').neq('status', 'cancelled');
+        .from('registrations').select('event_id, guest_count, telegram_id, name').neq('status', 'cancelled');
       const counts = new Map<string, number>();
       for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1 + (Number((r as any).guest_count) || 0));
-      const withCounts = (events || []).map((e: any) => ({ ...e, participants_count: counts.get(e.id) || 0 }));
+
+      /**
+       * СОСТАВ события — «люди идут на людей». Раньше отдавали только цифру
+       * «6 человек», и участники несколько раз писали: «а КТО вписался?
+       * мужчины, женщины, семьи?» — без этого новому человеку непонятно,
+       * его это круг или нет. Отдаём имя, пол и метку костяка: телефонов,
+       * ников и прочих данных здесь нет, а сам эндпоинт закрыт клубным
+       * гейтом выше — состав видят только принятые участники.
+       */
+      const memberIds = Array.from(new Set((regs || [])
+        .map((r: any) => Number(r.telegram_id))
+        .filter((id: number) => Number.isFinite(id) && id > 0)));
+      const profile = new Map<number, { gender: string | null; isCore: boolean; firstName: string | null }>();
+      if (memberIds.length) {
+        const { data: mem } = await supabase
+          .from('members').select('telegram_id, gender, is_core, first_name').in('telegram_id', memberIds);
+        for (const m of mem || []) {
+          profile.set(Number((m as any).telegram_id), {
+            gender: (m as any).gender || null,
+            isCore: (m as any).is_core === true,
+            firstName: (m as any).first_name || null,
+          });
+        }
+      }
+      const roster = new Map<string, any[]>();
+      for (const r of regs || []) {
+        const p = profile.get(Number((r as any).telegram_id));
+        const list = roster.get((r as any).event_id) || [];
+        list.push({
+          name: (r as any).name || p?.firstName || 'Участник',
+          gender: p?.gender || null,
+          isCore: p?.isCore || false,
+          guests: Number((r as any).guest_count) || 0,
+        });
+        roster.set((r as any).event_id, list);
+      }
+
+      const withCounts = (events || []).map((e: any) => ({
+        ...e,
+        participants_count: counts.get(e.id) || 0,
+        participants: roster.get(e.id) || [],
+      }));
 
       return res.status(200).json({ events: withCounts.map(mapEventToCamelCase) });
     } catch (error) {

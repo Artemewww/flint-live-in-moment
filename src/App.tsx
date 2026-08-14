@@ -45,6 +45,7 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     image: event.image,
     maxParticipants: event.max_participants ?? event.maxParticipants ?? 15,
     participantsCount: event.participants_count ?? event.participantsCount ?? 0,
+    participants: event.participants || [],
     telegramImage: event.telegram_image || event.telegramImage || undefined,
     telegramBotUrl: event.telegram_bot_url || event.telegramBotUrl,
     priceType: (event.price_type || event.priceType) === 'paid' ? 'paid' : 'free',

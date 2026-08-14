@@ -172,6 +172,14 @@ export default function EventDetailModal({
   const spotsRemaining = Math.max(0, maxSpots - totalRegistered);
   const spotsFull = spotsRemaining <= 0;
   const percentFull = Math.min(100, Math.floor((totalRegistered / maxSpots) * 100));
+  /**
+   * Состав события. Люди несколько раз писали: «написано 6 человек — а КТО?
+   * мужчины, женщины, семьи?» — по одной цифре новичок не понимает, его это
+   * круг или нет. Имя/пол/костяк отдаёт /api/events, закрытый гейтом клуба.
+   */
+  const roster = event.participants || [];
+  const rosterMale = roster.filter((p) => p.gender === 'male').length;
+  const rosterFemale = roster.filter((p) => p.gender === 'female').length;
   const phase = getEventPhase(event);
   const isLocked = phase === 'locked';
   const guide = getEventGuide(event);
@@ -419,6 +427,46 @@ export default function EventDetailModal({
                 </div>
               </div>
             </div>
+
+            {/* Кто уже едет: состав, а не только цифра */}
+            {roster.length > 0 && (
+              <div className="bg-white/5 border border-white/5 rounded-2xl p-4 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <span className="text-white/40 uppercase text-[9px] tracking-wider flex items-center gap-2">
+                    <Users className="w-4 h-4 text-brand" /> Кто уже едет
+                  </span>
+                  <span className="font-mono text-[10px] text-white/50">
+                    {rosterMale > 0 && `♂ ${rosterMale}`}
+                    {rosterMale > 0 && rosterFemale > 0 && ' · '}
+                    {rosterFemale > 0 && `♀ ${rosterFemale}`}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {roster.map((p, i) => (
+                    <span
+                      key={`${p.name}-${i}`}
+                      className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl pl-1.5 pr-3 py-1.5"
+                    >
+                      <span
+                        className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0 ${
+                          p.gender === 'female'
+                            ? 'bg-rose-400/20 text-rose-300'
+                            : p.gender === 'male'
+                              ? 'bg-brand/20 text-brand'
+                              : 'bg-white/10 text-white/50'
+                        }`}
+                      >
+                        {(p.name || '?').trim().charAt(0).toUpperCase()}
+                      </span>
+                      <span className="text-white text-xs font-bold">{p.name}</span>
+                      {p.isCore && <span className="text-[8px] font-mono uppercase text-brand">костяк</span>}
+                      {!!p.guests && <span className="text-[9px] font-mono text-white/40">+{p.guests}</span>}
+                    </span>
+                  ))}
+                </div>
+                <p className="text-white/30 text-[9px] font-mono">Состав видят только участники клуба</p>
+              </div>
+            )}
 
             {/* Погода на даты (open-meteo) */}
             <WeatherBlock event={event} />
