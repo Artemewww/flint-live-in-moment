@@ -11,6 +11,19 @@ import ProgramVoting from './ProgramVoting';
 import CampingChecklist from './CampingChecklist';
 import { getEventGuide } from '../eventGuide';
 
+/**
+ * Настоящий ли это чат события.
+ * В `telegram_bot_url` у половины событий лежит ссылка на самого бота
+ * (t.me/campsflint_bot) — кнопка «Чат события» вела туда, где человек уже
+ * находится, и участники писали «не вижу, как вступить в чат».
+ * Чат = инвайт-ссылка или публичная группа; ники ботов кончаются на «bot».
+ */
+function isRealChatUrl(url?: string): boolean {
+  const u = String(url || '').trim();
+  if (/^https:\/\/t\.me\/(\+|joinchat\/)/i.test(u)) return true;
+  return /^https:\/\/t\.me\/[A-Za-z0-9_]{4,}$/i.test(u) && !/bot$/i.test(u);
+}
+
 // --- .ics (self-contained, data-URI) ---
 const pad = (n: number) => String(n).padStart(2, '0');
 const icsEscape = (s: string) =>
@@ -428,6 +441,78 @@ export default function EventDetailModal({
               </div>
             </div>
 
+            {/* Твоё участие: где и во сколько выезд — записавшимся.
+                Дословная жалоба: «Я уже вроде записалась. Как мне теперь
+                найти, с кем я, где и во сколько выезд?». Точка сбора и время
+                лежали в logistics, редактировались в админке и уходили в бота,
+                но в карточке на сайте не показывались НИКОГДА. */}
+            {isRegistered && (
+              <div className="bg-brand/5 border border-brand/20 rounded-2xl p-4 space-y-3">
+                <span className="text-brand uppercase text-[9px] tracking-wider font-bold flex items-center gap-2">
+                  <Check className="w-4 h-4" /> Твоё участие
+                </span>
+
+                {event.logistics?.assemblyPoint ? (
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="space-y-1 min-w-0">
+                      <span className="text-white/40 uppercase text-[9px] tracking-wider block">Точка сбора</span>
+                      <div className="text-white font-bold text-sm">{event.logistics.assemblyPoint}</div>
+                      <div className="text-white/60 text-[11px] font-mono">
+                        Выезд в {event.logistics.departureTime || event.time || 'уточняется'}
+                      </div>
+                    </div>
+                    <a
+                      href={getYandexMapsUrl(event.logistics.assemblyPoint)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-3 py-2 transition-all shrink-0"
+                    >
+                      🧭 Маршрут
+                    </a>
+                  </div>
+                ) : (
+                  <p className="text-white/50 text-[11px] leading-snug">
+                    Точку сбора организатор ещё не назначил — она придёт в бот и появится здесь.
+                  </p>
+                )}
+
+                {(event.logistics?.returnInfo || event.logistics?.fuelCost || event.logistics?.notes) && (
+                  <div className="border-t border-white/10 pt-3 space-y-1.5">
+                    {event.logistics?.returnInfo && (
+                      <div className="text-white/70 text-[11px]">🔙 Обратно: {event.logistics.returnInfo}</div>
+                    )}
+                    {!!event.logistics?.fuelCost && (
+                      <div className="text-white/70 text-[11px]">⛽ Бензин: ~{event.logistics.fuelCost} Br с человека</div>
+                    )}
+                    {event.logistics?.notes && (
+                      <div className="text-white/60 text-[11px] leading-snug whitespace-pre-line">{event.logistics.notes}</div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {isRealChatUrl(event.telegramBotUrl) && (
+                    <a
+                      href={event.telegramBotUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] font-black font-mono uppercase tracking-wider bg-brand text-black rounded-xl px-3 py-2 transition-all"
+                    >
+                      💬 Чат события
+                    </a>
+                  )}
+                  <a
+                    href={`https://t.me/campsflint_bot?start=event_${event.id}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-3 py-2 transition-all"
+                  >
+                    🚗 Кто едет, попутки и брони — в боте
+                  </a>
+                </div>
+              </div>
+            )}
+
             {/* Кто уже едет: состав, а не только цифра */}
             {roster.length > 0 && (
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 space-y-3">
@@ -791,7 +876,9 @@ export default function EventDetailModal({
                 <Check className="w-4 h-4 text-brand stroke-[3px]" />
                 <span className="text-xs font-bold text-brand font-mono uppercase tracking-wider">Ваше участие подтверждено! Вы в кругу</span>
               </div>
-              {event.telegramBotUrl && (
+              {/* Кнопку «Чат события» показываем, только если это правда чат:
+                  у части событий в поле лежит ссылка на самого бота. */}
+              {isRealChatUrl(event.telegramBotUrl) && (
                 <a
                   href={event.telegramBotUrl}
                   target="_blank"
