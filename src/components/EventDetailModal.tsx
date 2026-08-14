@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 } from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
@@ -462,7 +462,9 @@ export default function EventDetailModal({
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1 min-w-0">
                       <span className="text-white/40 uppercase text-[9px] tracking-wider block">Точка сбора</span>
-                      <div className="text-white font-bold text-sm">{event.logistics.assemblyPoint}</div>
+                      <div className="text-white font-bold text-sm break-words">
+                        {prettyPlace(event.logistics.assemblyPoint)}
+                      </div>
                       <div className="text-white/60 text-[11px] font-mono">
                         Выезд в {event.logistics.departureTime || event.time || 'уточняется'}
                       </div>
@@ -480,6 +482,54 @@ export default function EventDetailModal({
                   <p className="text-white/50 text-[11px] leading-snug">
                     Точку сбора организатор ещё не назначил — она придёт в бот и появится здесь.
                   </p>
+                )}
+
+                {/* С кем я еду: машина, попутчики, контакт водителя. */}
+                {event.myRide ? (
+                  <div className="border-t border-white/10 pt-3 space-y-1.5">
+                    <span className="text-white/40 uppercase text-[9px] tracking-wider block">
+                      {event.myRide.role === 'driver' ? 'Ты за рулём' : 'Едешь в машине'}
+                    </span>
+                    {event.myRide.role === 'driver' ? (
+                      <div className="text-white text-sm font-bold">
+                        Мест {event.myRide.seatsTotal}, занято {event.myRide.seatsTaken}
+                      </div>
+                    ) : (
+                      <div className="text-white text-sm font-bold">
+                        Водитель: {event.myRide.driverName}
+                        {event.myRide.driverUsername ? ` · @${event.myRide.driverUsername}` : ''}
+                      </div>
+                    )}
+                    {event.myRide.role === 'passenger' && event.myRide.driverPhone && (
+                      <a href={`tel:${event.myRide.driverPhone}`} className="text-brand text-[11px] font-mono underline">
+                        📞 {event.myRide.driverPhone}
+                      </a>
+                    )}
+                    {event.myRide.passengers.length > 0 && (
+                      <div className="text-white/70 text-[11px]">
+                        Попутчики: {event.myRide.passengers.join(', ')}
+                      </div>
+                    )}
+                    {event.myRide.fromPoint && (
+                      <div className="text-white/60 text-[11px] font-mono flex flex-wrap items-center gap-2">
+                        <span>🚗 Старт: {prettyPlace(event.myRide.fromPoint)}</span>
+                        <a
+                          href={getYandexMapsUrl(event.myRide.fromPoint)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-brand underline"
+                        >
+                          маршрут
+                        </a>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="border-t border-white/10 pt-3">
+                    <p className="text-white/50 text-[11px] leading-snug">
+                      Машина не выбрана. Попутки и свободные места — в боте, кнопка ниже.
+                    </p>
+                  </div>
                 )}
 
                 {(event.logistics?.returnInfo || event.logistics?.fuelCost || event.logistics?.notes) && (

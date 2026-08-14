@@ -140,6 +140,8 @@ function mapEventToCamelCase(event: any) {
     participantsCount: event.participants_count,
     // Состав события: имя/пол/костяк каждого записавшегося (см. сборку выше).
     participants: event.participants || [],
+    // Моя машина на этом событии: водитель, попутчики, точка выезда.
+    myRide: event.my_ride || null,
     telegramBotUrl: event.telegram_bot_url,
     priceType: event.price_type,
     priceLabel: event.price_label,
@@ -606,10 +608,13 @@ export default async function handler(req: any, res: any) {
     // всю систему, не пройдя этапы. Владелец: закрыть жёстко. Теперь доступ дают
     // только: (а) подписанный Telegram initData участника approved/core, либо
     // (б) админ-кука. Голого реф-кода НЕДОСТАТОЧНО — сначала вступление в боте.
+    // Кто смотрит афишу — нужно, чтобы показать ЕГО машину и попутчиков.
+    let viewerId = 0;
     if ((process.env.GATE_ENABLED ?? '1') !== '0') {
       let allowed = isAdmin(req);
       const user = allowed ? null : verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
       if (user) {
+        viewerId = Number(user.id) || 0;
         const { data: m } = await supabase
           .from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
         // Афишу видит любой принятый участник/костяк. Кодекс клуба НЕ требуем
@@ -621,6 +626,9 @@ export default async function handler(req: any, res: any) {
         allowed = !!m && (m.is_core === true || m.status === 'approved');
       }
       if (!allowed) return res.status(403).json({ error: 'members_only' });
+    } else {
+      const u = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
+      viewerId = Number(u?.id) || 0;
     }
     try {
       const { data: events, error } = await supabase
@@ -677,10 +685,62 @@ export default async function handler(req: any, res: any) {
         roster.set((r as any).event_id, list);
       }
 
+      /**
+       * «С кем я еду, где и во сколько выезд» — вопрос, который участники
+       * задавали после записи чаще всего. Машина, попутчики и точка выезда
+       * жили только в боте; на карточке события их не было.
+       * Отдаём ТОЛЬКО свою машину: чужие брони — не наше дело.
+       */
+      const myRides = new Map<string, any>();
+      const myEventIds = (regs || [])
+        .filter((r: any) => Number(r.telegram_id) === viewerId)
+        .map((r: any) => r.event_id);
+      if (viewerId && myEventIds.length) {
+        const { data: rides } = await supabase
+          .from('rides')
+          .select('id, event_id, driver_id, driver_name, seats_total, seats_taken, from_point, kind, active')
+          .in('event_id', myEventIds)
+          .eq('active', true);
+        const rideIds = (rides || []).map((r: any) => r.id);
+        const { data: books } = rideIds.length
+          ? await supabase.from('ride_bookings').select('ride_id, passenger_id, passenger_name').in('ride_id', rideIds)
+          : { data: [] as any[] };
+        for (const ride of (rides || []) as any[]) {
+          if (ride.kind === 'tent') continue;
+          const pax = (books || []).filter((b: any) => b.ride_id === ride.id);
+          const iDrive = Number(ride.driver_id) === viewerId;
+          const iRide = pax.some((b: any) => Number(b.passenger_id) === viewerId);
+          if (!iDrive && !iRide) continue;
+          myRides.set(ride.event_id, {
+            role: iDrive ? 'driver' : 'passenger',
+            driverName: ride.driver_name || 'Водитель',
+            fromPoint: ride.from_point || '',
+            seatsTotal: Number(ride.seats_total) || 0,
+            seatsTaken: Number(ride.seats_taken) || 0,
+            // Имена попутчиков: с кем именно человек поедет в одной машине.
+            passengers: pax.map((b: any) => b.passenger_name || 'Участник'),
+          });
+        }
+        // Телефон водителя — только тем, кто реально едет в этой машине.
+        const driverIds = Array.from(new Set((rides || [])
+          .filter((r: any) => myRides.has(r.event_id) && myRides.get(r.event_id).role === 'passenger')
+          .map((r: any) => Number(r.driver_id))));
+        if (driverIds.length) {
+          const { data: drv } = await supabase.from('members').select('telegram_id, phone, username').in('telegram_id', driverIds);
+          const byId = new Map((drv || []).map((d: any) => [Number(d.telegram_id), d]));
+          for (const [evId, info] of myRides) {
+            const ride = (rides || []).find((r: any) => r.event_id === evId);
+            const d = ride ? byId.get(Number((ride as any).driver_id)) : null;
+            if (d) myRides.set(evId, { ...info, driverPhone: d.phone || '', driverUsername: d.username || '' });
+          }
+        }
+      }
+
       const withCounts = (events || []).map((e: any) => ({
         ...e,
         participants_count: counts.get(e.id) || 0,
         participants: roster.get(e.id) || [],
+        my_ride: myRides.get(e.id) || null,
       }));
 
       return res.status(200).json({ events: withCounts.map(mapEventToCamelCase) });

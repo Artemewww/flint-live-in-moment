@@ -21,6 +21,18 @@ export interface EventParticipant {
   guests?: number;
 }
 
+/** Моя машина на событии: кто везёт, с кем еду, откуда стартуем. */
+export interface MyRide {
+  role: 'driver' | 'passenger';
+  driverName: string;
+  driverPhone?: string;
+  driverUsername?: string;
+  fromPoint: string;
+  seatsTotal: number;
+  seatsTaken: number;
+  passengers: string[];
+}
+
 export interface CommunityEvent {
   id: string;
   title: string;
@@ -62,6 +74,8 @@ export interface CommunityEvent {
    * одной цифры «6 человек» участникам не хватало.
    */
   participants?: EventParticipant[];
+  /** Моя машина на этом событии (только для того, кто её смотрит). */
+  myRide?: MyRide | null;
   telegramBotUrl?: string;
   priceType: 'free' | 'paid';
   priceLabel: string;
@@ -202,7 +216,37 @@ export interface Achievement {
   unlockedAt: string;
 }
 
+/**
+ * Координаты из произвольной строки места.
+ * Организатор ставит точку кнопкой в боте, и в базу уезжает строка вида
+ * «Точка на карте (53.962261,27.654417)». Раньше её целиком отдавали Яндексу
+ * как поисковый запрос — карта открывалась мимо, а перед выездом в 6 утра это
+ * критично. Теперь координаты вынимаем и строим точную ссылку с меткой.
+ */
+export function extractCoords(place: string): { lat: string; lon: string } | null {
+  const m = String(place || '').match(/(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})/);
+  return m ? { lat: m[1], lon: m[2] } : null;
+}
+
+/** Человеческий вид точки: «Точка на карте (53.9,27.6)» → «53.962261, 27.654417». */
+export function prettyPlace(place: string): string {
+  const c = extractCoords(place);
+  const text = String(place || '').replace(/\(?\s*-?\d{1,2}\.\d{3,}\s*,\s*-?\d{1,3}\.\d{3,}\s*\)?/, '').trim();
+  if (!c) return String(place || '');
+  // Осмысленное название рядом с координатами оставляем, «Точка на карте» — нет.
+  const label = /^точка на карте$/i.test(text) || !text ? '' : text.replace(/[·,\s]+$/, '');
+  return label ? `${label} · ${c.lat}, ${c.lon}` : `${c.lat}, ${c.lon}`;
+}
+
 export function getYandexMapsUrl(location: string): string {
+  const coordsInText = extractCoords(location);
+  if (coordsInText) {
+    // Метка ровно в точке: у Яндекса порядок «долгота,широта».
+    // ll центрирует карту, pt ставит метку — без ll карта иногда открывается
+    // на прошлом месте пользователя, и метку он не видит.
+    const { lat, lon } = coordsInText;
+    return `https://yandex.ru/maps/?ll=${lon},${lat}&z=17&pt=${lon},${lat},pm2rdm`;
+  }
   const loc = (location || '').toLowerCase();
   let coords = '';
   if (loc.includes('рыжий кот') || loc.includes('волковичи')) coords = '53.818146,27.387930';

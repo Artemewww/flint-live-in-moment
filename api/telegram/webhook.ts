@@ -1721,7 +1721,11 @@ function rideLine(r: any, eventTitle?: string): string {
 function pointRouteUrl(fromPoint: string): string | null {
   const p = String(fromPoint || '').trim();
   if (!p) return null;
-  return `https://yandex.ru/maps/?rtext=~${encodeURIComponent(p)}&rtt=auto`;
+  // Точка из бота приходит строкой «Точка на карте (53.96…,27.65…)». Отдавать
+  // её Яндексу целиком нельзя — маршрут строился к результату поиска по этой
+  // фразе, а не к самой точке. Координаты вынимаем.
+  const c = pointCoords(p);
+  return `https://yandex.ru/maps/?rtext=~${encodeURIComponent(c || p)}&rtt=auto`;
 }
 
 // --- Организация: чек-листы снаряжения и ролей (мультивыбор, stateless по registration) ---
@@ -4593,12 +4597,45 @@ export default async function handler(req: any, res: any) {
         const { data: reg } = await supabase
           .from('registrations').select('id')
           .eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
-        if (!reg) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Активной записи нет' }); return res.status(200).json({ ok: true }); }
+        if (!reg) {
+          /**
+           * Записи нет — а человек жмёт «отказаться». Так бывает у тех, кому
+           * событие пришло рассылкой или кто бросил анкету на полпути. Сухое
+           * «Активной записи нет» читается как поломка: участница написала в
+           * поддержку «я отменяю поездку, это невозможно, мне пишет о
+           * регистрации». Объясняем словами и даём выход.
+           */
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Записи на это событие у тебя нет' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '👌 Отменять нечего — записи на это событие у тебя нет, ты его точно не занимаешь.\n\n'
+              + 'Если сообщения по нему приходят из общей рассылки и ты не едешь — просто игнорируй их или напиши нам, снимем.',
+            reply_markup: kb([[{ text: '✍️ Написать организаторам', callback_data: 'usreply' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
         await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
         // Счётчик мест НЕ трогаем: participantsCount теперь везде считается
         // из registrations (единый источник правды), колонка — легаси.
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Участие отменено' });
         await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '❌ Ты отменил(а) участие. Место освободилось для других. Захочешь вернуться — открой событие заново.' });
+        /**
+         * Ушёл с события — освобождаем и его место в машине.
+         * Раньше отмена участия трогала только registrations: человек не едет,
+         * а место в чужой машине продолжало числиться занятым, и водитель вёз
+         * «пустое» кресло мимо тех, кто искал попутку.
+         */
+        try {
+          const { data: evRides } = await supabase
+            .from('rides').select('id').eq('event_id', evId).eq('active', true);
+          for (const r of (evRides || []) as any[]) {
+            const { data: outcome } = await supabase.rpc('cancel_ride_seat', { p_ride_id: r.id, p_passenger: tgId });
+            if (outcome === 'ok') {
+              await tg('sendMessage', { chat_id: chatId, text: '🚗 Твоё место в машине тоже освободили.' });
+              await notifyWaitlist(Number(r.id), 'car');
+            }
+          }
+        } catch { /* освобождение места не должно ронять саму отмену */ }
         return res.status(200).json({ ok: true });
       }
 
