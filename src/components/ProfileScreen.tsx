@@ -611,20 +611,30 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                     </section>
                   )}
 
-                  {/* Единственный список снаряжения. Своего статичного не рисуем:
-                      EquipmentPanel даёт то же самое, но с добавлением, клубным
-                      и передачами — два списка подряд читались как баг. */}
+                  {/**
+                   * Снаряжение живёт ТОЛЬКО на своей вкладке.
+                   * Здесь стоял второй экземпляр той же панели — на экране
+                   * получалось два одинаковых блока «добавить снаряжение», и
+                   * было непонятно, какой из них настоящий. Оставляем короткую
+                   * сводку и ссылку на вкладку.
+                   */}
                   <section className="space-y-2">
-                    {(data.equipment || []).length === 0 && (
-                      <p className="text-[11px] text-white/35 font-mono bg-white/5 border border-white/10 rounded-2xl p-4">
-                        Снаряжение не заведено. Добавь своё — организаторы увидят, что уже есть в клубе, и не будут искать лишнее.
-                      </p>
-                    )}
-                    <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3">
-                      {/* telegramId обязателен: без него панель грузит снаряжение
-                          всего клуба, а не своё. */}
-                      <EquipmentPanel telegramId={p.telegramId} />
-                    </div>
+                    <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">Снаряжение</h3>
+                    <button
+                      type="button"
+                      onClick={() => setTab('gear')}
+                      className="w-full text-left bg-white/[0.03] border border-white/10 rounded-2xl p-4 cursor-pointer hover:bg-white/[0.06] transition-colors"
+                    >
+                      <span className="text-[12px] text-white/80 block">
+                        {(data.equipment || []).length > 0
+                          ? `Твоего снаряжения в списке: ${(data.equipment || []).length}`
+                          : 'Своё снаряжение ещё не заведено'}
+                      </span>
+                      <span className="text-[11px] text-white/45 block mt-1">
+                        Вкладка «Снаряжение» → складчина круга и твой список. Что отметишь — увидит организатор
+                        и ребята: не повезут второй такой же.
+                      </span>
+                    </button>
                   </section>
 
                   <section className="space-y-2">

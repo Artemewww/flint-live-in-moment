@@ -293,6 +293,58 @@ export default async function handler(req: any, res: any) {
   }
 
   /**
+   * Разослать «Правила участника» тем, кто их ещё не принял.
+   * Кодекс принимается при первой записи на событие, но 29 из 43 одобренных
+   * членов до записи так и не дошли — правил они не видели. Организатору нужно
+   * уметь послать их адресно и повторять, пока человек не нажмёт «Принимаю».
+   */
+  if (req.method === 'POST' && req.query?.action === 'send_rules') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const ids = (Array.isArray(body.telegramIds) ? body.telegramIds : [])
+        .map((v: unknown) => Number(v))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+      if (!ids.length) return res.status(400).json({ error: 'Не выбран ни один участник' });
+      const BOT = process.env.TELEGRAM_BOT_TOKEN || '';
+      if (!BOT) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
+
+      const text =
+        '📜 <b>Правила участника FLINT</b>\n\n' +
+        '<b>1. Философия круга.</b> Только живое общение, без масок. Приходим расти и отдавать.\n' +
+        '<b>2. 100% трезвость.</b> Без алкоголя и любых веществ — до и во время встречи.\n' +
+        '<b>3. Уважение и приватность.</b> Все равны. «Нет» уважается сразу. Сказанное в кругу остаётся в кругу.\n' +
+        '<b>4. Программа события.</b> Её собирает организатор — соблюдаем время и порядок. Хочешь изменить — предложи, не меняй самовольно.\n' +
+        '<b>5. Ответственность.</b> За своё здоровье, снаряжение и безопасность отвечаешь сам. Взял задачу — доводишь или заранее ищешь замену.\n' +
+        '<b>6. Природа.</b> Убираем за собой полностью, огонь — только по правилам.\n' +
+        '<b>7. Гости и деньги.</b> За гостя отвечаешь и платишь ты. Расходы делим честно и прозрачно.\n' +
+        '<b>8. Фото и видео.</b> Без согласия человека его снимки не публикуются.\n\n' +
+        'Нажми кнопку — это и есть принятие правил. Без него запись на события закрыта.';
+
+      let sent = 0;
+      const failed: number[] = [];
+      for (const id of ids) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: id, parse_mode: 'HTML', text, disable_web_page_preview: true,
+              reply_markup: { inline_keyboard: [
+                [{ text: '✅ Принимаю правила', callback_data: 'rulesok' }],
+                [{ text: '✍️ Задать вопрос', callback_data: 'usreply' }],
+              ] },
+            }),
+          });
+          const j = await r.json();
+          if (j?.ok) sent++; else failed.push(id);
+        } catch { failed.push(id); }
+      }
+      return res.status(200).json({ ok: sent > 0, sent, total: ids.length, failed: failed.length });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
+  /**
    * Правка машины из админки: свободные места и точка старта.
    * Понадобилось после «Danil — 8980 своб. из 8980, старт: Mini Cooper серый»:
    * кривые данные из анкеты организатор мог поправить только через базу.

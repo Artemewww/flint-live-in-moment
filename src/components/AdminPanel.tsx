@@ -1325,7 +1325,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audienceQuery, setAudienceQuery] = useState('');
   /** Фильтр аудитории по категории. `botoff` — кто остановил бота: им не дойдёт
    *  ни одна рассылка, и это нужно видеть отдельно, а не гадать после отправки. */
-  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff'>('all');
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules'>('all');
   /** Сортировка аудитории. `newest`/`oldest` — по дате входа в клуб («сколько дней с нами»). */
   const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name' | 'newest' | 'oldest'>('default');
 
@@ -1668,6 +1668,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       if (audienceFilter === 'male' && m.gender !== 'male') return false;
       if (audienceFilter === 'female' && m.gender !== 'female') return false;
       if (audienceFilter === 'botoff' && m.botActive !== false) return false;
+      // Кто не принял кодекс: правила принимаются при записи, а до записи
+      // доходят не все — таких надо видеть и дожимать адресно.
+      if (audienceFilter === 'norules' && m.rulesAccepted) return false;
       if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -2076,6 +2079,32 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     } finally {
       setBroadcasting(null);
     }
+  };
+
+  /**
+   * Разослать кодекс тем, кто его не принял. Повторять можно сколько угодно:
+   * отметка ставится только когда человек сам нажмёт «Принимаю» в боте.
+   */
+  const [rulesSending, setRulesSending] = useState(false);
+  const sendRulesToFiltered = async () => {
+    const ids = visibleAudience().map((m: any) => Number(m.telegramId)).filter((n: number) => n > 0);
+    if (!ids.length || rulesSending) return;
+    setRulesSending(true);
+    try {
+      const res = await adminFetch('/api/admin/registrations?action=send_rules', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramIds: ids }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setActionMsg({
+        ok: !!j.ok,
+        text: j.ok
+          ? `Правила отправлены ${j.sent} из ${j.total}${j.failed ? ` · ${j.failed} не дошло (бот остановлен)` : ''}`
+          : (j.error || 'Не удалось отправить'),
+      });
+    } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+    finally { setRulesSending(false); }
   };
 
   /** Правка машины: свободные места и точка старта (сервер режет места 0…8). */
@@ -4233,7 +4262,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
                   />
                   <div className="flex flex-wrap gap-2">
-                    {([['all', 'Все'], ['core', 'Костяк'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
+                    {([['all', 'Все'], ['core', 'Костяк'], ['norules', '📜 Без правил'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"
@@ -4244,6 +4273,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </button>
                     ))}
                   </div>
+                  {/* Дожать кодекс: список тех, кто не принял, и отправка им
+                      правил кнопкой. Повторять можно сколько угодно — пока
+                      человек не нажмёт «Принимаю» в боте. */}
+                  {audienceFilter === 'norules' && (
+                    <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] text-amber-200">
+                        Не приняли правила: <b>{visibleAudience().length}</b>. Им закрыта запись на события.
+                      </span>
+                      <button
+                        onClick={sendRulesToFiltered}
+                        disabled={rulesSending || visibleAudience().length === 0}
+                        className="text-[10px] px-3 py-1.5 rounded-lg bg-brand text-black font-black uppercase cursor-pointer border-none disabled:opacity-40"
+                      >
+                        {rulesSending ? 'Отправляю…' : `📜 Отправить правила (${visibleAudience().length})`}
+                      </button>
+                    </div>
+                  )}
+
                   <div className="flex gap-2 items-center">
                     <span className="text-[9px] text-white/30 uppercase font-mono">Сортировка:</span>
                     {([['default', 'По умолч.'], ['newest', '🆕 Новички'], ['oldest', '⭐ Старожилы'], ['points', 'Баллы'], ['attended', 'Визиты'], ['name', 'Имя']] as const).map(([key, label]) => (

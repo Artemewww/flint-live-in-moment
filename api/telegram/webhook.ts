@@ -1954,6 +1954,37 @@ export default async function handler(req: any, res: any) {
         [/^regcancel_/, 'Отказаться от участия в событии? Место освободится для другого человека.'],
         [/^ridecancel_/, 'Отменить свою поездку? Все, кто занял места, получат уведомление.'],
       ];
+      /**
+       * «Принимаю правила» из адресной рассылки кодекса.
+       * Раньше правила принимались только внутри анкеты записи, поэтому у
+       * большинства одобренных членов отметки не было вовсе — организатор не
+       * мог понять, кто их вообще читал.
+       */
+      if (data === 'rulesok') {
+        const { data: m } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+        const prefs = ((m as any)?.prefs || {}) as Record<string, unknown>;
+        prefs.rules_accepted = { version: 'v2', at: new Date().toISOString(), via: 'broadcast' };
+        await supabase.from('members').update({ prefs }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Правила приняты ✅' });
+        try {
+          await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([]) });
+        } catch { /* сообщение могли удалить */ }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '✅ <b>Правила приняты.</b> Спасибо — теперь запись на события открыта.\n\nОткрой афишу и выбирай, куда поедешь.',
+          reply_markup: kb([[{ text: '📅 Открыть афишу', web_app: { url: `${siteUrl(req)}/` } }]]),
+        });
+        if (ADMIN_CHAT_ID) {
+          try {
+            await tg('sendMessage', {
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `📜 ${esc(cq.from.first_name || 'Участник')}${cq.from.username ? ` @${esc(cq.from.username)}` : ''} принял(а) правила клуба.`,
+            });
+          } catch { /* уведомление костяку не критично */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       if (data === 'cno') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ничего не меняем' });
         try { await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '✅ Оставили как есть.' }); } catch { /* сообщение могли удалить */ }
