@@ -2078,6 +2078,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
+  /** Правка машины: свободные места и точка старта (сервер режет места 0…8). */
+  const patchRide = async (ride: any, patch: Record<string, unknown>) => {
+    try {
+      const res = await adminFetch(`/api/admin/registrations?action=ride&rideId=${encodeURIComponent(ride.id)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json().catch(() => ({}));
+      if (j.ok) {
+        setActionMsg({ ok: true, text: j.warning || 'Машина обновлена' });
+        if (selectedEvent) await refreshStats(selectedEvent);
+      } else {
+        setActionMsg({ ok: false, text: j.error || 'Не удалось обновить машину' });
+      }
+    } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+  };
+
   // Обновить статус/оплату/явку участника и перечитать список.
   const patchRegistration = async (reg: any, patch: Record<string, unknown>) => {
     try {
@@ -3579,6 +3597,34 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                                     Пассажиры: {ride.passengers.map((p: any) => p.passenger_name).join(', ')}
                                   </p>
                                 )}
+
+                                {/* Правка машины прямо здесь: кривые данные из
+                                    анкеты («8980 своб.», марка вместо точки
+                                    старта) организатор чинил только через базу. */}
+                                <div className="mt-2 pt-2 border-t border-white/5 space-y-1.5">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="text-[9px] font-mono uppercase text-white/40">Мест всего:</span>
+                                    {[0, 1, 2, 3, 4, 5, 6].map((n) => (
+                                      <button
+                                        key={n}
+                                        onClick={() => patchRide(ride, { seatsTotal: n })}
+                                        className={`w-6 h-6 rounded text-[10px] font-black cursor-pointer border-none ${
+                                          (ride.seats_total || 0) === n ? 'bg-brand text-black' : 'bg-white/10 text-white/50 hover:bg-white/20'
+                                        }`}
+                                      >
+                                        {n}
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <input
+                                    defaultValue={ride.from_point || ''}
+                                    onBlur={(e) => {
+                                      if (e.target.value !== (ride.from_point || '')) patchRide(ride, { fromPoint: e.target.value });
+                                    }}
+                                    placeholder="Точка старта (адрес или координаты)"
+                                    className="w-full bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 text-[11px] text-white placeholder:text-white/30 outline-none focus:border-brand"
+                                  />
+                                </div>
                               </div>
                             );
                           })

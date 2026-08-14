@@ -292,6 +292,36 @@ export default async function handler(req: any, res: any) {
     }
   }
 
+  /**
+   * Правка машины из админки: свободные места и точка старта.
+   * Понадобилось после «Danil — 8980 своб. из 8980, старт: Mini Cooper серый»:
+   * кривые данные из анкеты организатор мог поправить только через базу.
+   * Места режем 0…8, чтобы через админку нельзя было завести ту же дичь.
+   */
+  if (req.method === 'PATCH' && req.query?.action === 'ride') {
+    try {
+      const id = Number(req.query.rideId || 0);
+      if (!id) return res.status(400).json({ error: 'Missing rideId' });
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const patch: Record<string, unknown> = {};
+      if (body.seatsTotal !== undefined) {
+        patch.seats_total = Math.max(0, Math.min(8, Math.trunc(Number(body.seatsTotal) || 0)));
+      }
+      if (body.fromPoint !== undefined) patch.from_point = String(body.fromPoint || '').slice(0, 200);
+      if (body.active !== undefined) patch.active = !!body.active;
+      if (!Object.keys(patch).length) return res.status(400).json({ error: 'Нечего менять' });
+      const { data, error } = await supabase.from('rides').update(patch).eq('id', id).select('*').maybeSingle();
+      if (error) return res.status(500).json({ error: error.message });
+      // Мест не может быть меньше, чем уже занято, — иначе счётчики врут.
+      if (data && Number((data as any).seats_taken) > Number((data as any).seats_total)) {
+        return res.status(200).json({ ok: true, warning: `Занято ${(data as any).seats_taken} мест — это больше нового лимита.` });
+      }
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   // ─── Переписка поддержки: лента «костяк ↔ участник» ────────────────────────
   // Список диалогов: по каждому собеседнику — последнее сообщение, счётчик,
   // сколько входящих без ответа. Имя тянем из members.

@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ShieldCheck, Ban, Heart, Leaf, Users, Coins, Camera, ListChecks, CheckCircle2, Lock } from 'lucide-react';
+import { ShieldCheck, Ban, Heart, Leaf, Users, Coins, Camera, ListChecks, CheckCircle2, Lock, Compass } from 'lucide-react';
 import { CommunityEvent } from '../types';
 import { getInitData } from '../telegram';
 
@@ -13,7 +13,7 @@ import { getInitData } from '../telegram';
  * привязана к конкретному событию → её подтверждаем при каждой записи.
  */
 
-const RULES_VERSION = 'v1';
+const RULES_VERSION = 'v2'; // v2 — добавлено правило о программе события
 const RULES_LS_KEY = `flint_rules_accepted_${RULES_VERSION}`;
 
 type Step = {
@@ -76,6 +76,25 @@ function clubRuleSteps(): Step[] {
         'За своё здоровье, снаряжение и безопасность отвечаешь ты сам.',
         'Следуешь инструкциям организатора; в риске для себя/других — регламенту SOS.',
         'Убираем за собой полностью: мусор увозим, огонь — только по правилам (Leave No Trace).',
+      ],
+      acceptLabel: 'Принимаю',
+    },
+    {
+      /**
+       * Программа — часть кодекса, а не пожелание. Правило добавлено после
+       * Нарочи: пункты меняли и сдвигали на ходу, и круг рассыпался — люди
+       * приходили к времени, которого уже нет. Формулировки взяты из
+       * «Правил участника» (Правила_участника.html в корне проекта).
+       */
+      key: 'program-rules',
+      icon: <Compass className="w-5 h-5" />,
+      tag: 'Программа',
+      title: 'Программа события — не нарушаем',
+      points: [
+        'Программу собирает организатор — так, чтобы всем было гармонично и комфортно.',
+        'Время, порядок и формат — как в программе. Это держит круг вместе.',
+        'Хочешь что-то изменить — предложи организатору, а не меняй самовольно.',
+        'Взял пункт под ответственность — доводишь до конца или заранее ищешь замену.',
       ],
       acceptLabel: 'Принимаю',
     },

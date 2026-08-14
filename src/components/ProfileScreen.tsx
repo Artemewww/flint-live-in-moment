@@ -276,10 +276,35 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               ?checklist из бота приводил бы на экран ошибки, если профиль не
               подтянулся. И сверху — перед выездом им пользуются каждый раз,
               а учёт снаряжения нужен раз в сезон. */}
+          {/**
+           * Порядок на вкладке «Снаряжение» перевёрнут: сначала СКЛАДЧИНА —
+           * что уже есть у клуба и у ребят и чем готовы поделиться, и только
+           * потом чек-лист. Раньше первым шёл чек-лист, и люди везли по три
+           * одинаковых котелка, не зная, что вещь уже едет.
+           */}
           {tab === 'gear' && (
-            <section>
-              <CampingChecklist />
-            </section>
+            <div className="space-y-5">
+              <section className="space-y-2">
+                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
+                  Складчина: что уже есть у круга
+                </h3>
+                <p className="text-[11px] text-white/50 leading-snug">
+                  Своё, клубное и передачи из рук в руки. Прежде чем покупать или везти —
+                  посмотри, может это уже едет. Своё снаряжение добавь сюда же: круг увидит,
+                  чем ты можешь поделиться.
+                </p>
+                <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3">
+                  <EquipmentPanel />
+                </div>
+              </section>
+
+              <section className="space-y-2">
+                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
+                  Личный чек-лист кемпинга
+                </h3>
+                <CampingChecklist />
+              </section>
+            </div>
           )}
 
           {loading && tab !== 'gear' && (

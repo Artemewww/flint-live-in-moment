@@ -171,7 +171,7 @@ export default async function handler(req: any, res: any) {
     // Проверка ТОЛЬКО серверная — сам код на публичный фронт не отдаётся.
     const { data: evGate } = await supabase
       .from('events')
-      .select('is_public, access_code, telegram_bot_url')
+      .select('is_public, access_code, telegram_bot_url, logistics')
       .eq('id', eventId)
       .maybeSingle();
     if (evGate && evGate.is_public === false && evGate.access_code) {
@@ -379,7 +379,12 @@ export default async function handler(req: any, res: any) {
     // Раньше has_transport оставался невидимым — rides создавал только бот-флоу
     // ridenew. Одна активная машина на человека на событие (повтор = правка).
     try {
-      const seats = Number(body.transport_seats) || 0;
+      /**
+       * Мест не может быть 8980 — а именно столько уехало в базу, когда в поле
+       * свободных мест оказалось не то число. В логистике это выглядело как
+       * «8980 своб. из 8980». Режем по здравому смыслу: 0…8.
+       */
+      const seats = Math.max(0, Math.min(8, Math.trunc(Number(body.transport_seats) || 0)));
       // Машину заводим и когда свободных мест нет: раньше условие было
       // `seats > 0`, и человек, выбравший «на своём авто — мест нет», нигде не
       // числился водителем. Организатор не знал, сколько машин в колонне, сам
@@ -394,7 +399,11 @@ export default async function handler(req: any, res: any) {
           event_id: eventId,
           driver_id: member.telegram_id,
           driver_name: name || 'Водитель',
-          from_point: body.transport_details || 'по договорённости',
+          // from_point — ТОЧКА СТАРТА, а не описание машины. Сюда уезжало
+          // «Mini Cooper серый» / «Каршеринг Anytime», и в логистике вместо
+          // места сбора показывалась марка авто. Марка живёт в
+          // registrations.transport_details, откуда её и берут списки.
+          from_point: String((evGate as any)?.logistics?.assemblyPoint || '').trim() || 'по договорённости',
           seats_total: seats,
           kind: 'car',
           active: true,

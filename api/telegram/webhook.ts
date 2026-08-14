@@ -3975,10 +3975,54 @@ export default async function handler(req: any, res: any) {
           reply_markup: kb([
             [{ text: '🎒 Снаряжение', callback_data: `equip_${evId}` }],
             [{ text: '🙌 Чем буду полезен', callback_data: `role_${evId}` }],
+            // Свободная строка «что везу»: чек-лист не покрывает «38 л воды
+            // и чай габа», а такие вещи и решают, будет ли на месте вода.
+            [{ text: '➕ Я привезу…', callback_data: `bring_${evId}` }],
+            [{ text: '📦 Кто что везёт', callback_data: `brings_${evId}` }],
           ]),
         });
         return res.status(200).json({ ok: true });
       }
+      /**
+       * «Я привезу…» — свободная строка того, что человек берёт на всех.
+       * Чек-лист покрывает личное снаряжение, но «38 литров воды», «чай габа»,
+       * «котелок» или «проектор» в него не вписать, а именно от них зависит,
+       * будет ли на месте вода и чай. Пишем в tasks — оттуда это видно и в
+       * /сводке, и в ответах бота, и подхватывается, если человек снялся.
+       */
+      if (data.startsWith('bring_')) {
+        const evId = data.slice('bring_'.length);
+        await setSession(tgId, 'bring_item', { evId });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '📦 <b>Что привезёшь на всех?</b>\n\nНапиши одной строкой — например:\n<i>38 л воды + чай габа</i>\n<i>котелок и решётка</i>\n<i>проектор и экран</i>',
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('brings_')) {
+        const evId = data.slice('brings_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: list } = await supabase
+          .from('tasks').select('title,taken_by,done').eq('event_id', evId).order('id');
+        if (!list || !list.length) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📦 Пока никто ничего не заявил. Будь первым — «➕ Я привезу…».' });
+          return res.status(200).json({ ok: true });
+        }
+        const ids = Array.from(new Set(list.map((t: any) => Number(t.taken_by)).filter(Boolean)));
+        const { data: regs } = ids.length
+          ? await supabase.from('registrations').select('telegram_id,name').eq('event_id', evId).in('telegram_id', ids)
+          : { data: [] as any[] };
+        const byId = new Map((regs || []).map((r: any) => [Number(r.telegram_id), r.name]));
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '📦 <b>Кто что везёт</b>\n\n' + list.map((t: any) =>
+            `• ${esc(t.title)}${byId.get(Number(t.taken_by)) ? ` — ${esc(String(byId.get(Number(t.taken_by))))}` : ''}${t.done ? ' ✅' : ''}`).join('\n'),
+          reply_markup: kb([[{ text: '➕ Добавить своё', callback_data: `bring_${evId}` }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('equip_')) {
         const evId = data.slice('equip_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -5974,6 +6018,41 @@ export default async function handler(req: any, res: any) {
         }
 
         // Причина отказа из RSVP-напоминания: снимаем с события + пингуем оргов.
+        // Ответ на «➕ Я привезу…»: строка → задача, видна всем в «Кто что везёт».
+        if (sess && sess.state === 'bring_item') {
+          const evId = sess.context?.evId;
+          await clearSession(msg.from.id);
+          const item = String(text).trim().slice(0, 200);
+          if (item.length < 2) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Слишком коротко — напиши, что именно везёшь.' });
+            return res.status(200).json({ ok: true });
+          }
+          await supabase.from('tasks').insert({
+            event_id: evId,
+            title: item,
+            created_by: msg.from.id,
+            taken_by: msg.from.id,
+            done: false,
+          });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Записал: <b>${esc(item)}</b> — везёшь ты.\n\nЭто видно всем в «Кто что везёт» и в сводке чата.`,
+            reply_markup: kb([[{ text: '📦 Кто что везёт', callback_data: `brings_${evId}` }]]),
+          });
+          // Чат события узнаёт сразу — чтобы не привезли то же самое дважды.
+          const { data: grp } = await supabase
+            .from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+          if ((grp as any)?.chat_id) {
+            try {
+              await tg('sendMessage', {
+                chat_id: (grp as any).chat_id, parse_mode: 'HTML',
+                text: `📦 <b>${esc(msg.from.first_name || 'Участник')}</b> везёт: ${esc(item)}`,
+              });
+            } catch { /* группа могла быть недоступна */ }
+          }
+          return res.status(200).json({ ok: true });
+        }
+
         if (sess && sess.state === 'rsvp_reason') {
           const evId = sess.context?.evId;
           const ev = await getEvent(evId);
