@@ -171,7 +171,7 @@ export default async function handler(req: any, res: any) {
     // Проверка ТОЛЬКО серверная — сам код на публичный фронт не отдаётся.
     const { data: evGate } = await supabase
       .from('events')
-      .select('is_public, access_code')
+      .select('is_public, access_code, telegram_bot_url')
       .eq('id', eventId)
       .maybeSingle();
     if (evGate && evGate.is_public === false && evGate.access_code) {
@@ -405,20 +405,39 @@ export default async function handler(req: any, res: any) {
     if (BOT_TOKEN && verified?.id) {
       const transportAnswered = body.has_transport !== undefined
         || (typeof body.transport_details === 'string' && body.transport_details.trim() !== '');
+      /**
+       * Ссылка на чат события — прямо в подтверждении записи.
+       * Организатор вручную писал каждому «зайди в группу мероприятия», а
+       * участники всё равно не находили («не вижу, как вступить в чат»).
+       * Ссылка приходит сама в тот момент, когда человек только записался.
+       */
+      const chatUrl = String((evGate as any)?.telegram_bot_url || '').trim();
+      // У половины событий в этом поле лежит ссылка на САМОГО бота
+      // (t.me/campsflint_bot) — звать «в чат события» туда, где человек уже
+      // стоит, нельзя. Чат = инвайт-ссылка (t.me/+…, /joinchat/) или публичная
+      // группа; аккаунты ботов Telegram всегда заканчиваются на «bot».
+      const chatOk = /^https:\/\/t\.me\/(\+|joinchat\/)/i.test(chatUrl)
+        || (/^https:\/\/t\.me\/[A-Za-z0-9_]{4,}$/i.test(chatUrl) && !/bot$/i.test(chatUrl));
+      const rows: any[][] = [];
+      if (chatOk) rows.push([{ text: '💬 Войти в чат события', url: chatUrl }]);
+      if (!transportAnswered) {
+        rows.push(
+          [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${eventId}:car` }],
+          [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${eventId}:carfull` }],
+          [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${eventId}:seek` }],
+          [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${eventId}:self` }],
+        );
+      }
       try {
         await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             chat_id: verified.id, parse_mode: 'HTML',
-            text: transportAnswered
+            text: (transportAnswered
               ? `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nАнкета получена целиком — организаторы видят твою логистику и предпочтения. Детали события и напоминания придут сюда.`
-              : `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nПара быстрых уточнений для организаторов — 🚗 как добираешься?`,
-            ...(transportAnswered ? {} : { reply_markup: { inline_keyboard: [
-              [{ text: '🚗 На своём авто — есть свободные места', callback_data: `rt:${eventId}:car` }],
-              [{ text: '🚗 На своём авто — мест нет', callback_data: `rt:${eventId}:carfull` }],
-              [{ text: '🙋 Нужна попутка — возьмите меня', callback_data: `rt:${eventId}:seek` }],
-              [{ text: '🚶 Без авто, доберусь сам (пешком/транспортом)', callback_data: `rt:${eventId}:self` }],
-            ] } }),
+              : `✅ Ты записан(а) на «<b>${escapeHtml(eventTitle || eventId)}</b>»!\n\nПара быстрых уточнений для организаторов — 🚗 как добираешься?`)
+              + (chatOk ? `\n\n💬 Вся оперативная связь — в чате события. Заходи, там координация в день выезда.` : ''),
+            ...(rows.length ? { reply_markup: { inline_keyboard: rows } } : {}),
           }),
         });
       } catch { /* анкета догонится кроном-доборщиком */ }
