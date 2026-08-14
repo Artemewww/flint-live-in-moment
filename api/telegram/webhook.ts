@@ -5362,8 +5362,13 @@ export default async function handler(req: any, res: any) {
          * не видел, а организатор сводил попутки вручную. Теперь бот заводит
          * машину сам и объявляет места.
          */
+        // Один вызов ИИ на сообщение: у вебхука 10 с, а два подряд запроса к
+        // Gemini их съедают — Telegram посчитает доставку неудачной и пришлёт
+        // апдейт повторно, участник получит дубль ответа.
+        let aiUsed = false;
         const carOffer = /(?<![а-яёa-z])(каршеринг|каршер|на\s+своей|на\s+машине|на\s+авто|за\s+рулём|за\s+рулем|подвезу|заберу|могу\s+взять|свободн\w*\s+мест)/i;
         if (linkedEvent && carOffer.test(text) && text.length > 12 && !text.trim().endsWith('?')) {
+          aiUsed = true;
           try {
             const parsed = await geminiJSON(
               `Сообщение участника в чате поездки: «${text}»\n\n` +
@@ -5420,7 +5425,7 @@ export default async function handler(req: any, res: any) {
          */
         const looksLikeQuestion = text.includes('?')
           || /^(а\s+)?(кто|что|где|когда|во\s+сколько|как|сколько|какой|какая|какие|можно|нужно|надо|брать\s+ли)/i.test(text);
-        if (linkedEvent && looksLikeQuestion && text.length > 8) {
+        if (linkedEvent && looksLikeQuestion && text.length > 8 && !aiUsed) {
           const { data: lastReply } = await supabase
             .from('bot_group_actions').select('created_at')
             .eq('chat_id', chatId).eq('action_type', 'info_reply')
