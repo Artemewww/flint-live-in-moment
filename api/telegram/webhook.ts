@@ -5129,10 +5129,90 @@ export default async function handler(req: any, res: any) {
             return res.status(200).json({ ok: true });
           }
           const rows = evs.map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `bindchat_${e.id}` }]);
+          /**
+           * Режим приватности бота — тихий убийца всей групповой автоматики.
+           * Пока Group Privacy включён, Telegram отдаёт боту ТОЛЬКО команды и
+           * ответы на его же сообщения: обычная переписка до вебхука не
+           * доходит, история пуста, ИИ-помощник молчит — и понять это по
+           * поведению невозможно. Проверяем и говорим прямо.
+           */
+          let privacyWarn = '';
+          try {
+            const me = await tg('getMe', {});
+            if ((me as any)?.result?.can_read_all_group_messages === false) {
+              privacyWarn =
+                '\n\n⚠️ <b>Я не вижу обычные сообщения этого чата.</b>\n' +
+                'Включи мне доступ: @BotFather → /mybots → этот бот → Bot Settings → Group Privacy → <b>Turn off</b>. ' +
+                'Потом ОБЯЗАТЕЛЬНО удали меня из группы и добавь заново — иначе настройка не подхватится.\n' +
+                'Без этого я не смогу отвечать на вопросы в чате, вести список «кто что везёт» и подхватывать машины.';
+            }
+          } catch { /* getMe не ответил — не мешаем привязке */ }
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: '💬 <b>Привязка чата к событию</b>\n\nВыбери событие — в его карточке появится кнопка «Чат события» с инвайт-ссылкой сюда:',
+            text: '💬 <b>Привязка чата к событию</b>\n\nВыбери событие — в его карточке появится кнопка «Чат события» с инвайт-ссылкой сюда:' + privacyWarn,
             reply_markup: kb(rows),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * /сводка — вся организация одним сообщением.
+         * Команды доходят до бота даже при включённом Group Privacy, поэтому
+         * это работает в любой группе сразу: кто едет, какие машины и где
+         * свободные места, КТО ОСТАЛСЯ БЕЗ МАШИНЫ, кто что везёт и что ещё
+         * никто не взял. Раньше всё это собиралось вручную по переписке.
+         */
+        if (gcmd === '/сводка' || gcmd === '/summary' || gcmd === '/svodka') {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link (это может костяк).' });
+            return res.status(200).json({ ok: true });
+          }
+          const evId = (gl as any).event_id;
+          const { data: ev } = await supabase.from('events').select('*').eq('id', evId).maybeSingle();
+          const lg = (ev as any)?.logistics || {};
+          const [{ data: regs3 }, { data: rides3 }, { data: tasks3 }] = await Promise.all([
+            supabase.from('registrations').select('name,telegram_id,guest_count,status').eq('event_id', evId).neq('status', 'cancelled'),
+            supabase.from('rides').select('id,driver_id,driver_name,seats_total,seats_taken,from_point,kind').eq('event_id', evId).eq('active', true),
+            supabase.from('tasks').select('title,taker_name,done').eq('event_id', evId),
+          ]);
+          const cars = (rides3 || []).filter((r: any) => r.kind !== 'tent');
+          const { data: bookings3 } = cars.length
+            ? await supabase.from('ride_bookings').select('passenger_id').in('ride_id', cars.map((c: any) => c.id))
+            : { data: [] as any[] };
+          const seated = new Set([
+            ...(bookings3 || []).map((b: any) => Number(b.passenger_id)),
+            ...cars.map((c: any) => Number(c.driver_id)),
+          ]);
+          const noCar = (regs3 || []).filter((r: any) => !seated.has(Number(r.telegram_id)));
+          const freeSeats = cars.reduce((s: number, c: any) => s + Math.max(0, (c.seats_total || 0) - (c.seats_taken || 0)), 0);
+          const guests = (regs3 || []).reduce((s: number, r: any) => s + (Number(r.guest_count) || 0), 0);
+          const asm = lg.assemblyPoint ? String(lg.assemblyPoint) : '';
+          const txt =
+            `📋 <b>Сводка — «${esc((ev as any)?.title || 'событие')}»</b>\n\n` +
+            `📆 ${esc(dayPhrase((ev as any)?.date))}${lg.departureTime ? ` · выезд <b>${esc(lg.departureTime)}</b>` : ''}\n` +
+            (asm ? `🚩 Сбор: ${esc(asm)}\n` : '🚩 Точка сбора ещё не назначена\n') +
+            `\n👥 <b>Едут (${(regs3 || []).length}${guests ? ` +${guests} гост.` : ''}):</b> ` +
+            ((regs3 || []).map((r: any) => esc(r.name || 'участник')).join(', ') || '—') + '\n' +
+            `\n🚗 <b>Машины:</b>\n` +
+            (cars.length
+              ? cars.map((c: any) => `• ${esc(c.driver_name || 'водитель')} — ${Math.max(0, (c.seats_total || 0) - (c.seats_taken || 0))} своб. из ${c.seats_total || 0}${c.from_point ? `, старт: ${esc(String(c.from_point).slice(0, 60))}` : ''}`).join('\n')
+              : '• пока никто не заявил машину') + '\n' +
+            (noCar.length
+              ? `\n⚠️ <b>Без машины (${noCar.length}):</b> ${noCar.map((r: any) => esc(r.name || 'участник')).join(', ')}` +
+                (freeSeats ? `\nСвободных мест в машинах: <b>${freeSeats}</b> — занимайте кнопкой ниже.` : '\nСвободных мест НЕТ — нужен ещё водитель.')
+              : '\n✅ Все с транспортом.') + '\n' +
+            `\n🎒 <b>Кто что везёт:</b>\n` +
+            ((tasks3 || []).length
+              ? (tasks3 || []).map((t: any) => `• ${esc(t.title)}${t.taker_name ? ` — ${esc(t.taker_name)}` : ' — <b>никто не взял</b>'}${t.done ? ' ✅' : ''}`).join('\n')
+              : '• список пуст — напишите «я возьму …», и я запишу');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', text: txt,
+            reply_markup: kb([
+              [{ text: '🚗 Логистика и брони', callback_data: `logi_${evId}` }],
+              ...(asm && pointCoords(asm) ? [[{ text: '🧭 Маршрут к точке сбора', url: pointMapUrl(asm) }]] : []),
+            ]),
           });
           return res.status(200).json({ ok: true });
         }
@@ -5157,29 +5237,27 @@ export default async function handler(req: any, res: any) {
           }
         }
         
-        // Сохраняем историю сообщений для обучения (только участники события)
-        if (linkedEvent && msg.from?.id) {
-          const { data: isParticipant } = await supabase
-            .from('registrations')
-            .select('id')
-            .eq('event_id', (linkedEvent as any).id)
-            .eq('telegram_id', msg.from.id)
-            .neq('status', 'cancelled')
-            .maybeSingle();
-          
-          if (isParticipant) {
-            try {
-              await supabase.from('group_chat_history').insert({
-                event_id: (linkedEvent as any).id,
-                chat_id: String(chatId),
-                telegram_id: msg.from.id,
-                username: msg.from.username || null,
-                first_name: msg.from.first_name || null,
-                message_text: text.slice(0, 2000),
-                message_id: msg.message_id,
-              });
-            } catch { /* дубли по message_id — норм */ }
-          }
+        /**
+         * ПАМЯТЬ ГРУППЫ.
+         * Раньше сюда писали в таблицу `group_chat_history`, которой в базе
+         * НЕТ (PGRST205) — вставка молча падала в catch, и бот не помнил из
+         * чата ни одного слова: ни кто что везёт, ни кто на чём едет. Пишем в
+         * реальную `group_messages` (она заведена миграцией 2026-group-ai-manager).
+         * Сохраняем все сообщения привязанной группы, а не только от
+         * записавшихся: половину оргвопросов задают те, кто ещё думает.
+         */
+        if (linkedEvent && msg.from?.id && !msg.from?.is_bot) {
+          try {
+            await supabase.from('group_messages').upsert({
+              chat_id: chatId,
+              message_id: msg.message_id,
+              telegram_id: msg.from.id,
+              username: msg.from.username || null,
+              first_name: msg.from.first_name || null,
+              text: text.slice(0, 2000),
+              replied_to: msg.reply_to_message?.message_id || null,
+            }, { onConflict: 'chat_id,message_id' });
+          } catch { /* дубли по message_id — норм */ }
         }
 
         // Триггеры для автоматических действий ИИ
@@ -5276,44 +5354,129 @@ export default async function handler(req: any, res: any) {
           } catch { /* no-op */ }
         }
 
-        // 5. Обучение: сохраняем паттерны решений для будущих событий
-        if (linkedEvent && text.length > 20) {
-          // ИИ извлекает действие + результат из переписки
-          const { data: recent } = await supabase
-            .from('group_chat_history')
-            .select('message_text,first_name')
-            .eq('event_id', (linkedEvent as any).id)
-            .order('created_at', { ascending: false })
-            .limit(10);
-          
-          const context = (recent || [])
-            .reverse()
-            .map((m: any) => `${m.first_name}: ${m.message_text}`)
-            .join('\n');
-          
-          // Каждые N сообщений анализируем контекст и сохраняем паттерн
-          if (recent && recent.length >= 8 && Math.random() < 0.1) {
+        /**
+         * 5. МАШИНА ПРЯМО ИЗ ЧАТА.
+         * Люди объявляют транспорт словами: «беру каршеринг, 3 места, выезжаю
+         * в 5», «поеду на своей, могу двоих забрать». Раньше это оставалось
+         * текстом в чате: в rides машина не появлялась, свободные места никто
+         * не видел, а организатор сводил попутки вручную. Теперь бот заводит
+         * машину сам и объявляет места.
+         */
+        const carOffer = /(?<![а-яёa-z])(каршеринг|каршер|на\s+своей|на\s+машине|на\s+авто|за\s+рулём|за\s+рулем|подвезу|заберу|могу\s+взять|свободн\w*\s+мест)/i;
+        if (linkedEvent && carOffer.test(text) && text.length > 12 && !text.trim().endsWith('?')) {
+          try {
+            const parsed = await geminiJSON(
+              `Сообщение участника в чате поездки: «${text}»\n\n` +
+              `Это ПРЕДЛОЖЕНИЕ подвезти (человек едет на машине/каршеринге и готов взять людей) или нет?\n` +
+              `Верни строго JSON: {"offer": true|false, "seats": число свободных мест (0 если не сказал), ` +
+              `"time": "ЧЧ:ММ" или "", "from": "откуда стартует, если сказал" , "kind": "каршеринг"|"своя машина"}\n` +
+              `offer=false, если это вопрос, просьба подвезти или обсуждение чужой машины. Ничего не выдумывай.`
+            );
+            if (parsed?.offer === true) {
+              const seats = Math.max(0, Math.min(8, Number(parsed.seats) || 0));
+              const from = String(parsed.from || '').slice(0, 120);
+              const when = String(parsed.time || '').slice(0, 12);
+              const kind = String(parsed.kind || '').slice(0, 20) || 'машина';
+              const { data: existing } = await supabase
+                .from('rides').select('id,kind').eq('event_id', (linkedEvent as any).id)
+                .eq('driver_id', msg.from.id).eq('active', true);
+              const car = (existing || []).find((r: any) => r.kind !== 'tent');
+              const row: Record<string, unknown> = {
+                event_id: (linkedEvent as any).id,
+                driver_id: msg.from.id,
+                driver_name: msg.from.first_name || msg.from.username || 'Водитель',
+                from_point: from || (linkedEvent as any).logistics?.assemblyPoint || 'по договорённости',
+                seats_total: seats,
+                kind: 'car',
+                active: true,
+              };
+              if (car) await supabase.from('rides').update(row).eq('id', (car as any).id);
+              else await supabase.from('rides').insert(row);
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: `🚗 Записал: <b>${esc(String(row.driver_name))}</b> — ${esc(kind)}`
+                  + (seats ? `, свободных мест: <b>${seats}</b>` : ', свободных мест нет')
+                  + (when ? `, выезд в <b>${esc(when)}</b>` : '')
+                  + (from ? `, старт: ${esc(from)}` : '')
+                  + (seats ? `\n\nКто без машины — занимайте место кнопкой ниже.` : ''),
+                reply_markup: seats
+                  ? kb([[{ text: '🚗 Занять место', callback_data: `logi_${(linkedEvent as any).id}` }]])
+                  : undefined,
+              });
+              await supabase.from('bot_group_actions').insert({
+                chat_id: chatId, event_id: (linkedEvent as any).id, action_type: 'ride_suggested',
+                trigger_text: text.slice(0, 300), response_text: `ride seats=${seats}`, data: { seats, when, from },
+              });
+            }
+          } catch { /* ИИ недоступен — просто не заводим машину */ }
+        }
+
+        /**
+         * 6. ОТВЕТЫ НА ОРГВОПРОСЫ.
+         * Организатор отвечал в чате на одно и то же: во сколько выезд, где
+         * сбор, что взять, кто едет, сколько стоит. У бота вся эта информация
+         * есть — пусть отвечает сам, но строго по данным события и не чаще
+         * раза в полторы минуты, чтобы не тараторить в живой беседе.
+         */
+        const looksLikeQuestion = text.includes('?')
+          || /^(а\s+)?(кто|что|где|когда|во\s+сколько|как|сколько|какой|какая|какие|можно|нужно|надо|брать\s+ли)/i.test(text);
+        if (linkedEvent && looksLikeQuestion && text.length > 8) {
+          const { data: lastReply } = await supabase
+            .from('bot_group_actions').select('created_at')
+            .eq('chat_id', chatId).eq('action_type', 'info_reply')
+            .order('created_at', { ascending: false }).limit(1).maybeSingle();
+          const quiet = !lastReply || (Date.now() - new Date((lastReply as any).created_at).getTime() > 90_000);
+          if (quiet) {
             try {
-              const pattern = await geminiText(
-                `Контекст переписки группы:\n${context}\n\nИзвлеки ПАТТЕРН РЕШЕНИЯ проблемы/организации (если есть):\n` +
-                `{"problem":"проблема","solution":"решение","category":"логистика|закупка|снаряжение|программа"}\n` +
-                `Если паттерна нет — верни пустую строку. Только JSON, без пояснений.`
+              const { data: ev } = await supabase.from('events').select('*').eq('id', (linkedEvent as any).id).maybeSingle();
+              const lg = (ev as any)?.logistics || {};
+              const { data: rides } = await supabase
+                .from('rides').select('driver_name,seats_total,seats_taken,from_point,kind')
+                .eq('event_id', (linkedEvent as any).id).eq('active', true);
+              const { data: tsk } = await supabase
+                .from('tasks').select('title,taker_name,done').eq('event_id', (linkedEvent as any).id).limit(20);
+              const { data: regs2 } = await supabase
+                .from('registrations').select('name,guest_count').eq('event_id', (linkedEvent as any).id).neq('status', 'cancelled');
+              const { data: hist } = await supabase
+                .from('group_messages').select('first_name,text')
+                .eq('chat_id', chatId).order('created_at', { ascending: false }).limit(15);
+              const facts =
+                `СОБЫТИЕ: ${(ev as any)?.title}\n` +
+                `Даты: ${(ev as any)?.date}${(ev as any)?.date_end && (ev as any).date_end !== (ev as any).date ? ` — ${(ev as any).date_end}` : ''}, время ${(ev as any)?.time || '—'}\n` +
+                `Место: ${(ev as any)?.location || '—'}\n` +
+                `Точка сбора: ${lg.assemblyPoint || 'не назначена'}${lg.departureTime ? `, выезд в ${lg.departureTime}` : ''}\n` +
+                (lg.returnInfo ? `Обратно: ${lg.returnInfo}\n` : '') +
+                (lg.fuelCost ? `Бензин: ~${lg.fuelCost} Br с человека\n` : '') +
+                (lg.notes ? `Заметки: ${String(lg.notes).slice(0, 300)}\n` : '') +
+                (lg.medical ? `Мед-показания: ${String(lg.medical).slice(0, 200)}\n` : '') +
+                `Взнос: ${(ev as any)?.price_label || 'не указан'}\n` +
+                `Записалось: ${(regs2 || []).length} чел (+${(regs2 || []).reduce((s: number, r: any) => s + (Number(r.guest_count) || 0), 0)} гостей)\n` +
+                `МАШИНЫ:\n${(rides || []).filter((r: any) => r.kind !== 'tent').map((r: any) => `- ${r.driver_name}: ${Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0))} своб. из ${r.seats_total || 0}, старт ${r.from_point || '—'}`).join('\n') || '- машин пока нет'}\n` +
+                `КТО ЧТО ВЕЗЁТ:\n${(tsk || []).map((t: any) => `- ${t.title}${t.taker_name ? ` — ${t.taker_name}` : ' — никто не взял'}${t.done ? ' ✅' : ''}`).join('\n') || '- пока ничего не расписано'}\n` +
+                `ПРОГРАММА: ${((ev as any)?.program || []).slice(0, 8).map((p: any) => p.title || p).join('; ') || '—'}`;
+              const chat = (hist || []).reverse().map((m: any) => `${m.first_name || 'участник'}: ${m.text}`).join('\n').slice(0, 2000);
+              const ans = await geminiJSON(
+                `Ты — организатор клуба «Живи в моменте», отвечаешь в чате поездки. Пиши коротко, по-русски, грамотно, дружелюбно, без воды.\n\n` +
+                `ДАННЫЕ СОБЫТИЯ (единственный источник правды):\n${facts}\n\n` +
+                `ПОСЛЕДНИЕ СООБЩЕНИЯ ЧАТА:\n${chat}\n\n` +
+                `ВОПРОС УЧАСТНИКА (${msg.from.first_name || 'участник'}): «${text}»\n\n` +
+                `Ответь ТОЛЬКО если ответ есть в данных выше. Ничего не выдумывай: ни цен, ни времени, ни имён.\n` +
+                `Если данных не хватает, вопрос личный, это шутка или обращение к конкретному человеку — верни answer="".\n` +
+                `Верни JSON: {"answer": "ответ до 400 знаков или пустая строка"}`
               );
-              
-              const match = pattern.match(/\{.*\}/s);
-              if (match) {
-                const parsed = JSON.parse(match[0]);
-                if (parsed.problem && parsed.solution) {
-                  await supabase.from('learned_patterns').insert({
-                    event_id: (linkedEvent as any).id,
-                    category: parsed.category || 'other',
-                    problem: String(parsed.problem).slice(0, 300),
-                    solution: String(parsed.solution).slice(0, 500),
-                    context_snippet: context.slice(0, 1000),
-                  });
-                }
+              const answer = String(ans?.answer || '').trim().slice(0, 700);
+              if (answer.length > 3) {
+                await tg('sendMessage', {
+                  chat_id: chatId, parse_mode: 'HTML',
+                  reply_to_message_id: msg.message_id,
+                  text: `${esc(answer)}\n\n<i>— бот FLINT, по данным события. Если ошибся, поправьте.</i>`,
+                });
+                await supabase.from('bot_group_actions').insert({
+                  chat_id: chatId, event_id: (linkedEvent as any).id, action_type: 'info_reply',
+                  trigger_text: text.slice(0, 300), response_text: answer.slice(0, 500),
+                });
               }
-            } catch { /* обучение best-effort */ }
+            } catch { /* ИИ недоступен — молчим, это лучше, чем мусор в чате */ }
           }
         }
 
