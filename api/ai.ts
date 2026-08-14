@@ -218,7 +218,26 @@ export default async function handler(req: any, res: any) {
         const j = await probe.json().catch(() => ({} as any));
         return res.status(200).json({ ok: false, error: `Google отклонил ключ (HTTP ${probe.status}): ${String((j as any)?.error?.message || '').slice(0, 160)}` });
       }
-      await supabase.from('app_config').upsert({ key: 'gemini_api_key', value: fresh }, { onConflict: 'key' });
+      const { error: saveErr } = await supabase
+        .from('app_config').upsert({ key: 'gemini_api_key', value: fresh }, { onConflict: 'key' });
+      if (saveErr) {
+        /**
+         * Таблицы app_config в базе может не быть — миграция
+         * supabase/migrations/2026-app-config.sql лежит в репозитории, но
+         * накатывается вручную. Раньше запись молча «удавалась», панель
+         * рапортовала об успехе, а ключ никуда не сохранялся.
+         */
+        const missing = /PGRST205|does not exist|schema cache/i.test(String(saveErr.message || ''));
+        return res.status(200).json({
+          ok: false,
+          error: missing
+            ? 'Ключ рабочий, но сохранить его некуда: в базе нет таблицы app_config.'
+            : `Не удалось сохранить ключ: ${String(saveErr.message).slice(0, 200)}`,
+          sql: missing
+            ? 'create table if not exists app_config (\n  key text primary key,\n  value text,\n  updated_at timestamptz default now(),\n  updated_by bigint\n);'
+            : undefined,
+        });
+      }
       // Снимаем метку «квота исчерпана», иначе уведомления молчат 2 часа.
       await supabase.from('app_config').delete().eq('key', 'gemini_quota_notified_at');
       keyCache = null;
@@ -240,10 +259,16 @@ export default async function handler(req: any, res: any) {
           : `HTTP ${probe.status}: ${String((j as any)?.error?.message || '').slice(0, 160)}`;
       }
     }
-    const { data: src } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+    const { data: src, error: cfgErr } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+    // Нет таблицы — ключ из панели физически некуда положить, скажем об этом.
+    const storageBroken = !!cfgErr && /PGRST205|does not exist|schema cache/i.test(String(cfgErr.message || ''));
     return res.status(200).json({
       ok: true,
       hasKey: !!cur,
+      storageBroken,
+      sql: storageBroken
+        ? 'create table if not exists app_config (\n  key text primary key,\n  value text,\n  updated_at timestamptz default now(),\n  updated_by bigint\n);'
+        : undefined,
       // Секрет целиком в браузер не отдаём — только хвост для опознания.
       masked: cur ? `…${cur.slice(-6)}` : '',
       source: src?.value ? 'панель' : 'env',

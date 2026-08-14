@@ -3959,6 +3959,19 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   </div>
                 )}
 
+                {/* Ключ некуда сохранить: таблицы app_config нет в базе. */}
+                {keyStatus?.storageBroken && (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 space-y-2">
+                    <div className="text-amber-300 text-xs font-bold">⚠️ Ключ пока негде хранить</div>
+                    <p className="text-white/70 text-[11px] leading-snug">
+                      В базе нет таблицы <span className="font-mono">app_config</span> — сейчас работает только ключ
+                      из переменных окружения. Открой Supabase → SQL Editor и выполни:
+                    </p>
+                    <pre className="bg-black/50 rounded-lg p-2 text-[10px] text-white/70 font-mono overflow-x-auto whitespace-pre">{keyStatus.sql}</pre>
+                    <p className="text-white/40 text-[10px]">После этого вставка ключа отсюда заработает.</p>
+                  </div>
+                )}
+
                 <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
                   <div className="text-[10px] uppercase font-mono text-white/40">Как получить новый ключ</div>
                   <ol className="text-xs text-white/70 space-y-1 list-decimal list-inside leading-snug">

@@ -647,6 +647,58 @@ async function updateReg(evId: string, tgId: any, patch: Record<string, unknown>
   await supabase.from('registrations').update(patch).eq('event_id', evId).eq('telegram_id', tgId);
 }
 
+/**
+ * УЧАСТНИК СНЯЛСЯ — А НА НЁМ ВИСЕЛА ПРОГРАММА.
+ * На Нарочи человек вышел из события, но в программе остались пункты «— отв.
+ * <его имя>», и задачи из чата тоже числились за ним. Организатор узнавал об
+ * этом в последний момент, а на замену уже приехали другие люди.
+ * Теперь при отмене бот сам находит всё, за что человек отвечал, и объявляет
+ * это в чат события кнопками «Беру» — первый нажавший становится ответственным.
+ */
+async function reassignAfterDrop(evId: string, tgId: number, whoName: string) {
+  const { data: ev } = await supabase.from('events').select('program,title').eq('id', evId).maybeSingle();
+  const program: string[] = Array.isArray((ev as any)?.program) ? (ev as any).program : [];
+  const name = String(whoName || '').trim();
+  // Пункты программы с «отв. <имя>» — сравниваем по первому слову имени:
+  // в программе «отв. Irina 🐞», а в регистрации «Irina 🐞» или «Ирина».
+  const firstWord = name.split(/\s+/)[0]?.toLowerCase() || '';
+  const orphanIdx: number[] = [];
+  if (firstWord.length > 2) {
+    program.forEach((line, i) => {
+      const m = String(line).match(/отв\.\s*(.+)$/i);
+      if (m && m[1].toLowerCase().includes(firstWord)) orphanIdx.push(i);
+    });
+  }
+  const { data: tasks } = await supabase
+    .from('tasks').select('id,title').eq('event_id', evId).eq('taken_by', tgId).eq('done', false);
+
+  if (!orphanIdx.length && !(tasks || []).length) return;
+
+  const rows: any[][] = [];
+  for (const i of orphanIdx) {
+    const label = String(program[i]).replace(/^[^—]*—\s*/, '').replace(/\s*—\s*отв\..*$/i, '').slice(0, 48);
+    rows.push([{ text: `🙋 Беру: ${label}`, callback_data: `tkprog_${evId}_${i}` }]);
+  }
+  for (const t of (tasks || []) as any[]) {
+    rows.push([{ text: `🙋 Беру: ${String(t.title).slice(0, 48)}`, callback_data: `tktask_${t.id}` }]);
+  }
+
+  const listText = [
+    ...orphanIdx.map((i) => `• ${String(program[i]).replace(/\s*—\s*отв\..*$/i, '')}`),
+    ...(tasks || []).map((t: any) => `• ${t.title}`),
+  ].join('\n');
+
+  const { data: grp } = await supabase
+    .from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+  const target = (grp as any)?.chat_id || ADMIN_CHAT_ID;
+  if (!target) return;
+  await tg('sendMessage', {
+    chat_id: target, parse_mode: 'HTML',
+    text: `⚠️ <b>${esc(name || 'Участник')} снялся с события</b>\n\nНа нём было:\n${esc(listText)}\n\nКто подхватит? Жми кнопку — станешь ответственным.`,
+    reply_markup: kb(rows.slice(0, 8)),
+  });
+}
+
 // Очередь ожидания: место освободилось → зовём первого в очереди на эту машину/палатку.
 async function notifyWaitlist(rideId: number, kind: 'car' | 'tent') {
   const { data: queue } = await supabase.from('ride_requests')
@@ -4607,11 +4659,51 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * «Беру» после того, как ответственный снялся: подхватываем пункт
+       * программы или задачу. Первый нажавший и становится ответственным —
+       * в живом чате это быстрее любого согласования.
+       */
+      if (data.startsWith('tkprog_')) {
+        const rest = data.slice('tkprog_'.length);
+        const cut = rest.lastIndexOf('_');
+        const evId = rest.slice(0, cut);
+        const idx = Number(rest.slice(cut + 1));
+        const taker = cq.from.first_name || cq.from.username || 'участник';
+        const { data: ev } = await supabase.from('events').select('program').eq('id', evId).maybeSingle();
+        const program: string[] = Array.isArray((ev as any)?.program) ? [...(ev as any).program] : [];
+        if (!program[idx]) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Пункт уже изменили' }); return res.status(200).json({ ok: true }); }
+        const line = String(program[idx]);
+        program[idx] = /отв\./i.test(line)
+          ? line.replace(/отв\.\s*.+$/i, `отв. ${taker}`)
+          : `${line} — отв. ${taker}`;
+        await supabase.from('events').update({ program }).eq('id', evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Записал на тебя ✅' });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `✅ <b>${esc(taker)}</b> подхватывает: ${esc(program[idx].replace(/^[^—]*—\s*/, '').replace(/\s*—\s*отв\..*$/i, ''))}`,
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('tktask_')) {
+        const taskId = Number(data.slice('tktask_'.length));
+        const taker = cq.from.first_name || cq.from.username || 'участник';
+        const { data: t } = await supabase.from('tasks').select('title,taken_by').eq('id', taskId).maybeSingle();
+        if (!t) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Задачи уже нет' }); return res.status(200).json({ ok: true }); }
+        await supabase.from('tasks').update({ taken_by: tgId }).eq('id', taskId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Записал на тебя ✅' });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `✅ <b>${esc(taker)}</b> берёт: ${esc(String((t as any).title))}`,
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // Отмена своего участия в событии — снять заявку и освободить место.
       if (data.startsWith('regcancel_')) {
         const evId = data.slice('regcancel_'.length);
         const { data: reg } = await supabase
-          .from('registrations').select('id')
+          .from('registrations').select('id,name')
           .eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
         if (!reg) {
           /**
@@ -4652,6 +4744,10 @@ export default async function handler(req: any, res: any) {
             }
           }
         } catch { /* освобождение места не должно ронять саму отмену */ }
+        // За что он отвечал в программе и задачах — сразу предлагаем чату.
+        try {
+          await reassignAfterDrop(evId, tgId, (reg as any)?.name || cq.from.first_name || '');
+        } catch { /* переназначение не должно ронять отмену */ }
         return res.status(200).json({ ok: true });
       }
 
@@ -5238,9 +5334,31 @@ export default async function handler(req: any, res: any) {
             ((tasks3 || []).length
               ? (tasks3 || []).map((t: any) => `• ${esc(t.title)}${takerName(t.taken_by) ? ` — ${esc(takerName(t.taken_by))}` : ' — <b>никто не взял</b>'}${t.done ? ' ✅' : ''}`).join('\n')
               : '• список пуст — напишите «я возьму …», и я запишу');
+          /**
+           * ПУНКТЫ БЕЗ ОТВЕТСТВЕННОГО.
+           * Участница снялась с Нарочи, а за ней остались четыре пункта
+           * программы — организатор узнал об этом только на месте. Считаем
+           * «висящими» те пункты, чей ответственный больше не едет, и сразу
+           * даём кнопку «Беру» — на замену обычно уже есть кто.
+           */
+          const going = (regs3 || []).map((r: any) => String(r.name || '').split(/\s+/)[0].toLowerCase()).filter((w: string) => w.length > 2);
+          const orphan: Array<{ i: number; label: string; who: string }> = [];
+          ((ev as any)?.program || []).forEach((line: any, i: number) => {
+            const m = String(line).match(/отв\.\s*(.+)$/i);
+            if (!m) return;
+            const who = m[1].trim();
+            const whoWord = who.split(/\s+/)[0].toLowerCase();
+            if (!going.some((g: string) => whoWord.includes(g) || g.includes(whoWord))) {
+              orphan.push({ i, label: String(line).replace(/^[^—]*—\s*/, '').replace(/\s*—\s*отв\..*$/i, '').slice(0, 48), who });
+            }
+          });
+          const orphanText = orphan.length
+            ? `\n\n⚠️ <b>Без ответственного (${orphan.length}):</b>\n` + orphan.slice(0, 8).map((o) => `• ${esc(o.label)} <i>(был(а) ${esc(o.who)})</i>`).join('\n')
+            : '';
           await tg('sendMessage', {
-            chat_id: chatId, parse_mode: 'HTML', text: txt,
+            chat_id: chatId, parse_mode: 'HTML', text: txt + orphanText,
             reply_markup: kb([
+              ...orphan.slice(0, 6).map((o) => [{ text: `🙋 Беру: ${o.label.slice(0, 40)}`, callback_data: `tkprog_${evId}_${o.i}` }]),
               [{ text: '🚗 Логистика и брони', callback_data: `logi_${evId}` }],
               ...(asm && pointCoords(asm) ? [[{ text: '🧭 Маршрут к точке сбора', url: pointMapUrl(asm) }]] : []),
             ]),
@@ -5861,10 +5979,13 @@ export default async function handler(req: any, res: any) {
           const ev = await getEvent(evId);
           await clearSession(msg.from.id);
           const { data: reg } = await supabase
-            .from('registrations').select('id')
+            .from('registrations').select('id,name')
             .eq('event_id', evId).eq('telegram_id', msg.from.id).neq('status', 'cancelled').maybeSingle();
           if (reg) {
             await supabase.from('registrations').update({ status: 'cancelled' }).eq('id', (reg as any).id);
+            // «Не смогу» из напоминания — тот же выход из события: пункты
+            // программы, которые были на нём, сразу предлагаем чату.
+            try { await reassignAfterDrop(evId, msg.from.id, (reg as any).name || msg.from.first_name || ''); } catch { /* no-op */ }
           }
           const who = `${esc(msg.from.first_name || '')} ${msg.from.username ? '@' + esc(msg.from.username) : `(id ${msg.from.id})`}`;
           if (ADMIN_CHAT_ID) {

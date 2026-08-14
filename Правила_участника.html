@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Правила участника — FLINT «Живи в моменте»</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300..900;1,300..900&family=Montserrat:ital,wght@0,100..900;1,100..900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html {
+    background: #0a0a0a;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  body {
+    font-family: 'Inter Tight', ui-sans-serif, system-ui, sans-serif;
+    background: #0a0a0a;
+    color: #f5f5f5;
+    font-size: 10.5pt;
+    line-height: 1.6;
+    padding: 14mm;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .page {
+    background: #0a0a0a;
+    padding: 0;
+    min-height: 100%;
+  }
+  .logo-wrap {
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .logo-wrap svg {
+    max-width: 260px;
+    height: auto;
+  }
+  .cover {
+    border: 2px solid rgba(230, 253, 58, 0.25);
+    border-radius: 16px;
+    padding: 30px 26px;
+    margin-bottom: 24px;
+    background: linear-gradient(180deg, rgba(230,253,58,0.08) 0%, rgba(10,10,10,0) 100%);
+    text-align: center;
+  }
+  .cover .badge {
+    display: inline-block;
+    background: #E6FD3A;
+    color: #0a0a0a;
+    font-family: 'JetBrains Mono', monospace;
+    font-weight: 700;
+    font-size: 8pt;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    padding: 5px 16px;
+    border-radius: 20px;
+    margin-bottom: 16px;
+  }
+  .cover h1 {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 28pt;
+    font-weight: 900;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .cover .subtitle {
+    font-size: 11pt;
+    color: rgba(255,255,255,0.6);
+    margin-bottom: 12px;
+  }
+  .cover .quote {
+    font-style: italic;
+    color: #E6FD3A;
+    font-size: 10pt;
+    margin-top: 12px;
+  }
+  .loud {
+    background: #E6FD3A;
+    color: #0a0a0a;
+    border-radius: 12px;
+    padding: 14px 18px;
+    text-align: center;
+    font-family: 'Montserrat', sans-serif;
+    font-weight: 900;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: 11pt;
+    margin: 18px 0;
+    page-break-inside: avoid;
+  }
+  h2 {
+    font-family: 'Montserrat', sans-serif;
+    font-size: 13pt;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #E6FD3A;
+    border-bottom: 1px solid rgba(230, 253, 58, 0.25);
+    padding-bottom: 6px;
+    margin: 26px 0 12px;
+  }
+  .rule-card {
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    background: rgba(255,255,255,0.03);
+    page-break-inside: avoid;
+  }
+  .rule-card .rule-title {
+    font-family: 'Montserrat', sans-serif;
+    font-weight: 800;
+    font-size: 11.5pt;
+    margin-bottom: 4px;
+    color: #fff;
+  }
+  .rule-card .rule-title .num {
+    display: inline-block;
+    background: #E6FD3A;
+    color: #0a0a0a;
+    width: 22px;
+    height: 22px;
+    text-align: center;
+    border-radius: 50%;
+    font-size: 10pt;
+    font-weight: 700;
+    margin-right: 8px;
+    line-height: 22px;
+  }
+  .rule-card ul { margin: 4px 0 0 20px; font-size: 10pt; color: rgba(255,255,255,0.85); }
+  .rule-card li { margin-bottom: 2px; }
+  .warning {
+    background: rgba(230,253,58,0.08);
+    border: 1px solid rgba(230,253,58,0.3);
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin: 10px 0;
+    font-size: 10pt;
+  }
+  .warning strong { color: #E6FD3A; }
+  .checklist {
+    background: rgba(230,253,58,0.06);
+    border: 1px solid rgba(230,253,58,0.2);
+    border-radius: 12px;
+    padding: 12px 16px;
+    margin: 10px 0;
+  }
+  .checklist strong { color: #E6FD3A; }
+  .checklist ul { margin: 6px 0 0 20px; }
+  .checklist li { margin-bottom: 3px; font-size: 10pt; color: rgba(255,255,255,0.85); }
+  .footer {
+    margin-top: 30px;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7.5pt;
+    color: rgba(255,255,255,0.4);
+    border-top: 1px solid rgba(255,255,255,0.1);
+    padding-top: 10px;
+    letter-spacing: 0.5px;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .sos {
+    background: rgba(255,80,80,0.08);
+    border: 1px solid rgba(255,80,80,0.4);
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 12px 0;
+    page-break-inside: avoid;
+  }
+  .sos h3 { color: #ff6b6b; margin-top: 0; font-family: 'Montserrat', sans-serif; }
+  .sos p { color: rgba(255,255,255,0.85); font-size: 10pt; }
+  .buddy {
+    background: rgba(230,253,58,0.1);
+    border: 2px solid #E6FD3A;
+    border-radius: 12px;
+    padding: 14px 16px;
+    margin: 12px 0;
+    page-break-inside: avoid;
+  }
+  .buddy h3 { color: #E6FD3A; margin-top: 0; font-family: 'Montserrat', sans-serif; }
+  .buddy p { color: rgba(255,255,255,0.85); font-size: 10pt; margin-bottom: 6px; }
+  .buddy ul { margin: 4px 0 0 20px; }
+  .buddy li { margin-bottom: 3px; font-size: 10pt; color: rgba(255,255,255,0.85); }
+  .golden {
+    background: linear-gradient(135deg, rgba(230,253,58,0.15) 0%, rgba(230,253,58,0.05) 100%);
+    border: 2px solid #E6FD3A;
+    border-radius: 14px;
+    padding: 16px 18px;
+    margin: 14px 0;
+    page-break-inside: avoid;
+  }
+  .golden h3 { color: #E6FD3A; margin-top: 0; text-align: center; font-family: 'Montserrat', sans-serif; font-size: 13pt; }
+  .golden ul { margin: 8px 0 0 20px; }
+  .golden li { margin-bottom: 4px; font-size: 10.5pt; color: rgba(255,255,255,0.9); }
+  .tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 7pt;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(230,253,58,0.6);
+    margin-bottom: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+<div class="logo-wrap">
+  <svg width="328" height="117" viewBox="0 0 328 117" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z" fill="#E6FD3A"/>
+    <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z" fill="#E6FD3A"/>
+    <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z" fill="#E6FD3A"/>
+    <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z" fill="#E6FD3A"/>
+    <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z" fill="#E6FD3A"/>
+    <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z" fill="#E6FD3A"/>
+    <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="black"/>
+  </svg>
+</div>
+
+<div class="cover">
+  <h1>Правила участника</h1>
+  <div class="subtitle">«Живи в моменте» · трезвое сообщество осознанного общения</div>
+  <div class="quote">«Мы не просто встречаемся. Мы строим Дом. И этот Дом — мы сами.»</div>
+</div>
+
+<div class="loud">⚡ Добро пожаловать в круг! ⚡</div>
+
+<!-- ГЛАВНОЕ ПРАВИЛО КРУГА -->
+<div class="golden">
+  <div class="tag">Главное правило круга</div>
+  <h3>🏆 ГЛАВНОЕ ПРАВИЛО</h3>
+  <ul>
+    <li><strong style="color:#E6FD3A">100% трезвость.</strong> Никакого алкоголя и любых психоактивных веществ — до и во время встречи.</li>
+    <li><strong style="color:#E6FD3A">Без курения</strong> (включая электронные сигареты и вейпы) в кругу и на территории встречи.</li>
+    <li><strong style="color:#E6FD3A">Без нецензурной брани.</strong> Общаемся максимально культурно и уважительно.</li>
+    <li><strong style="color:#E6FD3A">Культура речи и поведения</strong> — основа нашего круга. Мы говорим так, чтобы каждому было комфортно.</li>
+  </ul>
+  <div class="warning"><strong>Нарушение главного правила = исключение из события без возврата взноса и из клуба.</strong></div>
+</div>
+
+<h2>1. Ценности клуба</h2>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">1</span>Философия круга</div>
+  <ul>
+    <li>Только живое общение — глаза в глаза, без масок и позы.</li>
+    <li>100% чистота. Без алкоголя, курения и фальши.</li>
+    <li>Равенство, искренность и поддержка каждого в круге.</li>
+    <li>Мы приходим расти и отдавать, а не потреблять.</li>
+  </ul>
+</div>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">2</span>Уважение, равенство, приватность</div>
+  <ul>
+    <li>Каждый в круге равен. Без унижений, давления и харассмента.</li>
+    <li>«Нет» уважается сразу и без объяснений.</li>
+    <li>Что сказано в круге — остаётся в круге. Личное наружу не выносим.</li>
+    <li>Культурное общение — без мата и грубости.</li>
+  </ul>
+</div>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">3</span>Программа события — не нарушаем</div>
+  <ul>
+    <li>Программа создана организатором для гармонии и комфорта всех — соблюдаем её.</li>
+    <li>Не меняем и не нарушаем программу без согласования с организатором.</li>
+    <li>Время, порядок и формат встречи — как в программе. Это держит круг в гармонии.</li>
+    <li>Если хочешь что-то изменить — предложи организатору, не действуй самовольно.</li>
+  </ul>
+</div>
+
+<h2>2. Buddy-система — мы отвечаем друг за друга</h2>
+
+<div class="buddy">
+  <div class="tag">Взаимная ответственность</div>
+  <h3>🤝 Buddy — твой напарник в кругу</h3>
+  <p>Каждый участник получает <strong style="color:#E6FD3A">buddy</strong> — человека, за которого он отвечает, и который отвечает за него. Это основа взаимной ответственности.</p>
+  <ul>
+    <li><strong style="color:#E6FD3A">Ты отвечаешь за себя и за своего buddy.</strong></li>
+    <li>Следи, чтобы buddy был в порядке: на месте, здоров, трезв, в безопасности.</li>
+    <li>Если buddy пропал или ему плохо — сразу сообщи организатору.</li>
+    <li>Buddy назначается автоматически при регистрации (если участников больше 4).</li>
+    <li>В случае чего-либо спрос — с каждого: и с участника, и с его buddy.</li>
+  </ul>
+</div>
+
+<h2>3. Безопасность и природа</h2>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">4</span>Ответственность</div>
+  <ul>
+    <li>Каждый отвечает за своё здоровье, снаряжение и безопасность сам.</li>
+    <li>Следуй инструкциям организатора; при риске для себя/других — регламент SOS.</li>
+    <li>Убираем за собой полностью: мусор увозим, огонь — только по правилам (Leave No Trace).</li>
+  </ul>
+</div>
+
+<div class="sos">
+  <h3>🚨 Регламент SOS</h3>
+  <p>Перед выездом уточни у организатора: номер экстренной связи, ближайший пункт помощи/больницу, где аптечка и кто ответственный за связь. Сообщи своему buddy, где ты и что с тобой.</p>
+</div>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">5</span>Природа и локация</div>
+  <ul>
+    <li>Купание только там, где разрешено (ст. 24.42 КоАП РБ).</li>
+    <li>Костры — только в кострищах или на мангале. При пожароопасности — только газ.</li>
+    <li>Машины не ближе 30 м от воды.</li>
+    <li>Не повреждать грунт и деревья.</li>
+    <li>Вода: 4 л на человека в сутки, в канистрах.</li>
+  </ul>
+</div>
+
+<div class="checklist">
+  <strong>🏕 Что взять с собой:</strong>
+  <ul>
+    <li>Палатка двухслойная от 3000 мм водного столба</li>
+    <li>Спальник по сезону</li>
+    <li>Каремат от 10 мм</li>
+    <li>Фонарь + батарейки</li>
+    <li>Посуда, дождевик, гермомешок</li>
+    <li>Паспорт, личные лекарства, термос</li>
+  </ul>
+</div>
+
+<h2>4. Гости, деньги, фото</h2>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">6</span>Гости и финансы</div>
+  <ul>
+    <li>За приглашённых гостей отвечает и платит пригласивший. Гости тоже соблюдают кодекс.</li>
+    <li>Общие расходы делятся честно и прозрачно.</li>
+    <li>Взнос вносится вовремя — от этого зависят закупки для всех.</li>
+  </ul>
+</div>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">7</span>Фото и видео</div>
+  <ul>
+    <li>Согласие на фото/видео и публикацию спрашивается отдельно у каждого.</li>
+    <li>Без согласия человека его снимки не публикуются (закон РБ).</li>
+    <li>Уважай приватность: не снимай тех, кто против.</li>
+  </ul>
+</div>
+
+<h2>5. Если пришла проверка</h2>
+
+<div class="rule-card">
+  <div class="rule-title"><span class="num">8</span>Протокол поведения</div>
+  <ul>
+    <li>Один переговорщик — только он общается с проверяющими.</li>
+    <li>Показать огнетушитель и порядок на территории.</li>
+    <li>Машины — вне водоохранной зоны.</li>
+    <li>Эко-мешки наготове: вывозим свой и чужой мусор.</li>
+  </ul>
+</div>
+
+<div class="loud">🔥 FLINT! Живи в моменте! 🔥</div>
+
+<div class="footer">
+  КЛУБ FLINT «ЖИВИ В МОМЕНТЕ» · МИНСК · 100% ТРЕЗВОСТЬ · ЭКОЛОГИЧНОСТЬ · ВЗАИМОПОМОЩЬ<br>
+  ДОКУМЕНТ СОСТАВЛЕН НА ОСНОВЕ КАНОНИЧЕСКОГО КОДЕКСА КЛУБА И РЕГЛАМЕНТОВ СООБЩЕСТВА
+</div>
+
+</div>
+</body>
+</html>

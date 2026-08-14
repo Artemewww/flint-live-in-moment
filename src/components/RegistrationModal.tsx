@@ -146,7 +146,15 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     setIsSubmitting(true);
     setError('');
 
-    const isDriver = formData.transportMode === 'car';
+    // Каршеринг — такой же водитель для логистики: у него тоже есть места.
+    const isDriver = formData.transportMode === 'car' || formData.transportMode === 'carsharing';
+    // Машину собираем из отдельных полей: попутчику важно «Kia Rio, белая»,
+    // а вводить это одной строкой люди забывали.
+    const carLabel = [formData.carBrand.trim(), formData.carColor.trim()].filter(Boolean).join(', ')
+      || formData.transportDetails.trim();
+    const carText = formData.transportMode === 'carsharing'
+      ? `Каршеринг${carLabel ? `: ${carLabel}` : ''}`
+      : carLabel;
     // Колонки registrations передаём в snake_case — их принимает белый список
     // REG_FIELDS в /api/register. Раньше анкета собирала логистику, пол, питание
     // и гостей, но НЕ отправляла их — данные терялись на клиенте.
@@ -161,7 +169,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       accessCode: isClosedEvent ? accessCode.trim() : undefined,
       has_transport: isDriver,
       transport_details: isDriver
-        ? formData.transportDetails.trim()
+        ? carText
         : formData.transportMode === 'seek' ? 'Ищет попутку' : 'Без авто',
       transport_seats: isDriver ? formData.transportSeats : 0,
       // Права — важно для событий с арендой квадроциклов/авто.
@@ -202,11 +210,11 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       telegram: tg.startsWith('@') ? tg : `@${tg}`,
       status: 'pending',
       registeredAt: new Date().toISOString(),
-      hasTransport: formData.transportMode === 'car',
+      hasTransport: isDriver,
       transportDetails: formData.transportMode === 'car'
         ? formData.transportDetails
         : formData.transportMode === 'seek' ? 'Ищет попутку' : undefined,
-      transportSeats: formData.transportMode === 'car' ? formData.transportSeats : 0,
+      transportSeats: isDriver ? formData.transportSeats : 0,
       inventory: formData.inventory ? formData.inventory.split(',').map(item => item.trim()).filter(Boolean) : [],
       paymentStatus: 'pending',
       paymentAmount: 0,
@@ -239,7 +247,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     if (!isMember && !inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
     if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
-    if (formData.transportMode === 'car' && !formData.transportDetails.trim()) return setError('Укажите марку и цвет авто — так вас найдут на точке сбора');
+    if ((formData.transportMode === 'car' || formData.transportMode === 'carsharing')
+      && !formData.carBrand.trim() && !formData.transportDetails.trim()) {
+      return setError('Укажите марку авто — так вас найдут на точке сбора');
+    }
     if (formData.hasLicense === null) return setError('Укажите, есть ли у вас водительские права — это нужно для авто и квадроциклов');
     if (formData.category === null) return setError('Укажите категорию участника — по ней считают состав и размещение');
     if (!consentGiven) return setError('Нужно согласие на обработку персональных данных');
@@ -477,13 +488,14 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       <div className="space-y-2">
                         {([
                           { mode: 'car' as const, label: '🚗 На своём авто' },
+                          { mode: 'carsharing' as const, label: '🚙 На каршеринге' },
                           { mode: 'seek' as const, label: '🙋 Нужна попутка — возьмите меня' },
                           { mode: 'self' as const, label: '🚶 Без авто, доберусь сам' },
                         ]).map(({ mode, label }) => (
                           <button
                             key={mode}
                             type="button"
-                            onClick={() => setFormData({...formData, transportMode: mode, hasTransport: mode === 'car'} as any)}
+                            onClick={() => setFormData({...formData, transportMode: mode, hasTransport: mode === 'car' || mode === 'carsharing'} as any)}
                             className={`w-full py-2.5 px-3 rounded-lg text-xs font-bold text-left transition-all ${
                               (formData as any).transportMode === mode
                                 ? 'bg-brand text-black'
@@ -495,23 +507,56 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         ))}
                       </div>
 
-                      {(formData as any).transportMode === 'car' && (
-                        <div className="space-y-2 pl-2">
-                          <input
-                            type="text"
-                            value={(formData as any).transportDetails || ''}
-                            onChange={(e) => setFormData({...formData, transportDetails: e.target.value} as any)}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
-                            placeholder="Марка и цвет (напр. «Kia Rio, белая») *"
-                          />
-                          <input
-                            type="number"
-                            value={(formData as any).transportSeats || 0}
-                            onChange={(e) => setFormData({...formData, transportSeats: parseInt(e.target.value) || 0} as any)}
-                            className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
-                            placeholder="Свободных мест (без вас)"
-                            min="0"
-                          />
+                      {/* Марка, цвет и места — отдельными полями.
+                          Раньше всё это просили одной строкой «Марка и цвет», а
+                          места — цифрой в поле type=number: люди просто не
+                          понимали, где указать свободные места, и в машинах
+                          стояло 0, хотя ехать было с кем. */}
+                      {((formData as any).transportMode === 'car' || (formData as any).transportMode === 'carsharing') && (
+                        <div className="space-y-3 pl-2">
+                          <div className="grid grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={(formData as any).carBrand || ''}
+                              onChange={(e) => setFormData({...formData, carBrand: e.target.value} as any)}
+                              className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
+                              placeholder="Марка (Kia Rio) *"
+                            />
+                            <input
+                              type="text"
+                              value={(formData as any).carColor || ''}
+                              onChange={(e) => setFormData({...formData, carColor: e.target.value} as any)}
+                              className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
+                              placeholder="Цвет (белая)"
+                            />
+                          </div>
+
+                          <div className="space-y-1.5">
+                            <label className="text-[11px] text-white/60 block">
+                              Сколько человек возьмёшь с собой? <span className="text-white/30">(мест, кроме себя)</span>
+                            </label>
+                            <div className="flex gap-1.5 flex-wrap">
+                              {[0, 1, 2, 3, 4, 5].map((n) => (
+                                <button
+                                  key={n}
+                                  type="button"
+                                  onClick={() => setFormData({...formData, transportSeats: n} as any)}
+                                  className={`w-10 h-10 rounded-xl text-sm font-black transition-all ${
+                                    ((formData as any).transportSeats || 0) === n
+                                      ? 'bg-brand text-black'
+                                      : 'bg-white/10 text-white/60 hover:bg-white/20'
+                                  }`}
+                                >
+                                  {n}
+                                </button>
+                              ))}
+                            </div>
+                            <p className="text-[10px] text-white/40 italic">
+                              {((formData as any).transportSeats || 0) > 0
+                                ? `Ребята увидят ${(formData as any).transportSeats} свободн${(formData as any).transportSeats === 1 ? 'ое место' : 'ых места'} и смогут занять их в боте.`
+                                : '0 — еду один, никого не беру.'}
+                            </p>
+                          </div>
                           <p className="text-[10px] text-white/40 italic">Марка и цвет помогут попутчикам найти вас на точке сбора.</p>
                         </div>
                       )}
