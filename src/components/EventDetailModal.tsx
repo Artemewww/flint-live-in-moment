@@ -492,7 +492,9 @@ export default function EventDetailModal({
                     </span>
                     {event.myRide.role === 'driver' ? (
                       <div className="text-white text-sm font-bold">
-                        Мест {event.myRide.seatsTotal}, занято {event.myRide.seatsTaken}
+                        {event.myRide.seatsTotal > 0
+                          ? `Мест ${event.myRide.seatsTotal}, занято ${event.myRide.seatsTaken}`
+                          : 'Едешь своим ходом, свободных мест нет'}
                       </div>
                     ) : (
                       <div className="text-white text-sm font-bold">

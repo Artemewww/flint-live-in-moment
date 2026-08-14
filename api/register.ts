@@ -380,7 +380,12 @@ export default async function handler(req: any, res: any) {
     // ridenew. Одна активная машина на человека на событие (повтор = правка).
     try {
       const seats = Number(body.transport_seats) || 0;
-      if (body.has_transport && seats > 0) {
+      // Машину заводим и когда свободных мест нет: раньше условие было
+      // `seats > 0`, и человек, выбравший «на своём авто — мест нет», нигде не
+      // числился водителем. Организатор не знал, сколько машин в колонне, сам
+      // человек видел «машина не выбрана», а если пассажир отваливался —
+      // освободившееся место предложить было некому.
+      if (body.has_transport) {
         const { data: existing } = await supabase
           .from('rides').select('id,kind')
           .eq('event_id', eventId).eq('driver_id', member.telegram_id).eq('active', true);
