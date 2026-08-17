@@ -711,6 +711,50 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    /**
+     * Явка после события: кто реально был.
+     * После Нарочи из 8 участников не был отмечен ни один — значит ни баллов
+     * за участие, ни истории посещений. Руками это никто не делает, поэтому
+     * через сутки после конца события считаем, что были все, кто не отказался
+     * и не пометился «не приеду», и начисляем баллы. Ошибку организатор
+     * поправит в панели: attended там переключается вручную.
+     */
+    try {
+      const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { data: doneEvents } = await supabase
+        .from('events').select('id,title,date,date_end')
+        .lte('date', dayAgo).gte('date', new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+      for (const ev of doneEvents || []) {
+        const ends = String((ev as any).date_end || (ev as any).date);
+        if (ends > dayAgo) continue; // событие ещё идёт или кончилось меньше суток назад
+        const { data: regs } = await supabase
+          .from('registrations').select('id,telegram_id,attended,status')
+          .eq('event_id', (ev as any).id).neq('status', 'cancelled');
+        const pending = (regs || []).filter((r: any) => !r.attended && r.status !== 'declined');
+        if (!pending.length) continue;
+        for (const r of pending as any[]) {
+          await supabase.from('registrations').update({ attended: true }).eq('id', r.id);
+          // Баллы за участие — той же величины, что начисляет админка.
+          try {
+            const { data: m } = await supabase.from('members').select('points').eq('telegram_id', r.telegram_id).maybeSingle();
+            await supabase.from('members').update({ points: ((m as any)?.points || 0) + 100 }).eq('telegram_id', r.telegram_id);
+          } catch { /* колонки points может не быть */ }
+        }
+        const adminChat = Number(process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570');
+        if (adminChat) {
+          await send(
+            adminChat,
+            `📌 <b>${esc((ev as any).title)}</b>: отметил участие ${pending.length} чел. и начислил баллы.\n` +
+              `Если кто-то не доехал — сними галочку «был» в панели.`,
+            undefined,
+            'digest',
+          );
+        }
+      }
+    } catch (e) {
+      report.errors.push(`attendance: ${(e as Error).message}`);
+    }
+
     // ── Подогрев: соц-доказательство при РЕАЛЬНОМ приросте участников ──────
     // Мировая практика «social proof», но без спама: шлём максимум раз в день
     // (крон суточный) и ТОЛЬКО когда людей реально стало больше. Базу (сколько

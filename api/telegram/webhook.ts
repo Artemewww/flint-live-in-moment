@@ -4140,14 +4140,20 @@ export default async function handler(req: any, res: any) {
         const evId = data.slice('media_'.length);
         await setSession(tgId, 'media_upload', { eventId: evId });
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        // Общий облачный альбом, если кто-то кинул ссылку в чат события.
+        const { data: evAlb } = await supabase.from('events').select('logistics').eq('id', evId).maybeSingle();
+        const album = String(((evAlb as any)?.logistics || {}).albumUrl || '');
+        const rows: any[] = [[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}` } }]];
+        if (album) rows.unshift([{ text: '☁️ Общий альбом участников', url: album }]);
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text:
             '📸 <b>Галерея события</b>\n\n' +
+            (album ? 'Общий альбом собран участниками — кнопка ниже.\n\n' : '') +
             'Пришли сюда фото или видео с события (до 30 файлов) — они попадут в общую галерею.\n' +
             'Там же голосуем ❤️ за лучшие кадры: топ-5 останется в истории события, остальное удалится через 7 дней.\n\n' +
             'Закончил — жми /start.',
-          reply_markup: kb([[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}` } }]]),
+          reply_markup: kb(rows),
         });
         return res.status(200).json({ ok: true });
       }
@@ -5492,6 +5498,36 @@ export default async function handler(req: any, res: any) {
             reply_markup: pollKeyboard(Number((poll as any).id), list, new Array(list.length).fill(0), false),
           });
           return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * Ссылка на общий альбом, брошенная в чат, больше не тонет.
+         * После Нарочи Елизавета выложила папку с фото в переписку, а через
+         * день Стас просил её заново: сообщение уехало вверх. Ловим ссылки на
+         * облачные папки и цепляем к событию — дальше их отдаёт карточка.
+         */
+        const albumLink = String(text).match(
+          /https?:\/\/(?:drive\.google\.com\/drive\/[^\s]+|photos\.app\.goo\.gl\/[^\s]+|disk\.yandex\.[a-z]+\/d\/[^\s]+|[a-z0-9.-]*icloud\.com\/[^\s]+|[a-z0-9.-]*cloud\.mail\.ru\/[^\s]+)/i
+        );
+        if (albumLink) {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (gl) {
+            const { data: ev } = await supabase
+              .from('events').select('logistics').eq('id', (gl as any).event_id).maybeSingle();
+            const lg = ((ev as any)?.logistics || {}) as Record<string, unknown>;
+            if (lg.albumUrl !== albumLink[0]) {
+              lg.albumUrl = albumLink[0];
+              lg.albumBy = msg.from.first_name || '';
+              await supabase.from('events').update({ logistics: lg }).eq('id', (gl as any).event_id);
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                reply_to_message_id: msg.message_id,
+                text: '📸 Записал это как общий альбом события — теперь ссылка есть в карточке, искать в переписке не нужно.',
+                disable_web_page_preview: true,
+              });
+            }
+          }
         }
 
         // ИИ-менеджер: анализ переписки → автоматические действия.
