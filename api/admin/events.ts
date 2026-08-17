@@ -642,6 +642,100 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true, sent });
       }
 
+      /**
+       * Генерация обложки события через Gemini.
+       * Раньше обложку приходилось искать в интернете руками: в панели было
+       * только поле «ссылка на картинку», и почему ничего не появляется —
+       * неясно. Теперь кнопка рисует афишу по названию и описанию, кладёт её
+       * в Supabase Storage и возвращает прямую ссылку.
+       * Ошибки не глотаем: кончилась квота или ключ протух — так и пишем,
+       * чтобы владелец знал, что нужно заменить ключ в панели.
+       */
+      if (req.query?.action === 'gen_cover') {
+        const title = String(body.title || '').trim();
+        if (!title) return res.status(400).json({ error: 'Сначала впиши название события' });
+
+        let key = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
+        try {
+          const { data: cfg } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
+          if ((cfg as any)?.value) key = (cfg as any).value;
+        } catch { /* таблицы нет — работаем на env */ }
+        if (!key) return res.status(200).json({ ok: false, needKey: true, error: 'Ключ Gemini не задан. Вставь его в панели «🔑 ИИ-ключ».' });
+
+        const desc = String(body.description || '').slice(0, 400);
+        const place = String(body.location || '').slice(0, 120);
+        // Текст на картинке ИИ рисует нечитаемым — просим кадр без надписей.
+        const prompt =
+          `Атмосферная рекламная фотография для афиши похода/выезда клуба на природе. ` +
+          `Событие: «${title}»${place ? `, место: ${place}` : ''}. ${desc}\n` +
+          `Стиль: живой репортажный кадр, тёплый естественный свет, глубина, кинематографично, ` +
+          `горизонтальный формат 16:9. БЕЗ каких-либо надписей, букв, цифр, логотипов и водяных знаков. ` +
+          `Не рисовать текст. Люди — со спины или в движении, лица не в фокусе.`;
+
+        // Модели проверены по ListModels этого ключа: imagen-*:predict на нём
+        // отдаёт 404, поэтому только image-модели Gemini, от дешёвой к дорогой.
+        const models = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'gemini-3-pro-image'];
+
+        let b64: string | null = null;
+        let lastErr = '';
+        let quotaHit = false;
+        let badKey = false;
+        for (const model of models) {
+          try {
+            const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['IMAGE'] } }),
+            });
+            const j = await r.json().catch(() => ({}));
+            if (r.ok) {
+              b64 = (j?.candidates?.[0]?.content?.parts || []).find((p: any) => p?.inlineData?.data)?.inlineData?.data || null;
+              if (b64) break;
+              lastErr = 'Модель вернула ответ без картинки';
+              continue;
+            }
+            lastErr = String(j?.error?.message || `HTTP ${r.status}`);
+            if (r.status === 429 || /quota|exhaust|RESOURCE_EXHAUSTED/i.test(lastErr)) quotaHit = true;
+            if (/API key|API_KEY_INVALID|PERMISSION_DENIED/i.test(lastErr)) badKey = true;
+          } catch (e) {
+            lastErr = (e as Error).message;
+          }
+        }
+        if (!b64) {
+          return res.status(200).json({
+            ok: false,
+            needKey: quotaHit || badKey,
+            error: quotaHit
+              // Тексты у Gemini бесплатны, картинки — нет. Ключ без оплаченного
+              // биллинга отвечает 429 на любую image-модель, и выглядит это как
+              // «обложка просто не появилась». Пишем причину прямым текстом.
+              ? 'Ключ Gemini не рисует картинки: квота исчерпана (429). Генерация изображений не входит в бесплатный тариф — нужен ключ проекта с включённой оплатой. Текстовый ИИ при этом работает. Заменить ключ: панель «🔑 ИИ-ключ».'
+              : badKey
+                ? `Ключ не принят: ${lastErr}. Замени его в панели «🔑 ИИ-ключ».`
+                : `Не получилось сгенерировать: ${lastErr}`,
+          });
+        }
+
+        // Кладём в публичный бакет event-images — оттуда картинку берут и сайт, и бот.
+        const path = `covers/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+        const bin = Buffer.from(b64, 'base64');
+        const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
+          method: 'POST',
+          headers: {
+            apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
+            'Content-Type': 'image/png',
+            'x-upsert': 'true',
+          },
+          body: bin,
+        });
+        if (!up.ok) {
+          const t = await up.text().catch(() => '');
+          return res.status(200).json({ ok: false, error: `Картинка нарисована, но не сохранилась: ${t.slice(0, 160)}` });
+        }
+        const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}`;
+        return res.status(200).json({ ok: true, url, bytes: bin.length });
+      }
+
       // Живой статус расчёта: текущий shopping.split + расходы + сводка.
       // Кнопка «должники» в админке дёргает это и показывает на момент вызова.
       if (req.query?.action === 'split_status') {

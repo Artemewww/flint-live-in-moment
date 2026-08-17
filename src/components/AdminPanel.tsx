@@ -4812,6 +4812,34 @@ function EditEventModal({ event, onClose, onSave }: {
     notifications: ((event as any).notifications || {}) as Record<string, any>
   });
 
+  /**
+   * Обложка события из ИИ. Кладётся сразу в поле картинки, ошибку показываем
+   * дословно: чаще всего это «ключ не рисует картинки», а не молчаливый сбой.
+   */
+  const [coverBusy, setCoverBusy] = useState(false);
+  const [coverNote, setCoverNote] = useState<{ ok: boolean; text: string } | null>(null);
+  const genCover = async (fd: any) => {
+    if (coverBusy) return;
+    setCoverBusy(true);
+    setCoverNote(null);
+    try {
+      const res = await fetch('/api/admin/events?action=gen_cover', {
+        credentials: 'include',
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: fd.title, description: fd.description, location: fd.location }),
+      });
+      const j = await res.json();
+      if (j.ok && j.url) {
+        setFormData((prev: any) => ({ ...prev, image: j.url }));
+        setCoverNote({ ok: true, text: `Обложка готова (${Math.round((j.bytes || 0) / 1024)} КБ) — она уже подставлена в поле выше.` });
+      } else {
+        setCoverNote({ ok: false, text: j.error || 'Не получилось сгенерировать обложку' });
+      }
+    } catch { setCoverNote({ ok: false, text: 'Нет связи с сервером' }); }
+    finally { setCoverBusy(false); }
+  };
+
+
 
   // Гибкая цена: бесплатно / на совесть / платно (аренда делится поровну на всех).
   const computedPriceLabel = () => {
@@ -4991,6 +5019,23 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
 
           <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
+
+          {/* Обложку можно не искать в интернете, а нарисовать по названию и
+              описанию. Если ключ не тянет картинки — говорим об этом прямо,
+              а не оставляем пустое поле без объяснений. */}
+          <div className="mt-1.5">
+            <button
+              type="button"
+              onClick={() => genCover(formData)}
+              disabled={coverBusy || !formData.title}
+              className="text-[10px] px-3 py-1.5 rounded-lg bg-white/10 text-white font-bold uppercase cursor-pointer border-none disabled:opacity-40 hover:bg-white/20"
+            >
+              {coverBusy ? '✨ Рисую обложку…' : '✨ Сгенерировать обложку по названию'}
+            </button>
+            {coverNote && (
+              <p className={`text-[10px] mt-1.5 leading-snug ${coverNote.ok ? 'text-brand' : 'text-amber-300'}`}>{coverNote.text}</p>
+            )}
+          </div>
 
           <div className="mt-2">
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Вертикальная афиша для Telegram</label>
