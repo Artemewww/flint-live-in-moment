@@ -471,6 +471,26 @@ export default function EventDetailModal({
                   <Check className="w-4 h-4" /> Твоё участие
                 </span>
 
+                {/* Позвать своих — прямо там, где человек только что записался.
+                    Раньше приглашение жило только в афише-постере внизу карточки,
+                    и его никто не находил. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'flint_live_bot'}?start=ev_${event.id}`;
+                    const text = `Еду на «${event.title}» с FLINT. Присоединяйся: ${link}`;
+                    const tgApp = (window as any).Telegram?.WebApp;
+                    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Еду на «${event.title}» с FLINT. Присоединяйся!`)}`;
+                    if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
+                    else if (navigator.share) navigator.share({ text }).catch(() => {});
+                    else { navigator.clipboard?.writeText(text); alert('Ссылка на событие скопирована'); }
+                  }}
+                  className="w-full bg-white/5 border border-white/10 text-white py-3 rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-white/10 transition-colors cursor-pointer font-mono flex items-center justify-center gap-2"
+                >
+                  <Share2 className="w-4 h-4" />
+                  Позвать своих на событие
+                </button>
+
                 {event.logistics?.assemblyPoint ? (
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1 min-w-0">

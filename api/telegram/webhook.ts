@@ -329,6 +329,119 @@ async function saveAndBroadcastExpense(evId: string, from: any, title: string, a
   return ids.length;
 }
 
+/**
+ * Часовой разбор переписки чата события.
+ *
+ * Раньше бот реагировал на каждое сообщение и на каждое дёргал ИИ — дорого по
+ * токенам и шумно в чате. Теперь: сообщения копятся в group_messages, и раз в
+ * час один вызов модели достаёт из накопленного расходы, задачи и решения.
+ * Организатору не нужно ничего нажимать — расходы попадают в общий котёл сами,
+ * а в чат уходит одна строка с тем, что записано.
+ *
+ * Если ключ выдохся (429), курсор НЕ двигаем: после замены ключа тот же разбор
+ * дочитает пропущенное с того места, где остановился. Ручной перезапуск —
+ * команда /дочитать в чате.
+ */
+const DIGEST_EVERY_MS = 60 * 60 * 1000;
+
+async function maybeDigestChat(chatId: number, force = false): Promise<string | null> {
+  const cursorKey = `chatdigest:${chatId}`;
+  const { data: cur } = await supabase.from('app_config').select('value').eq('key', cursorKey).maybeSingle();
+  const since = String((cur as any)?.value || '') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  if (!force && Date.now() - new Date(since).getTime() < DIGEST_EVERY_MS) return null;
+
+  const { data: link } = await supabase
+    .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+  if (!link) return null;
+  const evId = String((link as any).event_id);
+
+  const { data: msgs } = await supabase
+    .from('group_messages').select('telegram_id,first_name,text,created_at')
+    .eq('chat_id', chatId).gt('created_at', since).order('created_at').limit(120);
+  const rows = (msgs || []).filter((m: any) => String(m.text || '').trim().length > 1);
+  if (rows.length < 3) return null;
+
+  const transcript = rows
+    .map((m: any) => `${m.first_name || 'кто-то'}: ${String(m.text).slice(0, 200)}`)
+    .join('\n')
+    .slice(0, 12000);
+
+  const parsed = await geminiJSON(
+    'Ты ассистент организатора походов. Разбери переписку чата события и верни СТРОГО JSON:\n' +
+    '{"expenses":[{"title":"что купили","amount":число,"payer":"имя из чата"}],' +
+    '"tasks":["что кто-то обещал сделать, но это ещё не сделано"],' +
+    '"decisions":["принятые решения одной строкой"]}\n' +
+    'Правила: expenses — только реальные общие траты с суммой в рублях (BYN), ' +
+    'без личных покупок и без обещаний «скинемся». Если чего-то нет — пустой массив. ' +
+    'Не выдумывай. Пиши по-русски.\n\nПЕРЕПИСКА:\n' + transcript,
+  );
+
+  // Ключ не отвечает — оставляем курсор на месте, чтобы дочитать позже.
+  if (parsed === null) {
+    await notifyQuotaExhausted();
+    return null;
+  }
+
+  await supabase.from('app_config').upsert(
+    { key: cursorKey, value: new Date().toISOString() }, { onConflict: 'key' });
+
+  const nameToId = new Map<string, number>();
+  for (const m of rows as any[]) {
+    const n = String(m.first_name || '').toLowerCase();
+    if (n && Number(m.telegram_id) > 0) nameToId.set(n, Number(m.telegram_id));
+  }
+
+  const notes: string[] = [];
+
+  const expenses = Array.isArray((parsed as any).expenses) ? (parsed as any).expenses.slice(0, 8) : [];
+  for (const ex of expenses) {
+    const amount = Number(ex?.amount);
+    const title = String(ex?.title || '').slice(0, 80);
+    if (!Number.isFinite(amount) || amount < 1 || amount > 100000 || title.length < 3) continue;
+    const payerId = nameToId.get(String(ex?.payer || '').toLowerCase()) || 0;
+    // Дубли: тот же расход мог быть разобран в прошлый раз.
+    const { data: evRow } = await supabase.from('events').select('shopping').eq('id', evId).maybeSingle();
+    const already = (Array.isArray((evRow as any)?.shopping?.expenses) ? (evRow as any).shopping.expenses : [])
+      .some((e: any) => Math.abs(Number(e.amount) - amount) < 0.01 && String(e.title).toLowerCase() === title.toLowerCase());
+    if (already) continue;
+    await saveAndBroadcastExpense(
+      evId,
+      { id: payerId, first_name: String(ex?.payer || 'Участник') },
+      title, amount, null,
+    );
+    notes.push(`💸 ${title} — ${amount} BYN${ex?.payer ? ` (${ex.payer})` : ''}`);
+  }
+
+  const tasks = Array.isArray((parsed as any).tasks) ? (parsed as any).tasks.slice(0, 5) : [];
+  for (const t of tasks) {
+    const title = String(t || '').slice(0, 120);
+    if (title.length < 5) continue;
+    const { data: dup } = await supabase
+      .from('tasks').select('id').eq('event_id', evId).ilike('title', title.slice(0, 40) + '%').limit(1);
+    if ((dup || []).length) continue;
+    await supabase.from('tasks').insert({ event_id: evId, title, created_by: 0, done: false });
+    notes.push(`📋 ${title}`);
+  }
+
+  const decisions = Array.isArray((parsed as any).decisions) ? (parsed as any).decisions.slice(0, 5) : [];
+
+  if (notes.length) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: `🤖 <b>Записал из вашей переписки</b>\n\n${notes.join('\n')}\n\n` +
+        `Расходы разделятся на всех при финальном расчёте. Что-то лишнее — скажи, поправлю.`,
+      disable_web_page_preview: true,
+    });
+  }
+  if (decisions.length && ADMIN_CHAT_ID) {
+    await tg('sendMessage', {
+      chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+      text: `🧠 <b>Решения из чата события</b>\n\n${decisions.map((d: any) => `• ${esc(String(d))}`).join('\n')}`,
+    });
+  }
+  return notes.length ? notes.join('\n') : 'ничего нового';
+}
+
 /** Прямой вызов Gemini (REST): SDK живёт в api/ai.ts, в вебхук его не тащим. */
 
 // --- Ключ Gemini: сначала БД (app_config, меняется из панели орг. без редеплоя),
@@ -1560,6 +1673,26 @@ const KB_SECTIONS: Record<string, { title: string; body: string }> = {
       '• Разверни майку логотипом к зрителям и камере <i>до</i> того, как назовёшь имя — это создаёт интригу.\n' +
       '• Смотри на человека и на команду, а не в землю и не в скомканную майку.\n' +
       '• Подзови получателя в центр: вручение должно выглядеть ритуалом, а не передачей вещи из рук в руки.',
+  },
+  energy: {
+    title: '⚡️ Энергия дня: как собирать программу',
+    body:
+      '<b>Задача выезда — перезагрузка, а не марафон.</b> Программа должна вести энергию, а не ломать её.\n\n' +
+      '<b>Порядок блоков</b>\n' +
+      '• Активное — в первую половину дня, пока есть силы: маршрут, вода, спорт, испытания.\n' +
+      '• Пассивное — вечером: разговоры, костёр, кино.\n' +
+      '• <b>После бани не ставить ничего, что требует внимания</b> — кино, лекцию, разбор. После парилки люди засыпают, и пункт срывается.\n' +
+      '• Не ставить два активных блока подряд без еды и паузы между ними — на второй у команды не хватит сил.\n' +
+      '• После длинного переезда — сначала обустройство и еда, потом активность.\n\n' +
+      '<b>Еда под задачу</b>\n' +
+      '• Перед активным блоком — лёгкое и углеводное. Тяжёлое и жирное перед нагрузкой убивает темп.\n' +
+      '• Плотный приём пищи — после основной активности, а не до неё.\n' +
+      '• Вода и перекусы на маршруте закладываются в программу, а не «кто взял, тот взял».\n\n' +
+      '<b>Тайминг</b>\n' +
+      '• У каждого пункта есть время и ответственный. Пункт без ответственного не поедет.\n' +
+      '• Между блоками — люфт 15–30 минут: сборы всегда дольше плана.\n' +
+      '• Изменения в программе объявляет организатор в чате события. Молчаливый сдвиг = развалившийся круг: люди приходят к времени, которого уже нет.\n\n' +
+      '<i>После Нарочи: программа плыла на ходу, и часть круга просто разошлась спать.</i>',
   },
   roles: {
     title: '🔐 Роли и границы доступа',
@@ -5630,6 +5763,23 @@ export default async function handler(req: any, res: any) {
          * середины никто не долистывает. Команды видны в меню «/» Telegram
          * и работают там, где люди реально общаются.
          */
+        // После замены выдохшегося ключа — дочитать всё, что бот пропустил,
+        // не дожидаясь следующего часа.
+        if (gcmd === '/дочитать' || gcmd === '/reread' || gcmd === '/разбор') {
+          await tg('sendMessage', { chat_id: chatId, text: '🤖 Читаю переписку…' });
+          const out = await maybeDigestChat(chatId, true);
+          if (!out) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '⚠️ Не смог разобрать: либо чат не привязан к событию, либо ИИ-ключ не отвечает. ' +
+                'Костяку уже ушёл сигнал — как заменят ключ, повтори команду.',
+            });
+          } else if (out === 'ничего нового') {
+            await tg('sendMessage', { chat_id: chatId, text: '✅ Прочитал — нового к записи нет.' });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
         if (gcmd === '/задача' || gcmd === '/task') {
           const { data: gl } = await supabase
             .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
@@ -5676,42 +5826,11 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
-        /**
-         * Расходы, названные в чате, сами просятся в общий котёл.
-         * На Нарочи организатор написал «120 BYN — стоянка», «100 BYN — сапы»,
-         * «50 BYN еда», а потом весь расчёт вели вручную, промахиваясь на
-         * рубли. Бот распознаёт сумму с валютой и предлагает записать её одной
-         * кнопкой — молча в деньги не лезем, подтверждает автор.
-         */
-        const money = String(text).match(/(?:^|\s)(\d{1,5}(?:[.,]\d{1,2})?)\s*(?:byn|br|бун|руб|рублей|р\.)\b/i);
-        if (money && !text.startsWith('/')) {
-          const { data: gl } = await supabase
-            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
-          if (gl) {
-            const amount = Math.round(Number(money[1].replace(',', '.')) * 100) / 100;
-            // Название — остаток строки без суммы и мусорных тире.
-            const label = String(text)
-              .replace(money[0], ' ')
-              .replace(/https?:\/\/\S+/g, '')
-              .replace(/[-–—:]+/g, ' ')
-              .replace(/\s+/g, ' ')
-              .trim()
-              .slice(0, 60);
-            if (amount >= 1 && amount <= 100000 && label.length >= 3) {
-              const code = Math.random().toString(36).slice(2, 10);
-              await supabase.from('app_config').upsert({
-                key: `expdraft:${code}`,
-                value: JSON.stringify({ evId: (gl as any).event_id, amount, title: label, byId: msg.from.id }),
-              }, { onConflict: 'key' });
-              await tg('sendMessage', {
-                chat_id: chatId, parse_mode: 'HTML',
-                reply_to_message_id: msg.message_id,
-                text: `💸 Записать <b>${amount} BYN</b> за «${esc(label)}» в общие расходы события? Потом всё поделится одной кнопкой.`,
-                reply_markup: kb([[{ text: '✅ Да, это общий расход', callback_data: `expdr_${code}` }]]),
-              });
-            }
-          }
-        }
+        // Разбор переписки — раз в час батчем (см. digestChat): расходы,
+        // задачи и решения достаются из накопленных сообщений одним вызовом
+        // ИИ, а не по одному на каждое сообщение. Так дешевле по токенам и
+        // организатору не нужно ничего нажимать.
+        await maybeDigestChat(chatId);
 
         /**
          * Ссылка на общий альбом, брошенная в чат, больше не тонет.
