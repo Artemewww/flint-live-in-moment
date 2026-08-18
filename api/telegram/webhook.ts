@@ -1172,6 +1172,7 @@ async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
   if (isCoreUser) tailRows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
   // База знаний — закрытый раздел для тех, кто ведёт события.
   if (isCoreUser) tailRows.push([{ text: '📚 База знаний организатора', callback_data: 'kbhome' }]);
+  if (isCoreUser) tailRows.push([{ text: '📦 Инвентарь клуба', callback_data: 'invhome' }]);
   tailRows.push([openBtn as any]);
 
   await tg('sendMessage', {
@@ -1717,6 +1718,29 @@ const KB_SECTIONS: Record<string, { title: string; body: string }> = {
   },
 };
 
+/** Реестр имущества клуба живёт в app_config одной JSON-записью. */
+async function loadInventory(): Promise<any[]> {
+  const { data } = await supabase.from('app_config').select('value').eq('key', 'club_inventory').maybeSingle();
+  try { return JSON.parse(String((data as any)?.value || '[]')); } catch { return []; }
+}
+async function saveInventoryItem(item: any): Promise<void> {
+  const items = await loadInventory();
+  items.push({ ...item, id: Date.now().toString(36), updatedAt: new Date().toISOString() });
+  await supabase.from('app_config').upsert(
+    { key: 'club_inventory', value: JSON.stringify(items) }, { onConflict: 'key' });
+}
+/** Строка реестра: сразу видно чьё, где лежит и сколько стоит. */
+function inventoryLine(i: any): string {
+  const kindLabel = i.kind === 'shared' ? '🤝 в складчину' : i.kind === 'personal' ? '👤 личное' : '🏕 клубное';
+  const bits = [`<b>${esc(i.title)}</b>${i.qty > 1 ? ` ×${i.qty}` : ''}`, kindLabel];
+  if (i.ownerName) bits.push(`владелец: ${esc(i.ownerName)}`);
+  if (i.returned) bits.push('✅ возвращено владельцу');
+  else if (i.holderName) bits.push(`на руках: ${esc(i.holderName)}`);
+  if (i.price) bits.push(`${i.price} BYN${i.priceNote ? ' ' + esc(i.priceNote) : ''}`);
+  if (i.note) bits.push(`<i>${esc(i.note)}</i>`);
+  return bits.join(' · ');
+}
+
 function kbMenu() {
   return kb([
     ...Object.entries(KB_SECTIONS).map(([k, v]) => [{ text: v.title, callback_data: `kb_${k}` }]),
@@ -2164,6 +2188,45 @@ export default async function handler(req: any, res: any) {
        * большинства одобренных членов отметки не было вовсе — организатор не
        * мог понять, кто их вообще читал.
        */
+      /**
+       * Инвентарь клуба: просмотр и добавление надиктовкой.
+       * Форма с отдельными полями («количество», «категория») никогда не
+       * заполнялась: организатор держит вещь в голове одной фразой. Поэтому
+       * ввод — обычным текстом или голосом, а поля раскладывает ИИ.
+       */
+      if (data === 'invhome' || data === 'invadd') {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Раздел для организаторов и костяка', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (data === 'invadd') {
+          await setSession(tgId, 'inv_add', {});
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '📦 <b>Добавить в инвентарь</b>\n\nНапиши или надиктуй одной фразой, как сказал бы человеку. Например:\n' +
+              '<i>«баня Олега, даёт на выезды, 60 рублей за раз, сейчас вернули владельцу»</i>\n' +
+              '<i>«два фирменных флага, скидывались участники, лежат у Артёма»</i>\n\n' +
+              'Разложу по полям сам и покажу, что получилось.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+        const items = await loadInventory();
+        if (!items.length) {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', text: '📦 Инвентарь пуст.',
+            reply_markup: kb([[{ text: '➕ Добавить вещь', callback_data: 'invadd' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '📦 <b>Инвентарь клуба</b>\n\n' + items.map(inventoryLine).join('\n\n'),
+          reply_markup: kb([[{ text: '➕ Добавить вещь', callback_data: 'invadd' }]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       /** База знаний организатора: закрытый раздел с методиками клуба. */
       if (data === 'kbhome' || data.startsWith('kb_')) {
         if (!(await isOrganizer(tgId))) {
@@ -6753,6 +6816,45 @@ export default async function handler(req: any, res: any) {
           } else {
             await tg('sendMessage', { chat_id: chatId, text: 'Исполнителя нет — задача уже в поиске.' });
           }
+          return res.status(200).json({ ok: true });
+        }
+
+        // Надиктованная вещь → ИИ раскладывает по полям реестра.
+        if (sess && sess.state === 'inv_add') {
+          await clearSession(msg.from.id);
+          const parsed = await geminiJSON(
+            'Разбери фразу про имущество клуба и верни СТРОГО JSON:\n' +
+            '{"title":"название вещи","kind":"club|shared|personal","qty":число,' +
+            '"ownerName":"чьё, если сказано","holderName":"у кого сейчас, если сказано",' +
+            '"returned":true|false,"price":число или null,"priceNote":"за что цена","note":"остальное важное"}\n' +
+            'kind: shared — если скидывались/вложились участники; personal — если вещь конкретного человека, ' +
+            'который даёт её на выезды; club — если куплено клубом. returned=true, если вещь вернули владельцу.\n' +
+            'Не выдумывай поля, которых нет во фразе — ставь null.\n\nФРАЗА: ' + String(text).slice(0, 500),
+          );
+          if (!parsed || !(parsed as any).title) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '⚠️ Не смог разобрать фразу — ИИ-ключ не отвечает или текст слишком короткий. Попробуй ещё раз или замени ключ в панели.',
+            });
+            return res.status(200).json({ ok: true });
+          }
+          const item = {
+            title: String((parsed as any).title).slice(0, 120),
+            kind: ['club', 'shared', 'personal'].includes((parsed as any).kind) ? (parsed as any).kind : 'club',
+            qty: Number((parsed as any).qty) || 1,
+            ownerName: (parsed as any).ownerName || null,
+            holderName: (parsed as any).holderName || null,
+            returned: (parsed as any).returned === true,
+            price: Number((parsed as any).price) || null,
+            priceNote: (parsed as any).priceNote || null,
+            note: (parsed as any).note || null,
+          };
+          await saveInventoryItem(item);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '📦 <b>Записал в инвентарь</b>\n\n' + inventoryLine(item) + '\n\nНе так понял — надиктуй заново, поправлю.',
+            reply_markup: kb([[{ text: '📦 Весь инвентарь', callback_data: 'invhome' }], [{ text: '➕ Ещё вещь', callback_data: 'invadd' }]]),
+          });
           return res.status(200).json({ ok: true });
         }
 

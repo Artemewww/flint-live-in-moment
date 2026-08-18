@@ -52,6 +52,8 @@ const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: '
 
 export default function ProfileScreen({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
   const [tab, setTab] = useState<Tab>(initialTab || 'overview');
+  // Чек-лист по умолчанию свёрнут: длинный список мешал видеть складчину.
+  const [showChecklist, setShowChecklist] = useState(false);
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
@@ -298,11 +300,22 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                 </div>
               </section>
 
+              {/* Чек-лист на 131 пункт разворачивался прямо в списке и
+                  занимал пол-экрана гармошкой. Он нужен раз перед выездом,
+                  поэтому теперь спрятан под кнопку — открывается по желанию. */}
               <section className="space-y-2">
-                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
-                  Личный чек-лист кемпинга
-                </h3>
-                <CampingChecklist />
+                <button
+                  type="button"
+                  onClick={() => setShowChecklist((v) => !v)}
+                  className="w-full bg-white/[0.03] border border-white/10 rounded-2xl p-3 flex items-center justify-between text-left cursor-pointer hover:bg-white/[0.06] transition-colors"
+                >
+                  <span className="space-y-0.5">
+                    <span className="block text-[11px] font-bold text-white">Личный чек-лист кемпинга</span>
+                    <span className="block text-[10px] text-white/40">131 пункт — открой перед сборами</span>
+                  </span>
+                  <span className="text-white/40 text-lg leading-none">{showChecklist ? '–' : '+'}</span>
+                </button>
+                {showChecklist && <CampingChecklist />}
               </section>
             </div>
           )}

@@ -17,6 +17,66 @@ export default async function handler(req: any, res: any) {
   const { action } = req.query || {};
 
   try {
+    /**
+     * Реестр имущества клуба.
+     *
+     * Старая таблица club_equipment знала только «название + количество», и вся
+     * суть уезжала в текст названия: «Мангал (вложились участники Меловых;
+     * хранит Артём)». Из такой строки не ответить на вопросы, которые реально
+     * задают: чьё это, у кого сейчас на руках, вернули ли владельцу, сколько
+     * стоит аренда, кому вручён мерч.
+     *
+     * Реестр живёт в app_config одной JSON-записью: схема свободная, миграция
+     * базы не нужна, а предметов у клуба десятки, не тысячи.
+     */
+    if (action === 'inventory') {
+      const KEY = 'club_inventory';
+      const load = async (): Promise<any[]> => {
+        const { data } = await supabase.from('app_config').select('value').eq('key', KEY).maybeSingle();
+        try { return JSON.parse(String((data as any)?.value || '[]')); } catch { return []; }
+      };
+      if (req.method === 'GET') {
+        return res.status(200).json({ ok: true, items: await load() });
+      }
+      if (req.method === 'POST') {
+        const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+        const items = await load();
+        const incoming = Array.isArray(body.items) ? body.items : (body.item ? [body.item] : []);
+        for (const raw of incoming) {
+          const item = {
+            id: String(raw.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+            title: String(raw.title || '').slice(0, 120),
+            // club — куплено клубом, shared — скидывались участники,
+            // personal — личное, дают на выезд.
+            kind: ['club', 'shared', 'personal'].includes(raw.kind) ? raw.kind : 'club',
+            qty: Number(raw.qty) || 1,
+            ownerName: raw.ownerName ? String(raw.ownerName).slice(0, 60) : null,
+            ownerId: Number(raw.ownerId) || null,
+            // Кто физически держит вещь сейчас: без этого «где мангал?» —
+            // вопрос в чат, а не в систему.
+            holderName: raw.holderName ? String(raw.holderName).slice(0, 60) : null,
+            holderId: Number(raw.holderId) || null,
+            // Вещь на руках у клуба или уже возвращена владельцу.
+            returned: raw.returned === true,
+            price: Number(raw.price) || null,
+            priceNote: raw.priceNote ? String(raw.priceNote).slice(0, 60) : null,
+            note: raw.note ? String(raw.note).slice(0, 200) : null,
+            updatedAt: new Date().toISOString(),
+          };
+          if (!item.title) continue;
+          const idx = items.findIndex((i: any) => i.id === item.id);
+          if (idx >= 0) items[idx] = { ...items[idx], ...item };
+          else items.push(item);
+        }
+        if (body.deleteId) {
+          const i = items.findIndex((x: any) => x.id === String(body.deleteId));
+          if (i >= 0) items.splice(i, 1);
+        }
+        await supabase.from('app_config').upsert({ key: KEY, value: JSON.stringify(items) }, { onConflict: 'key' });
+        return res.status(200).json({ ok: true, items });
+      }
+    }
+
     // Поиск снаряжения
     if (action === 'search' && req.method === 'GET') {
       const { q, category, telegram_id } = req.query || {};
