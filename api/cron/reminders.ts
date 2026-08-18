@@ -712,6 +712,86 @@ export default async function handler(req: any, res: any) {
     }
 
     /**
+     * «Штурман»: одно сообщение костяку с тем, что реально требует решения.
+     * Данных в системе хватает на все ответы — не хватало того, кто их
+     * сопоставит. Организатор не помнит про кнопку сплита, про людей без
+     * кодекса, про бесхозные задачи: после Нарочи расходы считали в чате
+     * руками, явку не отметили, отзыв оставил один человек из восьми.
+     * Пишем ТОЛЬКО пункты, требующие действия — пустую сводку не шлём.
+     */
+    try {
+      const adminChat = Number(process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570');
+      const today = new Date().toISOString().slice(0, 10);
+      const lines: string[] = [];
+      const buttons: any[][] = [];
+
+      // 1. Кодекс: кто из одобренных не принимал правила.
+      const { data: allMembers } = await supabase
+        .from('members').select('telegram_id,prefs').eq('status', 'approved');
+      const noRules = (allMembers || []).filter((m: any) => !m.prefs?.rules_accepted).length;
+      if (noRules >= 3) lines.push(`📜 <b>${noRules}</b> одобренных не приняли правила — им закрыта запись. Панель → Аудитория → «Без правил».`);
+
+      // 2. Заявки, ждущие решения.
+      const { data: pendingM } = await supabase.from('members').select('telegram_id').eq('status', 'pending');
+      if ((pendingM || []).length) lines.push(`🚪 <b>${(pendingM || []).length}</b> заявок на вступление ждут ответа.`);
+
+      const { data: liveEvents } = await supabase
+        .from('events').select('id,title,date,date_end,shopping,max_participants').gte('date', dayOffset(-30)).neq('status', 'cancelled');
+      for (const ev of liveEvents || []) {
+        const id = (ev as any).id;
+        const title = esc((ev as any).title);
+        const ended = String((ev as any).date_end || (ev as any).date) < today;
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id,attended').eq('event_id', id).neq('status', 'cancelled');
+        if (!(regs || []).length) continue;
+
+        if (ended) {
+          // 3. Расходы собраны, а деньги не поделены.
+          const expenses = Array.isArray((ev as any).shopping?.expenses) ? (ev as any).shopping.expenses : [];
+          const transfers = Array.isArray((ev as any).shopping?.split?.transfers) ? (ev as any).shopping.split.transfers : [];
+          if (expenses.length && !transfers.length) {
+            const sum = expenses.reduce((s: number, e: any) => s + (Number(e.amount) || 0), 0);
+            lines.push(`💸 «${title}»: расходов на <b>${Math.round(sum)} BYN</b>, а сплит не разослан. Панель → событие → «Сплит».`);
+          }
+          // 4. Отзывы: меньше трети — есть смысл попросить ещё раз.
+          const { data: fb } = await supabase.from('feedback').select('id').eq('event_id', id);
+          if ((fb || []).length * 3 < (regs || []).length) {
+            lines.push(`⭐ «${title}»: отзывов ${(fb || []).length} из ${(regs || []).length}. Стоит попросить ещё.`);
+          }
+        } else {
+          // 5. Бесхозные задачи перед событием.
+          const { data: tk } = await supabase.from('tasks').select('id,taken_by,done').eq('event_id', id);
+          const orphan = (tk || []).filter((t: any) => !t.taken_by && !t.done).length;
+          if (orphan) {
+            lines.push(`📋 «${title}»: <b>${orphan}</b> задач без ответственного.`);
+            buttons.push([{ text: `📋 Кинуть задачи в чат «${(ev as any).title}»`.slice(0, 58), callback_data: `navtask_${id}` }]);
+          }
+          // 6. Логистика: безлошадные против свободных мест.
+          const { data: rd } = await supabase
+            .from('rides').select('driver_id,seats_total,seats_taken,kind').eq('event_id', id).eq('active', true);
+          const cars = (rd || []).filter((r: any) => r.kind !== 'tent');
+          const free = cars.reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
+          const drivers = new Set(cars.map((r: any) => Number(r.driver_id)));
+          const footless = (regs || []).filter((r: any) => !drivers.has(Number(r.telegram_id))).length;
+          if (footless > free) lines.push(`🚗 «${title}»: без машины ${footless} чел., свободно мест ${free}. Не хватает <b>${footless - free}</b>.`);
+        }
+      }
+
+      if (lines.length) {
+        buttons.push([{ text: '🛠 Открыть панель', url: `${(process.env.SITE_URL || 'https://flint-live-in-moment.vercel.app').replace(/\/$/, '')}/admin` }]);
+        await send(
+          adminChat,
+          `🧭 <b>Штурман: что требует решения</b>\n\n${lines.map((l) => `• ${l}`).join('\n\n')}`,
+          { inline_keyboard: buttons },
+          'digest',
+        );
+        report.feedbackRequests++;
+      }
+    } catch (e) {
+      report.errors.push(`navigator: ${(e as Error).message}`);
+    }
+
+    /**
      * Явка после события: кто реально был.
      * После Нарочи из 8 участников не был отмечен ни один — значит ни баллов
      * за участие, ни истории посещений. Руками это никто не делает, поэтому

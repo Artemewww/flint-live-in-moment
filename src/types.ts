@@ -10,7 +10,8 @@ export interface HouseQuality {
   markers?: string[];
 }
 
-export type EventStatus = 'locked' | 'open' | 'closed';
+/** draft — событие организатора, ещё не одобренное костяком: в афише не видно. */
+export type EventStatus = 'draft' | 'locked' | 'open' | 'closed';
 export type EventPhase = 'past' | 'locked' | 'open' | 'full' | 'closed';
 
 /** Строка состава события: только то, что можно показать кругу. */
@@ -92,6 +93,9 @@ export interface CommunityEvent {
   isPublic?: boolean;
   accessCode?: string;
   deputyId?: number;
+  /** Кто ведёт событие: видно участникам в карточке. */
+  organizerId?: number | null;
+  organizerName?: string | null;
   lockedHint?: string;
   program: string[];
   /**

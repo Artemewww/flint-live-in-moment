@@ -1057,6 +1057,8 @@ async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
   // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
   const tailRows: any[][] = [];
   if (isCoreUser) tailRows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
+  // База знаний — закрытый раздел для тех, кто ведёт события.
+  if (isCoreUser) tailRows.push([{ text: '📚 База знаний организатора', callback_data: 'kbhome' }]);
   tailRows.push([openBtn as any]);
 
   await tg('sendMessage', {
@@ -1507,8 +1509,8 @@ async function sendCatchup(chatId: number, tgId: number) {
 // Раньше флаг был выключен по умолчанию, и зарегистрироваться мог кто угодно.
 // Аварийно открыть двери: GATE_ENABLED=0.
 function gateOn(): boolean { return process.env.GATE_ENABLED !== '0'; }
-async function memberOf(tgId: number): Promise<{ status?: string; is_core?: boolean } | null> {
-  const { data } = await supabase.from('members').select('status,is_core').eq('telegram_id', tgId).maybeSingle();
+async function memberOf(tgId: number): Promise<{ status?: string; is_core?: boolean; role?: string } | null> {
+  const { data } = await supabase.from('members').select('status,is_core,role').eq('telegram_id', tgId).maybeSingle();
   return (data as any) || null;
 }
 async function isApproved(tgId: number): Promise<boolean> {
@@ -1518,6 +1520,75 @@ async function isApproved(tgId: number): Promise<boolean> {
 async function isCore(tgId: number): Promise<boolean> {
   const m = await memberOf(tgId);
   return !!m && m.is_core === true;
+}
+
+/**
+ * Организатор: ведёт СВОИ события и видит только их состав. Костяк и владелец
+ * шире по правам, поэтому тоже проходят. Всей базы участников организатор не
+ * видит — это осознанное ограничение: доступ к людям даёт только то событие,
+ * на которое они сами записались.
+ */
+async function isOrganizer(tgId: number): Promise<boolean> {
+  const m = await memberOf(tgId);
+  return !!m && (m.is_core === true || m.role === 'organizer' || m.role === 'owner');
+}
+
+/**
+ * База знаний организатора — закрытый раздел: методики, по которым клуб
+ * работает одинаково у любого ведущего. Держим в коде, а не в БД: это часть
+ * стандарта клуба, она должна ехать вместе с релизом и не редактироваться
+ * мимо ревью.
+ */
+const KB_SECTIONS: Record<string, { title: string; body: string }> = {
+  merch: {
+    title: '🏅 Вручение фирменного мерча',
+    body:
+      '<b>ДНК вручения FLINT</b>\n\n' +
+      'Церемония держится на четырёх шагах. Главная ошибка — раскачка в начале ' +
+      '(«ребята… я постараюсь что-то сказать…»): она съедает весь эффект.\n\n' +
+      '<b>1. Энергичный старт, без поиска слов</b>\n' +
+      '«Друзья, сфокусируемся! Наступает главный и самый душевный момент нашего выезда!»\n\n' +
+      '<b>2. Ценность и конкретная заслуга</b>\n' +
+      'Не «он победил», а <i>за что именно</i>: взаимовыручка, лидерство, командный дух, пройденное испытание.\n' +
+      '«Евгений сегодня показал не просто отличный результат, а настоящий командный дух, включённость и волю к победе на протяжении всего выезда.»\n\n' +
+      '<b>3. Символизм мерча</b>\n' +
+      'Джерси — не текстиль, а статус «своего» и отметка личного достижения.\n' +
+      '«Эта яркая джерси FLINT — не просто мерч. Это знак признания от команды и символическая „броня“ нашего клуба, которую нужно носить с гордостью.»\n\n' +
+      '<b>4. Кульминация и вручение</b>\n' +
+      '«Евгений, добро пожаловать в семью FLINT! Держи джерси, ты её честно заработал!» — аплодисменты, рукопожатие, объятия.\n\n' +
+      '<b>Невербалика</b>\n' +
+      '• Разверни майку логотипом к зрителям и камере <i>до</i> того, как назовёшь имя — это создаёт интригу.\n' +
+      '• Смотри на человека и на команду, а не в землю и не в скомканную майку.\n' +
+      '• Подзови получателя в центр: вручение должно выглядеть ритуалом, а не передачей вещи из рук в руки.',
+  },
+  roles: {
+    title: '🔐 Роли и границы доступа',
+    body:
+      '<b>Костяк</b> — держит платформу: одобряет события, ведёт аудиторию клуба, имеет панель.\n' +
+      'Ни одно мероприятие не появляется на платформе само: организатор готовит его, костяк одобряет.\n\n' +
+      '<b>Организатор</b> — ведёт свои события.\n' +
+      '• Видит состав ТОЛЬКО своего события, а не базу клуба.\n' +
+      '• Общение с участниками — в чате мероприятия. Личные рассылки по базе организатору недоступны: так данные людей не расходятся по рукам.\n' +
+      '• Имя организатора видно в карточке события — участник всегда знает, кто отвечает за выезд.\n\n' +
+      'Правило простое: доступ к человеку даёт только событие, на которое он сам записался.',
+  },
+  buddy: {
+    title: '🤝 Бади и спорные ситуации',
+    body:
+      'У каждого участника на событии есть бади — напарник, который держит его в поле зрения от сбора до разъезда.\n\n' +
+      '• Бади решает со своим человеком бытовые и спорные вопросы, а не отправляет его к организатору.\n' +
+      '• Сломал, потерял, испортил чужое — возмещает сам, в разумный срок и без напоминаний.\n' +
+      '• Спор о возмещении ведут бади сторон; организатор подключается, только если они не договорились.\n' +
+      '• Несогласие с решением обсуждается с организатором напрямую, а не в кулуарах.\n\n' +
+      '<i>Правило появилось после Нарочи: разбитый термос повис в воздухе, потому что «в правилах этого не написано».</i>',
+  },
+};
+
+function kbMenu() {
+  return kb([
+    ...Object.entries(KB_SECTIONS).map(([k, v]) => [{ text: v.title, callback_data: `kb_${k}` }]),
+    [{ text: '⬅️ В меню', callback_data: 'home' }],
+  ]);
 }
 
 /**
@@ -1960,6 +2031,111 @@ export default async function handler(req: any, res: any) {
        * большинства одобренных членов отметки не было вовсе — организатор не
        * мог понять, кто их вообще читал.
        */
+      /** База знаний организатора: закрытый раздел с методиками клуба. */
+      if (data === 'kbhome' || data.startsWith('kb_')) {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Раздел для организаторов и костяка', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (data === 'kbhome') {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '📚 <b>База знаний организатора</b>\n\nСтандарты клуба: как вести событие одинаково хорошо у любого ведущего.',
+            reply_markup: kbMenu(),
+          });
+        } else {
+          const sec = KB_SECTIONS[data.slice('kb_'.length)];
+          if (sec) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `<b>${sec.title}</b>\n\n${sec.body}`,
+              reply_markup: kb([[{ text: '⬅️ К разделам', callback_data: 'kbhome' }]]),
+            });
+          }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /** Костяк одобряет черновик события — только после этого он на платформе. */
+      if (data.startsWith('evok_') || data.startsWith('evno_')) {
+        if (!(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Одобряет только костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const evId = data.slice(5);
+        const approve = data.startsWith('evok_');
+        const { data: evRow } = await supabase.from('events').select('title,deputy_id').eq('id', evId).maybeSingle();
+        await supabase.from('events').update({ status: approve ? 'open' : 'locked' }).eq('id', evId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: approve ? 'Опубликовано ✅' : 'Отправлено на доработку' });
+        const orgId = Number((evRow as any)?.deputy_id || 0);
+        if (orgId > 0) {
+          await tg('sendMessage', {
+            chat_id: orgId, parse_mode: 'HTML',
+            text: approve
+              ? `✅ Костяк одобрил «<b>${esc((evRow as any)?.title || '')}</b>» — событие на платформе, запись открыта.`
+              : `🛠 Костяк вернул «<b>${esc((evRow as any)?.title || '')}</b>» на доработку. Напиши в поддержку, что поправить.`,
+          });
+        }
+        try {
+          await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: kb([]) });
+        } catch { /* сообщение могли удалить */ }
+        return res.status(200).json({ ok: true });
+      }
+
+      /** Штурман: кинуть бесхозные задачи события в его чат. */
+      if (data.startsWith('navtask_')) {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для организаторов', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const evId = data.slice('navtask_'.length);
+        const { data: tk } = await supabase
+          .from('tasks').select('id,title').eq('event_id', evId).is('taken_by', null).eq('done', false).limit(10);
+        const { data: gr } = await supabase
+          .from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+        const target = Number((gr as any)?.chat_id || 0);
+        if (!target || !(tk || []).length) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: target ? 'Бесхозных задач нет' : 'У события нет чата', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('sendMessage', {
+          chat_id: target, parse_mode: 'HTML',
+          text: '📋 <b>Задачи без ответственного</b>\n\nЖми на ту, которую берёшь на себя.',
+          reply_markup: kb((tk || []).map((t: any) => [{ text: `✋ ${String(t.title).slice(0, 50)}`, callback_data: `taketask_${t.id}` }])),
+        });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отправил в чат события ✅' });
+        return res.status(200).json({ ok: true });
+      }
+
+      /** Подтверждение расхода, распознанного в чате: пишем в общий котёл. */
+      if (data.startsWith('expdr_')) {
+        const code = data.slice('expdr_'.length);
+        const { data: row } = await supabase.from('app_config').select('value').eq('key', `expdraft:${code}`).maybeSingle();
+        if (!(row as any)?.value) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Черновик уже не актуален' });
+          return res.status(200).json({ ok: true });
+        }
+        const draft = JSON.parse(String((row as any).value));
+        // Записывать может тот, кто назвал сумму, или костяк — чужие деньги
+        // за человека не оформляем.
+        const { data: me } = await supabase.from('members').select('is_core').eq('telegram_id', tgId).maybeSingle();
+        if (Number(draft.byId) !== tgId && !(me as any)?.is_core) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это может подтвердить только тот, кто платил, или костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await saveAndBroadcastExpense(draft.evId, { id: draft.byId, first_name: cq.from.first_name, username: cq.from.username }, draft.title, draft.amount, null);
+        await supabase.from('app_config').delete().eq('key', `expdraft:${code}`);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Записал в общие расходы ✅' });
+        try {
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: `💸 <b>${draft.amount} BYN</b> за «${esc(draft.title)}» — в общих расходах. Разделится на всех при финальном расчёте.`,
+          });
+        } catch { /* сообщение могли удалить */ }
+        return res.status(200).json({ ok: true });
+      }
+
       if (data === 'rulesok') {
         const { data: m } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
         const prefs = ((m as any)?.prefs || {}) as Record<string, unknown>;
@@ -5498,6 +5674,43 @@ export default async function handler(req: any, res: any) {
             reply_markup: pollKeyboard(Number((poll as any).id), list, new Array(list.length).fill(0), false),
           });
           return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * Расходы, названные в чате, сами просятся в общий котёл.
+         * На Нарочи организатор написал «120 BYN — стоянка», «100 BYN — сапы»,
+         * «50 BYN еда», а потом весь расчёт вели вручную, промахиваясь на
+         * рубли. Бот распознаёт сумму с валютой и предлагает записать её одной
+         * кнопкой — молча в деньги не лезем, подтверждает автор.
+         */
+        const money = String(text).match(/(?:^|\s)(\d{1,5}(?:[.,]\d{1,2})?)\s*(?:byn|br|бун|руб|рублей|р\.)\b/i);
+        if (money && !text.startsWith('/')) {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (gl) {
+            const amount = Math.round(Number(money[1].replace(',', '.')) * 100) / 100;
+            // Название — остаток строки без суммы и мусорных тире.
+            const label = String(text)
+              .replace(money[0], ' ')
+              .replace(/https?:\/\/\S+/g, '')
+              .replace(/[-–—:]+/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim()
+              .slice(0, 60);
+            if (amount >= 1 && amount <= 100000 && label.length >= 3) {
+              const code = Math.random().toString(36).slice(2, 10);
+              await supabase.from('app_config').upsert({
+                key: `expdraft:${code}`,
+                value: JSON.stringify({ evId: (gl as any).event_id, amount, title: label, byId: msg.from.id }),
+              }, { onConflict: 'key' });
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                reply_to_message_id: msg.message_id,
+                text: `💸 Записать <b>${amount} BYN</b> за «${esc(label)}» в общие расходы события? Потом всё поделится одной кнопкой.`,
+                reply_markup: kb([[{ text: '✅ Да, это общий расход', callback_data: `expdr_${code}` }]]),
+              });
+            }
+          }
         }
 
         /**

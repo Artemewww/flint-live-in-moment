@@ -155,6 +155,10 @@ function mapEventToCamelCase(event: any) {
     checklist: event.checklist || {},
     // Флаг «закрытое» — чтобы фронт показал поле кода. Сам access_code НЕ отдаём.
     isPublic: event.is_public !== false,
+    // Кто отвечает за выезд: участник должен видеть это в карточке, а не
+    // выяснять в переписке. Имя подставляется в обработчике списка.
+    organizerId: event.deputy_id || null,
+    organizerName: event.organizer_name || null,
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},
@@ -644,6 +648,29 @@ export default async function handler(req: any, res: any) {
       // Единый источник правды по занятым местам — registrations, а не колонка
       // participants_count (её задавали руками и она расходилась с реальностью).
       // Каждая регистрация = сам участник (1) + его гости (guest_count).
+      /**
+       * Черновики (status='draft') на платформе не показываем: событие
+       * появляется в афише только после одобрения костяком. Автор черновика
+       * и костяк видят его, чтобы было что дорабатывать и что одобрять.
+       */
+      const { data: viewerRow } = viewerId
+        ? await supabase.from('members').select('is_core,role').eq('telegram_id', viewerId).maybeSingle()
+        : { data: null as any };
+      const viewerIsCore = isAdmin(req) || (viewerRow as any)?.is_core === true || (viewerRow as any)?.role === 'owner';
+      const visible = (events || []).filter((e: any) =>
+        e.status !== 'draft' || viewerIsCore || Number(e.deputy_id) === viewerId);
+
+      // Имя организатора — по одному запросу на всех, а не по событию.
+      const orgIds = Array.from(new Set(visible.map((e: any) => Number(e.deputy_id)).filter((n: number) => Number.isFinite(n) && n > 0)));
+      if (orgIds.length) {
+        const { data: orgs } = await supabase
+          .from('members').select('telegram_id,first_name,username').in('telegram_id', orgIds);
+        const byId = new Map((orgs || []).map((m: any) => [Number(m.telegram_id), m.first_name || (m.username ? '@' + m.username : '')]));
+        for (const e of visible as any[]) {
+          if (e.deputy_id) e.organizer_name = byId.get(Number(e.deputy_id)) || null;
+        }
+      }
+
       const { data: regs } = await supabase
         .from('registrations').select('event_id, guest_count, telegram_id, name').neq('status', 'cancelled');
       const counts = new Map<string, number>();
@@ -736,7 +763,7 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      const withCounts = (events || []).map((e: any) => ({
+      const withCounts = visible.map((e: any) => ({
         ...e,
         participants_count: counts.get(e.id) || 0,
         participants: roster.get(e.id) || [],

@@ -62,6 +62,8 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     isPublic: event.is_public ?? event.isPublic ?? true,
     accessCode: event.access_code || event.accessCode,
     deputyId: event.deputy_id ?? event.deputyId,
+    organizerId: event.organizerId ?? event.deputy_id ?? null,
+    organizerName: event.organizerName ?? null,
     lockedHint: event.locked_hint || event.lockedHint,
     program: event.program || [],
     notifications: event.notifications || {},

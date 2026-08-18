@@ -926,6 +926,37 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: 'Failed to save event', details: error.message });
       }
 
+      /**
+       * Черновик организатора уходит костяку на одобрение: на платформе
+       * событие появится только после нажатия «Опубликовать». Сигналим один
+       * раз — при первом сохранении черновика.
+       */
+      if (!before && (event as any)?.status === 'draft') {
+        const adminChat = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
+        let orgName = '';
+        if ((event as any).deputy_id) {
+          const { data: om } = await supabase
+            .from('members').select('first_name,username').eq('telegram_id', (event as any).deputy_id).maybeSingle();
+          orgName = (om as any)?.first_name || ((om as any)?.username ? '@' + (om as any).username : '');
+        }
+        try {
+          await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: adminChat, parse_mode: 'HTML',
+              text: `🆕 <b>Событие на одобрение</b>\n\n«${String((event as any).title || '').replace(/</g, '&lt;')}»\n` +
+                `${(event as any).date || ''} · ${String((event as any).location || '').replace(/</g, '&lt;')}\n` +
+                (orgName ? `Организатор: ${orgName}\n` : '') +
+                `\nПока не одобрено — в афише его нет.`,
+              reply_markup: { inline_keyboard: [[
+                { text: '✅ Опубликовать', callback_data: `evok_${(event as any).id}` },
+                { text: '🛠 На доработку', callback_data: `evno_${(event as any).id}` },
+              ]] },
+            }),
+          });
+        } catch { /* сигнал не критичен для сохранения */ }
+      }
+
       // Уведомляем об изменениях только при редактировании существующего
       // события (before есть). Ошибки рассылки не роняют сохранение.
       let notified = 0;

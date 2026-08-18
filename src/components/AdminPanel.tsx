@@ -3749,9 +3749,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       <h4 className="text-xs font-bold uppercase mb-1">Управление мероприятием</h4>
                       <p className="text-[10px] text-white/40 mb-2">
                         Сейчас: <span className="text-brand font-mono">
-                          {selectedEvent.status === 'open' ? 'набор открыт' : selectedEvent.status === 'closed' ? 'завершено' : 'набор закрыт'}
+                          {selectedEvent.status === 'open' ? 'набор открыт'
+                            : selectedEvent.status === 'closed' ? 'завершено'
+                            : selectedEvent.status === 'draft' ? 'черновик — ждёт одобрения костяка'
+                            : 'набор закрыт'}
                         </span>
                       </p>
+                      {/* Событие организатора выходит на платформу только после
+                          одобрения костяка — до этого оно не видно в афише. */}
+                      {selectedEvent.status === 'draft' && (
+                        <button
+                          onClick={() => patchEvent({ status: 'open', statusReason: null })}
+                          className="w-full bg-brand/20 text-brand p-3 rounded-lg text-xs font-bold uppercase cursor-pointer border-none hover:bg-brand/30"
+                        >
+                          ✅ Одобрить и опубликовать
+                        </button>
+                      )}
 
                       <div className="grid grid-cols-2 gap-2">
                         <button

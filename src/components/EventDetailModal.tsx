@@ -344,6 +344,19 @@ export default function EventDetailModal({
                 </div>
               </div>
 
+              {/* Кто ведёт событие — участник должен знать это до записи,
+                  а не выяснять в переписке. */}
+              {event.organizerName && (
+                <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
+                  <Users className="w-5 h-5 text-brand shrink-0" />
+                  <div className="space-y-1 text-left">
+                    <span className="text-white/40 uppercase text-[9px] tracking-wider block font-bold">Организатор события</span>
+                    <div className="text-white font-bold">{event.organizerName}</div>
+                    <div className="text-white/50 text-[10px] leading-normal">Вопросы по выезду — в чате мероприятия.</div>
+                  </div>
+                </div>
+              )}
+
               {isRegistered ? (
                 <a
                   href={getYandexMapsUrl(event.location)}
