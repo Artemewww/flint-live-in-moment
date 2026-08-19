@@ -175,6 +175,12 @@ export default async function handler(req: any, res: any) {
           ? (m.prefs.media_consent.agreed ? 'yes' : 'no')
           : 'unknown',
         rulesAccepted: m.prefs?.rules_accepted?.at || null,
+        // Зачем человек идёт в клуб (его слова) и подтвердил ли он, что
+        // разделяет ценности. Раньше костяк решал по имени и телефону, а мотив
+        // выяснялся уже на выезде — там же, где и цена ошибки.
+        joinReason: m.prefs?.join_reason?.text || null,
+        joinReasonAt: m.prefs?.join_reason?.at || null,
+        valuesConfirmed: m.prefs?.values_confirmed?.at || null,
         botActive: m.bot_active !== false,
         lastSeenAt: m.last_seen_at,
         createdAt: m.created_at,

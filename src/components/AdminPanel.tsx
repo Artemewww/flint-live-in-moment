@@ -1327,7 +1327,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
    *  ни одна рассылка, и это нужно видеть отдельно, а не гадать после отправки. */
   const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules'>('all');
   /** Сортировка аудитории. `newest`/`oldest` — по дате входа в клуб («сколько дней с нами»). */
-  const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name' | 'newest' | 'oldest'>('default');
+  // По умолчанию — СНАЧАЛА НОВЫЕ. Дефолт «по баллам» прятал только что
+  // принятого человека в середину списка из 68: у новичка 0 баллов, как и у
+  // половины клуба, и владелец решил, что человек вообще не появился.
+  const [audienceSort, setAudienceSort] = useState<'default' | 'points' | 'attended' | 'name' | 'newest' | 'oldest'>('newest');
 
   /** Инвентарь клуба: список активов, кто держит, сколько дней. */
   const [showAssets, setShowAssets] = useState(false);
@@ -4337,6 +4340,17 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             <span className="font-bold text-sm">{m.firstName || 'Без имени'}</span>
                             {m.username && <span className="text-[10px] text-white/50 font-mono">@{m.username}</span>}
                             {m.isCore && <span className="text-[9px] bg-brand/20 text-brand px-1.5 py-0.5 rounded font-mono">костяк</span>}
+                            {(() => {
+                              // Новичок недели — чтобы принятый вчера человек
+                              // был виден сразу, а не искался поиском по имени.
+                              const t = new Date(m.createdAt || 0).getTime();
+                              return Number.isFinite(t) && Date.now() - t < 7 * 864e5
+                                ? <span className="text-[9px] bg-emerald-500/20 text-emerald-300 px-1.5 py-0.5 rounded font-mono">🆕 новый</span>
+                                : null;
+                            })()}
+                            {m.valuesConfirmed
+                              ? <span className="text-[9px] bg-white/10 text-white/60 px-1.5 py-0.5 rounded font-mono" title={`Ценности подтверждены ${new Date(m.valuesConfirmed).toLocaleDateString('ru-RU')}`}>✅ ценности</span>
+                              : <span className="text-[9px] bg-amber-500/15 text-amber-300/80 px-1.5 py-0.5 rounded font-mono">ценности не подтверждены</span>}
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${m.status === 'approved' ? 'bg-brand/15 text-brand' : m.status === 'blocked' ? 'bg-rose-500/15 text-rose-400' : 'bg-white/10 text-white/50'}`}>
@@ -4360,6 +4374,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             {m.phone && <span>📞 {m.phone}</span>}
                             {m.createdAt && <span>в клубе с {fmtJoinDate(m.createdAt)} ({daysInBot(m.createdAt)} дн)</span>}
                           </div>
+                          {/* Зачем человек в клубе — его собственными словами.
+                              Без этого костяк решает по одному имени и телефону,
+                              а мотив всплывает уже на выезде. */}
+                          {m.joinReason && (
+                            <div className="text-[10px] text-white/70 mt-1.5 bg-white/5 border border-white/10 rounded-lg px-2 py-1.5 leading-snug">
+                              <span className="text-white/35 font-mono text-[9px] uppercase">почему в клубе · </span>
+                              {m.joinReason}
+                            </div>
+                          )}
                           {/* Контроль состава: пол нужен для расселения по палаткам,
                               согласие на фото/видео — чтобы законно публиковать
                               галерею, правила — чтобы знать, кто их реально принял,

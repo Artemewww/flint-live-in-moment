@@ -687,6 +687,13 @@ export default async function handler(req: any, res: any) {
               [{ text: '⭐ Оставить отзыв', callback_data: `fb_${(ev as any).id}` }],
               // Сбор медиа в галерею события — обработчик media_ живёт в вебхуке.
               [{ text: '📸 Прислать фото/видео', callback_data: `media_${(ev as any).id}` }],
+              /**
+               * Анонимный опрос круга — репутация участников. Спрашиваем ровно
+               * здесь, на следующий день: пока свежо, но эмоции уже осели.
+               * Человек, о котором отмечают, ничего не узнаёт — иначе честных
+               * ответов не будет. Обработчик rep_ живёт в вебхуке.
+               */
+              [{ text: '🤝 Оценить круг (анонимно)', callback_data: `rep_${(ev as any).id}` }],
             ],
           },
           'digest',
@@ -731,12 +738,23 @@ export default async function handler(req: any, res: any) {
       const noRules = (allMembers || []).filter((m: any) => !m.prefs?.rules_accepted).length;
       if (noRules >= 3) lines.push(`📜 <b>${noRules}</b> одобренных не приняли правила — им закрыта запись. Панель → Аудитория → «Без правил».`);
 
+      /**
+       * Кто в клубе, но не сказал ЗАЧЕМ. Вопрос появился 19.08 — все, кого
+       * приняли раньше, остались без ответа: костяк не знает мотива людей,
+       * которых сам же и впустил. Одна кнопка досылает вопрос всем сразу.
+       */
+      const noWhy = (allMembers || []).filter((m: any) => !m.prefs?.join_reason).length;
+      if (noWhy >= 3) {
+        lines.push(`🤝 <b>${noWhy}</b> членов клуба не ответили, зачем им клуб, и не подтвердили ценности.`);
+        buttons.push([{ text: `🤝 Спросить всех (${noWhy})`, callback_data: 'askwhy_all' }]);
+      }
+
       // 2. Заявки, ждущие решения.
       const { data: pendingM } = await supabase.from('members').select('telegram_id').eq('status', 'pending');
       if ((pendingM || []).length) lines.push(`🚪 <b>${(pendingM || []).length}</b> заявок на вступление ждут ответа.`);
 
       const { data: liveEvents } = await supabase
-        .from('events').select('id,title,date,date_end,shopping,max_participants').gte('date', dayOffset(-30)).neq('status', 'cancelled');
+        .from('events').select('id,title,date,date_end,shopping,max_participants,staff').gte('date', dayOffset(-30)).neq('status', 'cancelled');
       for (const ev of liveEvents || []) {
         const id = (ev as any).id;
         const title = esc((ev as any).title);
@@ -759,6 +777,18 @@ export default async function handler(req: any, res: any) {
             lines.push(`⭐ «${title}»: отзывов ${(fb || []).length} из ${(regs || []).length}. Стоит попросить ещё.`);
           }
         } else {
+          /**
+           * 4a. Помощники организатора («сержанты»). Правило клуба: круг
+           * больше 10 человек один человек физически не удержит — нужны двое,
+           * на которых перекличка, деньги и безопасность. Напоминаем ДО
+           * события, пока назначить ещё есть кого.
+           */
+          const staff = Array.isArray((ev as any).staff) ? (ev as any).staff : [];
+          if ((regs || []).length > 10 && staff.length < 2) {
+            lines.push(`🎖 «${title}»: в составе <b>${(regs || []).length}</b> человек, а помощников назначено <b>${staff.length}</b> из 2. Один организатор такой круг не удержит.`);
+            buttons.push([{ text: `🎖 Назначить помощников «${(ev as any).title}»`.slice(0, 58), callback_data: `staff_${id}` }]);
+          }
+
           // 5. Бесхозные задачи перед событием.
           const { data: tk } = await supabase.from('tasks').select('id,taken_by,done').eq('event_id', id);
           const orphan = (tk || []).filter((t: any) => !t.taken_by && !t.done).length;

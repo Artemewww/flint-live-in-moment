@@ -1156,7 +1156,7 @@ function eventRow(ev: any, site: string) {
   return [{ text: `${ev.title} · ${whenPhrase(ev.date)}`, web_app: { url: `${site}/?ev=${encodeURIComponent(ev.id)}` } }];
 }
 
-async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
+async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false, isOrgUser = false) {
   const site = openBtn?.web_app?.url || '';
   const today = new Date().toISOString().slice(0, 10);
   const { data: raw } = await supabase
@@ -1170,8 +1170,13 @@ async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false) {
   // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
   const tailRows: any[][] = [];
   if (isCoreUser) tailRows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
-  // База знаний — закрытый раздел для тех, кто ведёт события.
-  if (isCoreUser) tailRows.push([{ text: '📚 База знаний организатора', callback_data: 'kbhome' }]);
+  // База знаний и репутация — для ВСЕХ, кто ведёт события. Раньше кнопка
+  // висела только на костяке, и организатор (role='organizer') не видел
+  // методик, по которым от него же требуют вести событие.
+  if (isCoreUser || isOrgUser) {
+    tailRows.push([{ text: '📚 База знаний организатора', callback_data: 'kbhome' }]);
+    tailRows.push([{ text: '🧭 Репутация круга', callback_data: 'rephome' }]);
+  }
   if (isCoreUser) tailRows.push([{ text: '📦 Инвентарь клуба', callback_data: 'invhome' }]);
   tailRows.push([openBtn as any]);
 
@@ -1748,6 +1753,199 @@ function kbMenu() {
   ]);
 }
 
+/* ═════════════════════════ РЕПУТАЦИЯ УЧАСТНИКА ═════════════════════════════
+ * Дублировано из api/_lib/reputation.ts — Vercel НЕ бандлит папки на «_» в
+ * рантайм serverless-функции (MODULE_NOT_FOUND на каждом апдейте вебхука, тот
+ * же фикс, что для group-ban и camping-checklist). Правь ОБА файла: там же
+ * описана модель и три принципа (факты, а не приговор; один аноним не рушит
+ * репутацию; красное видит только тот, кто ведёт события).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+const REP_SIGNALS: Record<string, { label: string; short: string; polarity: number; weight: number; emoji: string; peer?: boolean }> = {
+  gossip:        { label: 'Говорит за спиной, носит слухи',            short: 'за спиной',        polarity: -1, weight: 12, emoji: '🗣', peer: true },
+  sabotage:      { label: 'Саботаж: рушит договорённости и настрой',   short: 'саботаж',          polarity: -1, weight: 16, emoji: '🧨', peer: true },
+  disrespect:    { label: 'Неуважение, давление, харассмент',          short: 'неуважение',       polarity: -1, weight: 22, emoji: '⛔️', peer: true },
+  sober_break:   { label: 'Нарушил трезвость',                         short: 'трезвость',        polarity: -1, weight: 30, emoji: '🚫' },
+  money_debt:    { label: 'Не вернул деньги / не внёс взнос',          short: 'долг',             polarity: -1, weight: 14, emoji: '💸', peer: true },
+  damage:        { label: 'Испортил чужое и не возместил',             short: 'не возместил',     polarity: -1, weight: 12, emoji: '🧯', peer: true },
+  program_break: { label: 'Сорвал пункт программы, за который отвечал',short: 'сорвал пункт',     polarity: -1, weight: 10, emoji: '📵', peer: true },
+  buddy_fail:    { label: 'Бросил своего бади',                        short: 'бросил бади',      polarity: -1, weight: 10, emoji: '🙈', peer: true },
+  no_show:       { label: 'Не приехал без предупреждения',             short: 'не приехал',       polarity: -1, weight: 10, emoji: '👻' },
+  late:          { label: 'Систематически опаздывает, держит круг',    short: 'опоздания',        polarity: -1, weight: 5,  emoji: '⏰', peer: true },
+  mess:          { label: 'Оставил за собой мусор / не убрал',         short: 'не убрал',         polarity: -1, weight: 6,  emoji: '🗑', peer: true },
+  peer_good:     { label: 'С ним хорошо в круге',                      short: 'хорош в круге',    polarity: 1,  weight: 6,  emoji: '👍', peer: true },
+  helped:        { label: 'Помогал другим, вывозил на себе',           short: 'помогал',          polarity: 1,  weight: 8,  emoji: '🤝', peer: true },
+  role_done:     { label: 'Взял роль и довёл до конца',                short: 'довёл роль',       polarity: 1,  weight: 9,  emoji: '🎯' },
+  calm_conflict: { label: 'Погасил конфликт, удержал гармонию',        short: 'погасил конфликт', polarity: 1,  weight: 10, emoji: '🕊', peer: true },
+  paid_on_time:  { label: 'Платит вовремя, без напоминаний',           short: 'платит вовремя',   polarity: 1,  weight: 5,  emoji: '💚' },
+  driver:        { label: 'Вёз людей на своей машине',                 short: 'вёз людей',        polarity: 1,  weight: 6,  emoji: '🚗' },
+  brought:       { label: 'Привёл в клуб хорошего человека',           short: 'привёл своего',    polarity: 1,  weight: 5,  emoji: '🌱' },
+  staff_done:    { label: 'Отработал помощником организатора',         short: 'помощник',         polarity: 1,  weight: 10, emoji: '🎖' },
+  growth:        { label: 'Рост в клубе: перерос свою привычку',       short: 'вырос',            polarity: 1,  weight: 10, emoji: '📈' },
+};
+
+/** Контекст личности: не наказание, а то, с чем человек заходит. */
+const REP_TRAITS: Record<string, { label: string; emoji: string; past: string }> = {
+  smoking:    { label: 'Курит',                   emoji: '🚬', past: 'Бросил курить в клубе' },
+  vape:       { label: 'Вейп / никотин',          emoji: '💨', past: 'Отказался от вейпа' },
+  alcohol:    { label: 'В прошлом алкоголь',      emoji: '🍺', past: 'Держит трезвость' },
+  language:   { label: 'Языковой барьер',         emoji: '🗺', past: 'Выучил язык в клубе' },
+  no_gear:    { label: 'Нет снаряжения',          emoji: '🎒', past: 'Собрал своё снаряжение' },
+  no_exp:     { label: 'Нет походного опыта',     emoji: '🌿', past: 'Набрал опыт выездов' },
+  no_license: { label: 'Без прав / без машины',   emoji: '🚙', past: 'Получил права' },
+  health:     { label: 'Ограничение по здоровью', emoji: '🩺', past: 'Ограничение снято' },
+  shy:        { label: 'Тяжело входит в контакт', emoji: '🫥', past: 'Раскрылся в круге' },
+};
+
+const REP_LEVEL: Record<string, { text: string; emoji: string }> = {
+  new:   { text: 'нет данных',   emoji: '⚪️' },
+  green: { text: 'надёжный',     emoji: '🟢' },
+  watch: { text: 'наблюдаем',    emoji: '🟡' },
+  risk:  { text: 'риск',         emoji: '🟠' },
+  stop:  { text: 'не допускать', emoji: '🔴' },
+};
+
+/** Старое весит меньше: человек меняется, репутация не вечная. */
+function repDecay(iso: string): number {
+  const days = (Date.now() - new Date(iso).getTime()) / 86400000;
+  if (days < 180) return 1;
+  if (days < 365) return 0.6;
+  if (days < 730) return 0.3;
+  return 0.15;
+}
+/** Слово организатора весит больше анонимного голоса — он за него отвечает. */
+function repSourceWeight(s: string): number {
+  return s === 'core' ? 2 : s === 'organizer' ? 1.6 : s === 'ai' ? 0.5 : 1;
+}
+
+interface RepSum {
+  score: number; level: string; confirmed: boolean; signals: number;
+  reds: Array<{ kind: string; count: number; voices: number }>;
+  greens: Array<{ kind: string; count: number }>;
+  traits: string[]; growth: string[];
+}
+
+function repSummarize(rows: any[], traits: any[]): RepSum {
+  let score = 70;
+  const red = new Map<string, { count: number; voices: Set<string> }>();
+  const green = new Map<string, number>();
+  const redVoices = new Set<string>();
+  let confirmed = false;
+
+  for (const r of rows) {
+    const def = REP_SIGNALS[r.kind];
+    if (!def || !def.polarity) continue;
+    score += def.polarity * def.weight * repDecay(r.created_at) * repSourceWeight(r.source);
+    if (def.polarity < 0) {
+      const cur = red.get(r.kind) || { count: 0, voices: new Set<string>() };
+      cur.count += 1; cur.voices.add(String(r.author_id ?? 'system'));
+      red.set(r.kind, cur);
+      if (r.author_id) redVoices.add(String(r.author_id));
+      if (r.source === 'organizer' || r.source === 'core') confirmed = true;
+    } else {
+      green.set(r.kind, (green.get(r.kind) || 0) + 1);
+    }
+  }
+  if (redVoices.size >= 2) confirmed = true;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+
+  let level = 'new';
+  if (rows.length) level = score >= 75 ? 'green' : score >= 55 ? 'watch' : score >= 35 ? 'risk' : 'stop';
+  // Неподтверждённое красное не опускает ниже «наблюдаем»: один обиженный
+  // голос не должен закрывать человеку двери в клуб.
+  if (!confirmed && (level === 'risk' || level === 'stop')) level = 'watch';
+
+  return {
+    score, level, confirmed, signals: rows.length,
+    reds: [...red.entries()].map(([kind, v]) => ({ kind, count: v.count, voices: v.voices.size })).sort((a, b) => b.count - a.count),
+    greens: [...green.entries()].map(([kind, count]) => ({ kind, count })).sort((a, b) => b.count - a.count),
+    traits: traits.filter((t: any) => t.state !== 'past').map((t: any) => String(t.trait)),
+    growth: traits.filter((t: any) => t.state === 'past').map((t: any) => String(t.trait)),
+  };
+}
+
+async function repLoad(ids: Array<number | string>): Promise<Map<number, RepSum>> {
+  const uniq = [...new Set(ids.map(Number).filter((n) => Number.isFinite(n) && n > 0))];
+  const out = new Map<number, RepSum>();
+  if (!uniq.length) return out;
+  const [{ data: rows }, { data: traits }] = await Promise.all([
+    supabase.from('reputation_events').select('subject_id,author_id,kind,source,created_at').in('subject_id', uniq),
+    supabase.from('member_traits').select('subject_id,trait,state').in('subject_id', uniq),
+  ]);
+  for (const id of uniq) {
+    out.set(id, repSummarize(
+      (rows || []).filter((r: any) => Number(r.subject_id) === id),
+      (traits || []).filter((t: any) => Number(t.subject_id) === id),
+    ));
+  }
+  return out;
+}
+
+/** Дубль того же сигнала от того же человека на том же событии — не ошибка. */
+async function repAdd(i: { subjectId: number; kind: string; authorId?: number | null; eventId?: number | string | null; source?: string; note?: string }): Promise<boolean> {
+  const def = REP_SIGNALS[i.kind];
+  if (!def || Number(i.subjectId) === Number(i.authorId)) return false;
+  const { error } = await supabase.from('reputation_events').insert({
+    subject_id: Number(i.subjectId),
+    author_id: i.authorId ? Number(i.authorId) : null,
+    event_id: i.eventId ? String(i.eventId) : null, // events.id — TEXT
+    kind: i.kind, polarity: def.polarity, weight: def.weight,
+    source: i.source || 'peer', note: i.note ? String(i.note).slice(0, 1000) : null,
+  });
+  return !error || /duplicate key|23505/i.test(error.message);
+}
+
+/** Строка списка: 🟡 62 · ⚠️ за спиной ×2 · помогал 🚬 */
+function repLine(s: RepSum): string {
+  if (s.level === 'new') return '⚪️ нет данных';
+  const bits = [`${REP_LEVEL[s.level].emoji} ${s.score}`];
+  const reds = s.reds.slice(0, 2).map((r) => `${REP_SIGNALS[r.kind]?.short || r.kind}${r.count > 1 ? ` ×${r.count}` : ''}`);
+  if (reds.length) bits.push(`⚠️ ${reds.join(', ')}`);
+  const greens = s.greens.slice(0, 2).map((g) => REP_SIGNALS[g.kind]?.short || g.kind);
+  if (greens.length) bits.push(greens.join(', '));
+  if (s.traits.length) bits.push(s.traits.map((t) => REP_TRAITS[t]?.emoji || '•').join(''));
+  if (s.growth.length) bits.push('📈');
+  return bits.join(' · ');
+}
+
+/** Карточка человека для организатора — с основаниями, а не только с ярлыком. */
+function repCard(name: string, s: RepSum): string {
+  const lv = REP_LEVEL[s.level];
+  let out = `${lv.emoji} <b>${esc(name)}</b> — ${lv.text}${s.level === 'new' ? '' : ` (${s.score}/100)`}\n`;
+  if (s.reds.length) {
+    out += `\n<b>Красные флажки</b>\n` + s.reds.map((r) =>
+      `${REP_SIGNALS[r.kind]?.emoji || '⚠️'} ${esc(REP_SIGNALS[r.kind]?.label || r.kind)}${r.count > 1 ? ` — ${r.count} раз` : ''}${r.voices > 1 ? `, ${r.voices} независимых источника` : ''}`).join('\n') + '\n';
+    if (!s.confirmed) out += `<i>Пока один голос и без подтверждения организатора — это повод посмотреть, а не вывод.</i>\n`;
+  }
+  if (s.greens.length) {
+    out += `\n<b>За что ценят</b>\n` + s.greens.map((g) =>
+      `${REP_SIGNALS[g.kind]?.emoji || '✅'} ${esc(REP_SIGNALS[g.kind]?.label || g.kind)}${g.count > 1 ? ` ×${g.count}` : ''}`).join('\n') + '\n';
+  }
+  if (s.traits.length) {
+    out += `\n<b>С чем заходит</b>\n` + s.traits.map((t) => `${REP_TRAITS[t]?.emoji || '•'} ${esc(REP_TRAITS[t]?.label || t)}`).join('\n') + '\n';
+  }
+  if (s.growth.length) {
+    out += `\n<b>Рост в клубе</b>\n` + s.growth.map((t) => `📈 ${esc(REP_TRAITS[t]?.past || t)}`).join('\n') + '\n';
+  }
+  if (!s.signals) out += '\nПо человеку ещё ничего не отмечали.\n';
+  out += `\n<i>Решение о допуске принимает человек, а не цифра. Это основания для разговора.</i>`;
+  return out;
+}
+
+/** Состав события: id + имя, без отменённых. */
+async function eventRoster(evId: string | number): Promise<Array<{ id: number; name: string }>> {
+  const { data: regs } = await supabase
+    .from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
+  const ids = [...new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter((n) => Number.isFinite(n) && n > 0))];
+  if (!ids.length) return [];
+  const { data: ms } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ids);
+  const byId = new Map((ms || []).map((m: any) => [Number(m.telegram_id), m]));
+  return ids.map((id) => {
+    const m: any = byId.get(id);
+    return { id, name: String(m?.first_name || m?.username || `id${id}`) };
+  });
+}
+
 /**
  * Оставить из списка id только approved-членов клуба. Любые club-рассылки
  * (попутки, логистика, события) не должны уходить не-членам — даже если они
@@ -1778,15 +1976,56 @@ async function askApplySource(tgId: number, chatId: number, context: any) {
  * Заявка уходит костяку с полной карточкой: имя, телефон, ник, кто пригласил.
  * Раньше приходил только ник — принимать вслепую было нельзя.
  */
+/**
+ * ЦЕННОСТИ КЛУБА — то, что человек подтверждает своими руками.
+ *
+ * Требование владельца (19.08): бот всегда спрашивает, соответствует ли член
+ * клуба ценностям, и человек это подтверждает. Формулировки — те же, что в
+ * кодексе Mini App (src/components/RegistrationGate.tsx, шаг «values»):
+ * правило должно звучать одинаково в боте и в приложении.
+ */
+const VALUES_VERSION = 'v1';
+const VALUES_TEXT =
+  '🤝 <b>Ценности клуба</b>\n\n' +
+  '• Только живое общение — глаза в глаза, без масок и позы.\n' +
+  '• 100% чистота. Без алкоголя и фальши.\n' +
+  '• Равенство, искренность и поддержка каждого в круге.\n' +
+  '• Мы приходим расти и отдавать, а не потреблять.\n\n' +
+  'Подтверди, что это про тебя. Это не формальность: по этим четырём пунктам ' +
+  'клуб принимает решения — и о событиях, и о людях.';
+
+/** Спросить действующего члена клуба: зачем ему клуб + подтверждение ценностей. */
+async function askWhyAndValues(tgId: number, again = false): Promise<boolean> {
+  const r: any = await tg('sendMessage', {
+    chat_id: tgId, parse_mode: 'HTML',
+    text: again
+      ? '🔄 <b>Раз в год мы переспрашиваем каждого</b>\n\nКлуб меняется, и люди меняются. Подтверди, что ты по-прежнему с нами по ценностям, и напомни, зачем тебе круг.'
+      : '🤝 <b>Один вопрос — и он важнее анкеты</b>\n\nТебя приняли в клуб, но мы так и не спросили главного: <b>зачем тебе клуб?</b> Ответ увидит только костяк.',
+    reply_markup: kb([
+      [{ text: '✍️ Ответить, зачем мне клуб', callback_data: 'whyme' }],
+      [{ text: '✅ Разделяю ценности клуба', callback_data: 'valok' }],
+    ]),
+  });
+  return !!r?.ok;
+}
+
 async function finishApplication(from: any, chatId: number, context: any) {
   const tgId = from.id;
   await clearSession(tgId);
+
+  // Мотив и подтверждение ценностей кладём в prefs (jsonb, без миграции):
+  // костяк видит их и в карточке заявки, и потом в админке.
+  const { data: prevRow } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+  const prefs: any = (prevRow as any)?.prefs || {};
+  if (context.source) prefs.source_hint = String(context.source).slice(0, 200);
+  if (context.why) prefs.join_reason = { text: String(context.why).slice(0, 1000), at: new Date().toISOString() };
 
   await supabase.from('members').update({
     status: 'pending_review',
     first_name: context.name || from.first_name || null,
     phone: context.phone || null,
     agreed_pd: true,
+    prefs,
     ...(context.gender ? { gender: context.gender } : {}),
   }).eq('telegram_id', tgId);
 
@@ -1816,7 +2055,10 @@ async function finishApplication(from: any, chatId: number, context: any) {
         `📞 <code>${esc(context.phone || '—')}</code>\n` +
         `✈️ ${from.username ? '@' + esc(from.username) : 'ника нет'} (id ${tgId})\n` +
         (inviter ? `🔗 Пригласил: ${esc(inviter)}\n` : '') +
-        `💬 Откуда: ${esc(context.source || '—')}`,
+        `💬 Откуда: ${esc(context.source || '—')}\n` +
+        // Главное для решения: зачем человеку клуб и подтвердил ли он ценности.
+        `${prefs.values_confirmed ? '✅ Ценности подтвердил' : '⚠️ Ценности НЕ подтверждены'}\n\n` +
+        `🤔 <b>Зачем ему клуб:</b>\n<i>${esc(context.why || 'не ответил')}</i>`,
       reply_markup: kb([
         [
           { text: '✅ Принять', callback_data: `approve_${tgId}` },
@@ -2158,7 +2400,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_)/;
+      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -2250,6 +2492,343 @@ export default async function handler(req: any, res: any) {
             });
           }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      /* ═══════════════════ РЕПУТАЦИЯ: взгляд организатора ═══════════════════
+       * Закрытый раздел. Участник своих красных флажков не видит и видеть не
+       * должен — иначе опрос круга мгновенно превращается в выяснение
+       * отношений, и честных ответов больше не будет.
+       */
+      if (data === 'rephome' || data.startsWith('repev_') || data.startsWith('repman_')
+        || data.startsWith('repo_') || data.startsWith('repg_') || data.startsWith('repw_')
+        || data.startsWith('rept_') || data.startsWith('reptt_')) {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Раздел для организаторов и костяка', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const core = await isCore(tgId);
+
+        // Список событий: костяк видит все, организатор — только свои.
+        if (data === 'rephome') {
+          let q = supabase.from('events').select('id,title,date,deputy_id').order('date', { ascending: false }).limit(10);
+          if (!core) q = q.eq('deputy_id', tgId);
+          const { data: evs } = await q;
+          if (!(evs || []).length) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🧭 Пока нет событий, по которым есть состав.' });
+            return res.status(200).json({ ok: true });
+          }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🧭 <b>Репутация круга</b>\n\nВыбери событие — покажу состав с тем, что клуб знает о каждом.\n\n' +
+              '<i>Это основания для разговора, а не приговор. Решение о допуске всегда за человеком.</i>',
+            reply_markup: kb((evs || []).map((e: any) => [{ text: `${e.title} · ${e.date}`.slice(0, 60), callback_data: `repev_${e.id}` }])),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Состав события с уровнями.
+        if (data.startsWith('repev_')) {
+          const evId = data.slice('repev_'.length);
+          const { data: ev } = await supabase.from('events').select('id,title,deputy_id').eq('id', evId).maybeSingle();
+          if (!core && Number((ev as any)?.deputy_id) !== tgId) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Это не твоё событие.' });
+            return res.status(200).json({ ok: true });
+          }
+          const roster = await eventRoster(evId);
+          if (!roster.length) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: 'В составе пока никого.' });
+            return res.status(200).json({ ok: true });
+          }
+          await setSession(tgId, 'rep', { evId });
+          const sums = await repLoad(roster.map((r) => r.id));
+          const lines = roster.slice(0, 30).map((p) => {
+            const s = sums.get(p.id)!;
+            return `${esc(p.name)} — ${repLine(s)}`;
+          });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `🧭 <b>${esc((ev as any)?.title || 'Событие')}</b> — состав ${roster.length}\n\n${lines.join('\n')}\n\n` +
+              (roster.length > 10 ? '⚠️ Больше 10 человек — по правилу клуба нужны минимум ДВА помощника («сержанты»).\n\n' : '') +
+              'Открой человека, чтобы увидеть основания и отметить своё.',
+            reply_markup: kb([
+              ...roster.slice(0, 30).map((p) => {
+                const s = sums.get(p.id)!;
+                return [{ text: `${REP_LEVEL[s.level].emoji} ${p.name}`.slice(0, 60), callback_data: `repman_${p.id}` }];
+              }),
+              ...(roster.length > 10 ? [[{ text: '🎖 Назначить помощников', callback_data: `staff_${evId}` }]] : []),
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Карточка человека.
+        if (data.startsWith('repman_')) {
+          const subj = Number(data.slice('repman_'.length));
+          const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', subj).maybeSingle();
+          const sums = await repLoad([subj]);
+          const name = String((m as any)?.first_name || (m as any)?.username || `id${subj}`);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: repCard(name, sums.get(subj)!),
+            reply_markup: kb([
+              [{ text: '⚠️ Отметить проблему', callback_data: `repo_${subj}` }],
+              [{ text: '👍 Отметить вклад', callback_data: `repg_${subj}` }],
+              [{ text: '🚬 Привычки и рост', callback_data: `rept_${subj}` }],
+              [{ text: '⬅️ К составу', callback_data: `repev_${((await getSession(tgId))?.context?.evId) || ''}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Меню сигналов: организатор отвечает за свои слова, поэтому его
+        // сигнал сразу «подтверждённый» (см. правило двух голосов).
+        if (data.startsWith('repo_') || data.startsWith('repg_')) {
+          const bad = data.startsWith('repo_');
+          const subj = Number(data.slice(5));
+          const kinds = Object.entries(REP_SIGNALS).filter(([, d]) => (bad ? d.polarity < 0 : d.polarity > 0));
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: bad
+              ? '⚠️ Что именно произошло? Отмечай только то, чему ты был свидетелем или что разбирал сам.'
+              : '👍 За что отметить человека?',
+            reply_markup: kb([
+              ...kinds.map(([k, d]) => [{ text: `${d.emoji} ${d.label}`.slice(0, 60), callback_data: `repw_${subj}_${k}` }]),
+              [{ text: '⬅️ Назад', callback_data: `repman_${subj}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('repw_')) {
+          const rest = data.slice('repw_'.length);
+          const subj = Number(rest.slice(0, rest.indexOf('_')));
+          const kind = rest.slice(rest.indexOf('_') + 1);
+          const evId = (await getSession(tgId))?.context?.evId || null;
+          const ok = await repAdd({ subjectId: subj, kind, authorId: tgId, eventId: evId, source: core ? 'core' : 'organizer' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: ok
+              ? `Записал: ${esc(REP_SIGNALS[kind]?.label || kind)}.\n\n<i>Человеку это не показывается. Красное собирается в основания для разговора, а не в автоматический бан.</i>`
+              : 'Не получилось записать.',
+            reply_markup: kb([[{ text: '⬅️ К человеку', callback_data: `repman_${subj}` }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        // Привычки и рост: перевод в «перерос» — это плюс, а не метка.
+        if (data.startsWith('rept_')) {
+          const subj = Number(data.slice('rept_'.length));
+          const { data: tr } = await supabase.from('member_traits').select('trait,state').eq('subject_id', subj);
+          const cur = new Map((tr || []).map((t: any) => [String(t.trait), String(t.state)]));
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🚬 <b>С чем человек зашёл и что перерос</b>\n\n' +
+              'Это не наказание: курит — значит организатор знает, где будет курилка. ' +
+              'Перевёл в «перерос» — клуб фиксирует рост, и человек получает за это плюс.\n\n' +
+              'Тап по пункту переключает: нет → есть → перерос → нет.',
+            reply_markup: kb([
+              ...Object.entries(REP_TRAITS).map(([k, d]) => {
+                const st = cur.get(k);
+                const mark = st === 'active' ? '✅' : st === 'past' ? '📈' : '▫️';
+                const next = st === 'active' ? 'p' : st === 'past' ? 'x' : 'a';
+                return [{ text: `${mark} ${d.emoji} ${st === 'past' ? d.past : d.label}`.slice(0, 60), callback_data: `reptt_${subj}_${k}_${next}` }];
+              }),
+              [{ text: '⬅️ Назад', callback_data: `repman_${subj}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('reptt_')) {
+          const p = data.slice('reptt_'.length).split('_');
+          const next = p.pop() as string;
+          const subj = Number(p.shift());
+          const trait = p.join('_');
+          if (REP_TRAITS[trait]) {
+            if (next === 'x') {
+              await supabase.from('member_traits').delete().eq('subject_id', subj).eq('trait', trait);
+            } else {
+              const state = next === 'p' ? 'past' : 'active';
+              await supabase.from('member_traits').upsert(
+                { subject_id: subj, trait, state, set_by: tgId, updated_at: new Date().toISOString() },
+                { onConflict: 'subject_id,trait' },
+              );
+              // Перерос — фиксируем ростом в репутации: ради этого всё и затевалось.
+              if (state === 'past') await repAdd({ subjectId: subj, kind: 'growth', authorId: tgId, source: 'organizer', note: REP_TRAITS[trait].past });
+            }
+          }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', text: 'Отметил.',
+            reply_markup: kb([[{ text: '🚬 Ещё привычки', callback_data: `rept_${subj}` }], [{ text: '⬅️ К человеку', callback_data: `repman_${subj}` }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /* ══════════════════ ОПРОС КРУГА (анонимный, участнику) ══════════════════
+       * Приходит на следующий день после события. Человек отмечает ТОЛЬКО тех,
+       * с кем реально пересекался. Тот, о ком отметили, об этом не узнаёт и не
+       * узнаёт автора — иначе честной обратной связи не будет вообще.
+       */
+      if (data.startsWith('rep_') || data.startsWith('repp_') || data.startsWith('repf_') || data.startsWith('repv_')) {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+
+        if (data.startsWith('rep_')) {
+          const evId = data.slice('rep_'.length);
+          const roster = await eventRoster(evId);
+          if (!roster.some((p) => p.id === tgId)) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Опрос доступен тем, кто был на событии.' });
+            return res.status(200).json({ ok: true });
+          }
+          await setSession(tgId, 'repsurvey', { evId });
+          const others = roster.filter((p) => p.id !== tgId).slice(0, 25);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🤝 <b>Круг после события</b>\n\n' +
+              'Отметь тех, с кем реально пересекался. Это <b>анонимно</b>: ни имя автора, ни сам факт отметки человеку не показываются — их видят только организатор и костяк.\n\n' +
+              'Отмечай факты, а не эмоции: то, что видел сам.',
+            reply_markup: kb([
+              ...others.map((p) => [{ text: p.name.slice(0, 60), callback_data: `repp_${p.id}` }]),
+              [{ text: '✅ Всё, спасибо', callback_data: 'home' }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('repp_')) {
+          const subj = Number(data.slice('repp_'.length));
+          const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', subj).maybeSingle();
+          const name = String((m as any)?.first_name || (m as any)?.username || 'участник');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `<b>${esc(name)}</b> — как прошло с ним?`,
+            reply_markup: kb([
+              [{ text: '👍 Хорошо, с ним хочется снова', callback_data: `repv_${subj}_peer_good` }],
+              [{ text: '🤝 Помогал, вывозил на себе', callback_data: `repv_${subj}_helped` }],
+              [{ text: '🕊 Погасил конфликт', callback_data: `repv_${subj}_calm_conflict` }],
+              [{ text: '🚩 Была проблема', callback_data: `repf_${subj}` }],
+              [{ text: '⬅️ К списку', callback_data: `rep_${(await getSession(tgId))?.context?.evId || ''}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('repf_')) {
+          const subj = Number(data.slice('repf_'.length));
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🚩 Что именно? Отмечай только то, что видел сам.\n\n' +
+              '<i>Один голос никого не «закрывает»: чтобы это стало красным флажком, нужно совпадение с другими или подтверждение организатора.</i>',
+            reply_markup: kb([
+              ...Object.entries(REP_SIGNALS).filter(([, d]) => d.polarity < 0 && d.peer)
+                .map(([k, d]) => [{ text: `${d.emoji} ${d.label}`.slice(0, 60), callback_data: `repv_${subj}_${k}` }]),
+              [{ text: '⬅️ Назад', callback_data: `repp_${subj}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('repv_')) {
+          const rest = data.slice('repv_'.length);
+          const subj = Number(rest.slice(0, rest.indexOf('_')));
+          const kind = rest.slice(rest.indexOf('_') + 1);
+          const sess = await getSession(tgId);
+          const evId = sess?.context?.evId || null;
+          const roster = evId ? await eventRoster(evId) : [];
+          // Оба — и автор, и тот, о ком речь — должны быть в составе события.
+          if (!roster.some((p) => p.id === tgId) || !roster.some((p) => p.id === subj)) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Отметить можно только тех, с кем был на одном событии.' });
+            return res.status(200).json({ ok: true });
+          }
+          const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', evId).maybeSingle();
+          const source = (await isCore(tgId)) ? 'core' : Number((ev as any)?.deputy_id) === tgId ? 'organizer' : 'peer';
+          const ok = await repAdd({ subjectId: subj, kind, authorId: tgId, eventId: evId, source });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: ok ? 'Записал, анонимно. Спасибо — это то, что держит круг здоровым.' : 'Не получилось записать.',
+            reply_markup: kb([[{ text: '⬅️ К списку', callback_data: `rep_${evId || ''}` }], [{ text: '✅ Всё', callback_data: 'home' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /* ═══════════ ПОМОЩНИКИ ОРГАНИЗАТОРА («сержанты») ═══════════
+       * Правило клуба: событие больше чем на 10 человек не ведёт один человек.
+       * У организатора минимум двое помощников — на них координация, деньги и
+       * безопасность. Иначе организатор физически не видит весь круг: именно
+       * так на Нароче потерялись и расходы, и явка, и разбитый термос.
+       */
+      if (data.startsWith('staff_') || data.startsWith('stf_')) {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только организатор и костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const core = await isCore(tgId);
+
+        if (data.startsWith('staff_')) {
+          const evId = data.slice('staff_'.length);
+          const { data: ev } = await supabase.from('events').select('id,title,staff,deputy_id').eq('id', evId).maybeSingle();
+          if (!ev || (!core && Number((ev as any).deputy_id) !== tgId)) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Это не твоё событие.' });
+            return res.status(200).json({ ok: true });
+          }
+          await setSession(tgId, 'rep', { evId });
+          const staff: any[] = Array.isArray((ev as any).staff) ? (ev as any).staff : [];
+          const roster = await eventRoster(evId);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `🎖 <b>Помощники: ${esc((ev as any).title)}</b>\n\n` +
+              `Назначено: <b>${staff.length}</b> из 2 минимально нужных при составе больше 10 человек.\n` +
+              (staff.length ? staff.map((s: any) => `• ${esc(s.name || s.tgId)}`).join('\n') + '\n' : '') +
+              '\nПомощник держит свою часть круга: перекличка, деньги, безопасность, тайминг. Тап по имени — назначить или снять.',
+            reply_markup: kb([
+              ...roster.slice(0, 30).map((p) => [{
+                text: `${staff.some((s: any) => Number(s.tgId) === p.id) ? '🎖' : '▫️'} ${p.name}`.slice(0, 60),
+                callback_data: `stf_${p.id}`,
+              }]),
+              [{ text: '⬅️ К составу', callback_data: `repev_${evId}` }],
+            ]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        const subj = Number(data.slice('stf_'.length));
+        const evId = (await getSession(tgId))?.context?.evId;
+        if (!evId) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Событие потерялось — открой список помощников заново.' });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: ev } = await supabase.from('events').select('id,title,staff,deputy_id').eq('id', evId).maybeSingle();
+        if (!ev || (!core && Number((ev as any).deputy_id) !== tgId)) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Это не твоё событие.' });
+          return res.status(200).json({ ok: true });
+        }
+        const staff: any[] = Array.isArray((ev as any).staff) ? (ev as any).staff : [];
+        const has = staff.some((s: any) => Number(s.tgId) === subj);
+        const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', subj).maybeSingle();
+        const name = String((m as any)?.first_name || (m as any)?.username || `id${subj}`);
+        const nextStaff = has ? staff.filter((s: any) => Number(s.tgId) !== subj) : [...staff, { tgId: subj, name }];
+        await supabase.from('events').update({ staff: nextStaff }).eq('id', evId);
+        if (!has) {
+          // Человек должен узнать о роли от бота, а не в чате постфактум.
+          await tg('sendMessage', {
+            chat_id: subj, parse_mode: 'HTML',
+            text: `🎖 Тебя назначили <b>помощником организатора</b> на «${esc((ev as any).title)}».\n\n` +
+              'Что это значит: держишь свою часть круга — перекличка, тайминг, деньги, безопасность. ' +
+              'Организатор один физически не видит всех, поэтому на больших выездах их трое.',
+          });
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `${has ? 'Снял' : 'Назначил'}: ${esc(name)}. Всего помощников: <b>${nextStaff.length}</b>.` +
+            (nextStaff.length < 2 ? '\n\n⚠️ При составе больше 10 человек нужно минимум двое.' : ''),
+          reply_markup: kb([[{ text: '🎖 Список помощников', callback_data: `staff_${evId}` }]]),
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -2472,6 +3051,81 @@ export default async function handler(req: any, res: any) {
         await finishApplication(cq.from, chatId, { ...(s?.context || {}), gender });
         return res.status(200).json({ ok: true });
       }
+      /**
+       * Подтверждение ценностей. Два контекста:
+       *  • в заявке (state=apply_values) — подтвердил и идём к последнему шагу;
+       *  • у действующего члена — просто фиксируем дату подтверждения.
+       * Пишем в prefs (jsonb) — миграция не нужна, а костяк видит это в
+       * админке отдельным бейджем.
+       */
+      if (data === 'valok') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        const { data: mrow } = await supabase.from('members').select('prefs').eq('telegram_id', tgId).maybeSingle();
+        const prefs: any = (mrow as any)?.prefs || {};
+        prefs.values_confirmed = { at: new Date().toISOString(), version: VALUES_VERSION };
+        await supabase.from('members').update({ prefs }).eq('telegram_id', tgId);
+
+        const s2 = await getSession(tgId);
+        if (s2 && s2.state === 'apply_values') {
+          // Последний шаг заявки — пол (расселение по палаткам и статистика).
+          await setSession(tgId, 'apply_gender', s2.context);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: 'Принято ✅\n\nИ совсем последнее — укажи пол. Нужно для логистики (расселение по палаткам) и статистики события.',
+            reply_markup: kb([[
+              { text: '👨 Мужской', callback_data: 'applyg_male' },
+              { text: '👩 Женский', callback_data: 'applyg_female' },
+            ]]),
+          });
+        } else {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '✅ Записал: ты разделяешь ценности клуба. Переспросим через год — не потому что не верим, а потому что люди меняются.',
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /** «Зачем мне клуб» от действующего члена — свободный текст. */
+      if (data === 'whyme') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'join_why', {});
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '✍️ Напиши следующим сообщением: <b>зачем тебе клуб?</b>\n\nЧто ищешь и что готов приносить кругу. Это увидит только костяк.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * Костяк: разослать вопрос тем, кого приняли ДО появления этого шага.
+       * Таких в базе больше сорока — без разовой досылки вопрос так и остался
+       * бы только у новичков.
+       */
+      if (data === 'askwhy_all') {
+        if (!(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Рассылаю…' });
+        const { data: all } = await supabase
+          .from('members').select('telegram_id,prefs,bot_active').eq('status', 'approved');
+        const targets = (all || []).filter((m: any) =>
+          Number(m.telegram_id) > 0 && m.bot_active !== false && !(m.prefs || {}).join_reason);
+        let sent = 0;
+        for (const m of targets.slice(0, 60)) {
+          if (await askWhyAndValues(Number((m as any).telegram_id))) sent++;
+        }
+        // Честный отчёт: сколько РЕАЛЬНО доставлено, а не сколько нашли в базе.
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `🤝 Вопрос «зачем мне клуб» доставлен: <b>${sent}</b> из ${targets.length}.` +
+            (sent < targets.length ? '\n\nОстальные закрыли личку боту — их ответы придётся собрать вживую.' : ''),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       // Согласие на фото/видео — фиксируем в members.prefs.media_consent (закон РБ).
       if (data === 'mconsent_yes' || data === 'mconsent_no') {
         const agreed = data === 'mconsent_yes';
@@ -2517,7 +3171,7 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
           }
         } else {
-          await sendWelcome(chatId, openBtn, await isCore(tgId));
+          await sendWelcome(chatId, openBtn, await isCore(tgId), await isOrganizer(tgId));
         }
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(tgId)) });
         try { await askMediaConsent(chatId, tgId); } catch { /* no-op */ }
@@ -2776,6 +3430,15 @@ export default async function handler(req: any, res: any) {
               reply_markup: rows.length > 1 ? kb(rows) : kb([[openBtn]]),
             });
             await tg('sendMessage', { chat_id: targetId, text: 'Меню 👇', reply_markup: mainMenu() });
+            /**
+             * Если человек попал в клуб мимо анкеты (реф-ссылка, ручное
+             * добавление) — задаём главный вопрос сейчас. Иначе в базе снова
+             * появится член клуба, про которого никто не знает, зачем он здесь.
+             */
+            const { data: prow } = await supabase.from('members').select('prefs').eq('telegram_id', targetId).maybeSingle();
+            if (!((prow as any)?.prefs || {}).join_reason) {
+              try { await askWhyAndValues(targetId); } catch { /* no-op */ }
+            }
           } else {
             await tg('sendMessage', {
               chat_id: targetId, parse_mode: 'HTML',
@@ -6358,15 +7021,58 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'apply_source') {
-          // Ещё один шаг — пол (для статистики М/Ж и расселения по палаткам).
-          await setSession(msg.from.id, 'apply_gender', { ...sess.context, source: text.slice(0, 200) });
+          /**
+           * Главный вопрос анкеты — ЗАЧЕМ человеку клуб. Раньше костяк решал
+           * по имени, телефону и строчке «откуда узнал»: мотив выяснялся уже
+           * на выезде, там же, где и цена ошибки. Ответ идёт в карточку заявки
+           * и остаётся в профиле — по нему человека узнают, а не по анкете.
+           */
+          await setSession(msg.from.id, 'apply_why', { ...sess.context, source: text.slice(0, 200) });
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: 'И совсем последнее — укажи пол. Нужно для логистики (расселение по палаткам) и статистики события.',
-            reply_markup: kb([[
-              { text: '👨 Мужской', callback_data: 'applyg_male' },
-              { text: '👩 Женский', callback_data: 'applyg_female' },
-            ]]),
+            text: '🤔 <b>Зачем тебе клуб?</b>\n\n' +
+              'Напиши своими словами: что ищешь, что готов приносить кругу. ' +
+              'Ответ прочитает только костяк — от него зависит решение по заявке.',
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * Ответ «зачем мне клуб» — и сразу за ним подтверждение ценностей.
+         * Ценности подтверждаются ДО решения костяка: человек входит, уже
+         * сказав «да» вслух, а не узнаёт правила на месте.
+         */
+        if (sess && sess.state === 'apply_why') {
+          await setSession(msg.from.id, 'apply_values', { ...sess.context, why: text.slice(0, 1000) });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: VALUES_TEXT,
+            reply_markup: kb([[{ text: '✅ Разделяю эти ценности', callback_data: 'valok' }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * Тот же вопрос, но заданный уже действующему члену клуба (кого
+         * приняли раньше, чем вопрос появился, — таких 40+). Отдельное
+         * состояние, потому что заявки здесь нет: только дописываем профиль.
+         */
+        if (sess && sess.state === 'join_why') {
+          const why = text.slice(0, 1000);
+          const { data: mrow } = await supabase.from('members').select('prefs,first_name,username').eq('telegram_id', msg.from.id).maybeSingle();
+          const prefs: any = (mrow as any)?.prefs || {};
+          prefs.join_reason = { text: why, at: new Date().toISOString() };
+          await supabase.from('members').update({ prefs }).eq('telegram_id', msg.from.id);
+          await clearSession(msg.from.id);
+          const who = String((mrow as any)?.first_name || (mrow as any)?.username || msg.from.id);
+          await notifyCore(`🤝 <b>${esc(who)}</b> ответил, зачем ему клуб:\n\n<i>${esc(why)}</i>`);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: 'Спасибо. Осталось подтвердить главное 👇',
+          });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', text: VALUES_TEXT,
+            reply_markup: kb([[{ text: '✅ Разделяю эти ценности', callback_data: 'valok' }]]),
           });
           return res.status(200).json({ ok: true });
         }
@@ -7267,7 +7973,7 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         if (text === '🏠 Главная') {
-          await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
+          await sendWelcome(chatId, openBtn, await isCore(msg.from.id), await isOrganizer(msg.from.id));
           return res.status(200).json({ ok: true });
         }
         if (text === '🗓 Мои события') {
@@ -7466,7 +8172,7 @@ export default async function handler(req: any, res: any) {
           }
         }
         // Приветствие + открытые события кнопками (со сроком до старта).
-        await sendWelcome(chatId, openBtn, await isCore(msg.from.id));
+        await sendWelcome(chatId, openBtn, await isCore(msg.from.id), await isOrganizer(msg.from.id));
         await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(msg.from.id)) });
         // Догоняем вернувшегося: анкета/задачи/голосования, где нет его реакции.
         await sendCatchup(chatId, msg.from.id);

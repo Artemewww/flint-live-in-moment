@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ShieldCheck, Ban, Heart, Leaf, Users, Coins, Camera, ListChecks, CheckCircle2, Lock, Compass } from 'lucide-react';
 import { CommunityEvent } from '../types';
 import { getInitData } from '../telegram';
@@ -13,11 +13,21 @@ import { getInitData } from '../telegram';
  * привязана к конкретному событию → её подтверждаем при каждой записи.
  */
 
-const RULES_VERSION = 'v2'; // v2 — добавлено правило о программе события
-const RULES_LS_KEY = `flint_rules_accepted_${RULES_VERSION}`;
+/**
+ * Версия у КАЖДОГО правила своя. Раньше версия была одна на весь кодекс, и
+ * добавление одного пункта (после Нарочи их добавилось два) заставляло
+ * человека заново прокликивать все восемь — люди бросали запись на середине.
+ * Теперь при изменении правила поднимается только его `v`, и участник
+ * подтверждает ровно то, что изменилось.
+ */
+const RULES_VERSION = 'v3'; // общая метка «когда в последний раз трогали кодекс»
+const RULES_MAP_KEY = 'flint_rules_map_v1';
+const LEGACY_KEYS = ['flint_rules_accepted_v1', 'flint_rules_accepted_v2'];
 
 type Step = {
   key: string;
+  /** Версия ЭТОГО правила. Поднял — переспросим только его. */
+  v?: number;
   icon: React.ReactNode;
   tag: string;
   title: string;
@@ -31,6 +41,7 @@ function clubRuleSteps(): Step[] {
   return [
     {
       key: 'values',
+      v: 1,
       icon: <Heart className="w-5 h-5" />,
       tag: 'Ценности',
       title: 'Философия круга',
@@ -44,6 +55,7 @@ function clubRuleSteps(): Step[] {
     },
     {
       key: 'sober',
+      v: 1,
       icon: <Ban className="w-5 h-5" />,
       tag: 'Трезвость',
       title: '100% трезвость — без исключений',
@@ -57,6 +69,7 @@ function clubRuleSteps(): Step[] {
     },
     {
       key: 'respect',
+      v: 1,
       icon: <Users className="w-5 h-5" />,
       tag: 'Уважение',
       title: 'Уважение, равенство, приватность',
@@ -69,6 +82,7 @@ function clubRuleSteps(): Step[] {
     },
     {
       key: 'safety',
+      v: 1,
       icon: <Leaf className="w-5 h-5" />,
       tag: 'Ответственность',
       title: 'Безопасность, ответственность, природа',
@@ -87,6 +101,7 @@ function clubRuleSteps(): Step[] {
        * «Правил участника» (Правила_участника.html в корне проекта).
        */
       key: 'program-rules',
+      v: 1,
       icon: <Compass className="w-5 h-5" />,
       tag: 'Программа',
       title: 'Программа события — не нарушаем',
@@ -106,6 +121,7 @@ function clubRuleSteps(): Step[] {
        * сломанное возмещает сломавший, без участия организатора.
        */
       key: 'buddy',
+      v: 1,
       icon: <Users className="w-5 h-5" />,
       tag: 'Бади',
       title: 'Бади и бережное отношение к чужому',
@@ -119,6 +135,7 @@ function clubRuleSteps(): Step[] {
     },
     {
       key: 'guests-money',
+      v: 1,
       icon: <Coins className="w-5 h-5" />,
       tag: 'Гости и деньги',
       title: 'Гости и финансы',
@@ -132,6 +149,7 @@ function clubRuleSteps(): Step[] {
     },
     {
       key: 'media',
+      v: 1,
       icon: <Camera className="w-5 h-5" />,
       tag: 'Фото/видео',
       title: 'Съёмка и публикация',
@@ -173,15 +191,56 @@ export default function RegistrationGate({
   onAccept: () => void;
   onClose: () => void;
 }) {
-  // Правила уже приняты в этой версии? Тогда сразу к программе события.
-  const rulesAlreadyAccepted = useMemo(() => {
-    try { return localStorage.getItem(RULES_LS_KEY) === '1'; } catch { return false; }
+  /**
+   * Что человек уже принял: {ключ правила: версия}. Источников два — быстрый
+   * localStorage (мгновенный рендер) и сервер (переживает смену устройства).
+   * Берём максимум по каждому правилу: принятое нигде не «отменяется».
+   */
+  const [accepted, setAccepted] = useState<Record<string, number>>(() => {
+    try {
+      const raw = localStorage.getItem(RULES_MAP_KEY);
+      if (raw) return JSON.parse(raw) || {};
+      // Кто принимал кодекс до перехода на поверсионный учёт — принял его
+      // целиком в тогдашнем виде. Не гоним таких по кругу заново.
+      if (LEGACY_KEYS.some((k) => localStorage.getItem(k) === '1')) {
+        const seed: Record<string, number> = {};
+        for (const st of clubRuleSteps()) seed[st.key] = st.v || 1;
+        return seed;
+      }
+    } catch { /* приватный режим — просто спросим заново */ }
+    return {};
+  });
+
+  // Догружаем принятое с сервера: человек мог принимать правила с другого
+  // устройства, и гонять его по восьми экранам ещё раз — грубо.
+  useEffect(() => {
+    const initData = getInitData();
+    if (!initData) return;
+    let alive = true;
+    fetch('/api/profile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'rules_state', initData }),
+    })
+      .then((r) => r.json())
+      .then((j) => {
+        if (!alive || !j?.ok || !j.map) return;
+        setAccepted((cur) => {
+          const next = { ...cur };
+          for (const [k, v] of Object.entries(j.map as Record<string, number>)) {
+            next[k] = Math.max(Number(next[k] || 0), Number(v || 0));
+          }
+          return next;
+        });
+      })
+      .catch(() => { /* офлайн — остаёмся на локальном списке */ });
+    return () => { alive = false; };
   }, []);
 
   const steps = useMemo(() => {
-    const rules = rulesAlreadyAccepted ? [] : clubRuleSteps();
+    // Показываем только новое и изменившееся.
+    const rules = clubRuleSteps().filter((st) => (accepted[st.key] || 0) < (st.v || 1));
     return [...rules, programStep(event)];
-  }, [event, rulesAlreadyAccepted]);
+  }, [event, accepted]);
 
   const [idx, setIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -190,7 +249,9 @@ export default function RegistrationGate({
 
   const next = () => {
     if (isLast) {
-      try { localStorage.setItem(RULES_LS_KEY, '1'); } catch { /* noop */ }
+      const map: Record<string, number> = { ...accepted };
+      for (const st of clubRuleSteps()) map[st.key] = st.v || 1;
+      try { localStorage.setItem(RULES_MAP_KEY, JSON.stringify(map)); } catch { /* noop */ }
       // Дублируем факт принятия НА СЕРВЕР. localStorage — только быстрый путь:
       // он привязан к браузеру, теряется при смене устройства и невидим
       // костяку, а принятие правил — организационно значимый факт, который
@@ -200,7 +261,7 @@ export default function RegistrationGate({
         fetch('/api/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'accept_rules', initData, version: RULES_VERSION }),
+          body: JSON.stringify({ action: 'accept_rules', initData, version: RULES_VERSION, map }),
         }).catch(() => { /* не блокируем запись на событие */ });
       }
       onAccept();

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Bell, Trophy, Star, Flame, Zap, Target, Award, Users, Copy, Check, AlertTriangle,
   Calendar, MapPin, CreditCard, Truck, Package, UtensilsCrossed, Settings as SettingsIcon,
-  Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply,
+  Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply, BookOpen,
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic } from '../telegram';
 import EquipmentPanel from './EquipmentPanel';
@@ -19,7 +19,7 @@ import CampingChecklist from './CampingChecklist';
  * заметно медленнее). Настройки сохраняются через ?action=save_settings.
  */
 
-type Tab = 'overview' | 'events' | 'gear' | 'settings';
+type Tab = 'overview' | 'events' | 'gear' | 'kb' | 'settings';
 
 const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 function fmtDate(iso?: string | null): string {
@@ -58,6 +58,11 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  // База знаний: грузим ТОЛЬКО по открытию вкладки и ТОЛЬКО с сервера.
+  // Держать методики в бандле нельзя — фронт скачивает кто угодно, а раздел
+  // закрытый: доступ проверяется по initData на сервере (api/profile ?action=kb).
+  const [kbSections, setKbSections] = useState<Array<{ key: string; title: string; body: string }> | null>(null);
+  const [kbError, setKbError] = useState('');
 
   /** Ответ организаторам прямо из ленты уведомлений. */
   const [msgText, setMsgText] = useState('');
@@ -187,10 +192,28 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
     try { await navigator.clipboard.writeText(p.refLink); setCopied(true); haptic('success'); setTimeout(() => setCopied(false), 1500); } catch { /* no-op */ }
   };
 
+  // Кто ведёт события — тот и видит базу знаний. Участнику вкладка не
+  // показывается вовсе, а сервер всё равно проверяет права ещё раз.
+  const canLead = !!(p?.isCore || p?.role === 'organizer' || p?.role === 'owner');
+
+  useEffect(() => {
+    if (tab !== 'kb' || kbSections || kbError) return;
+    const initData = getInitData();
+    if (!initData) { setKbError('База знаний открывается только внутри Telegram.'); return; }
+    fetch('/api/profile', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'kb', initData }),
+    })
+      .then((r) => r.json())
+      .then((j) => (j.ok ? setKbSections(j.sections || []) : setKbError(j.error || 'Раздел закрыт')))
+      .catch(() => setKbError('Не удалось загрузить базу знаний.'));
+  }, [tab, kbSections, kbError]);
+
   const TABS: { key: Tab; label: string; icon: any }[] = [
     { key: 'overview', label: 'Обзор', icon: Trophy },
     { key: 'events', label: 'События', icon: Calendar },
     { key: 'gear', label: 'Снаряжение', icon: Package },
+    ...(canLead ? [{ key: 'kb' as Tab, label: 'База знаний', icon: BookOpen }] : []),
     { key: 'settings', label: 'Настройки', icon: SettingsIcon },
   ];
 
@@ -284,6 +307,42 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
            * потом чек-лист. Раньше первым шёл чек-лист, и люди везли по три
            * одинаковых котелка, не зная, что вещь уже едет.
            */}
+          {/**
+           * БАЗА ЗНАНИЙ — закрытый раздел для тех, кто ведёт события.
+           * Владелец (19.08): «база знаний открывается только организатору и
+           * костяку». Раньше методики жили только в боте, и организатор читал
+           * их в переписке, а в приложении их не было вовсе.
+           * Разметка приходит с сервера в телеграмном HTML (<b>/<i>) — это наш
+           * собственный текст из кода, не пользовательский ввод.
+           */}
+          {tab === 'kb' && (
+            <div className="space-y-4">
+              <div className="bg-brand/10 border border-brand/25 rounded-2xl p-3">
+                <h3 className="text-sm font-black">📚 База знаний</h3>
+                <p className="text-[11px] text-white/60 leading-snug mt-1">
+                  Стандарты клуба: как вести событие одинаково хорошо у любого ведущего.
+                  Раздел закрыт — его видят только костяк и организаторы.
+                </p>
+              </div>
+              {kbError && <p className="text-[11px] text-rose-300">{kbError}</p>}
+              {!kbSections && !kbError && (
+                <p className="text-white/40 text-xs text-center py-8">Загружаю…</p>
+              )}
+              {(kbSections || []).map((sec) => (
+                <details key={sec.key} className="bg-white/[0.03] border border-white/10 rounded-2xl p-3 group">
+                  <summary className="cursor-pointer text-sm font-bold list-none flex items-center justify-between gap-2">
+                    <span>{sec.title}</span>
+                    <span className="text-white/30 text-[10px] font-mono group-open:hidden">открыть</span>
+                  </summary>
+                  <div
+                    className="text-[12px] text-white/75 leading-relaxed mt-3 space-y-1 [&_b]:text-white [&_i]:text-white/55"
+                    dangerouslySetInnerHTML={{ __html: sec.body.replace(/\n/g, '<br/>') }}
+                  />
+                </details>
+              ))}
+            </div>
+          )}
+
           {tab === 'gear' && (
             <div className="space-y-5">
               <section className="space-y-2">
