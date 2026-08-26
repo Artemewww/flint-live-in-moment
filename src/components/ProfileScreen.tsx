@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   X, Bell, Trophy, Star, Flame, Zap, Target, Award, Users, Copy, Check, AlertTriangle,
   Calendar, MapPin, CreditCard, Truck, Package, UtensilsCrossed, Settings as SettingsIcon,
-  Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply, BookOpen,
+  Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply, BookOpen, ListTodo,
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic } from '../telegram';
 import EquipmentPanel from './EquipmentPanel';
@@ -50,6 +50,73 @@ function fmtWhen(at?: string | null): string {
 
 const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: 'Вегетарианец', vegan: 'Веган' };
 
+
+/**
+ * Имущество клуба и складчина. Реестр живёт одной JSON-записью в app_config и
+ * до сих пор был виден ТОЛЬКО костяку в боте: участник не знал, что мангал уже
+ * есть у клуба, а вещь, на которую он скидывался, вообще нигде не отмечена.
+ * Читаем тот же источник, что и бот (/api/equipment?action=inventory), — двух
+ * разных правд про один мангал быть не должно.
+ */
+function ClubInventoryBlock() {
+  const [items, setItems] = useState<any[] | null>(null);
+  useEffect(() => {
+    fetch('/api/equipment?action=inventory')
+      .then((r) => r.json())
+      .then((j) => setItems(Array.isArray(j?.items) ? j.items : []))
+      .catch(() => setItems([]));
+  }, []);
+
+  if (!items) return <p className="text-white/40 text-xs">Загружаю реестр…</p>;
+  if (!items.length) return <p className="text-white/40 text-xs">Реестр пуст.</p>;
+
+  const KIND: Record<string, { label: string; cls: string }> = {
+    club: { label: '🏕 клубное', cls: 'bg-brand/15 text-brand' },
+    shared: { label: '🤝 складчина', cls: 'bg-emerald-500/15 text-emerald-300' },
+    personal: { label: '👤 личное', cls: 'bg-white/10 text-white/60' },
+  };
+
+  return (
+    <div className="space-y-2">
+      {items.map((i: any) => {
+        const kind = KIND[i.kind] || KIND.club;
+        const contrib = Array.isArray(i.contributors) ? i.contributors : [];
+        return (
+          <div key={i.id} className="bg-white/[0.03] border border-white/10 rounded-xl p-3">
+            <div className="flex items-start justify-between gap-2 flex-wrap">
+              <span className="font-bold text-sm">
+                {i.title}{i.qty > 1 ? ` ×${i.qty}` : ''}
+              </span>
+              <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${kind.cls}`}>{kind.label}</span>
+            </div>
+            <div className="text-[10px] text-white/45 font-mono mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+              {i.ownerName && <span>владелец: {i.ownerName}</span>}
+              {i.returned
+                ? <span className="text-emerald-300">✅ возвращено владельцу</span>
+                : i.holderName && <span>на руках: {i.holderName}</span>}
+              {i.price && <span>{i.price} BYN{i.priceNote ? ` · ${i.priceNote}` : ''}</span>}
+            </div>
+            {/* Кто скинулся — видно поимённо: это и есть складчина, а не «общее». */}
+            {contrib.length > 0 && (
+              <div className="text-[10px] mt-1.5 flex flex-wrap gap-1.5">
+                {contrib.map((c: any, n: number) => (
+                  <span
+                    key={n}
+                    className={`px-1.5 py-0.5 rounded font-mono ${c.paid ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}
+                  >
+                    {c.paid ? '✅' : '⏳'} {c.name}{c.amount ? ` · ${c.amount} BYN` : ''}
+                  </span>
+                ))}
+              </div>
+            )}
+            {i.note && <p className="text-[10px] text-white/50 leading-snug mt-1.5">{i.note}</p>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function ProfileScreen({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
   const [tab, setTab] = useState<Tab>(initialTab || 'overview');
   // Чек-лист по умолчанию свёрнут: длинный список мешал видеть складчину.
@@ -58,6 +125,7 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
   const [data, setData] = useState<any>(null);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [taskBusy, setTaskBusy] = useState<number | null>(null);
   // База знаний: грузим ТОЛЬКО по открытию вкладки и ТОЛЬКО с сервера.
   // Держать методики в бандле нельзя — фронт скачивает кто угодно, а раздел
   // закрытый: доступ проверяется по initData на сервере (api/profile ?action=kb).
@@ -209,6 +277,27 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
       .catch(() => setKbError('Не удалось загрузить базу знаний.'));
   }, [tab, kbSections, kbError]);
 
+  /**
+   * Взять/закрыть задачу круга. После ответа перезагружаем кабинет целиком:
+   * задача могла закрыться и у другого человека, а держать два источника
+   * правды о том, кто что делает, — ровно та беда, из-за которой обещания в
+   * чате и терялись.
+   */
+  const taskAction = async (taskId: number, act: 'task_take' | 'task_done' | 'task_drop') => {
+    const initData = getInitData();
+    if (!initData) return;
+    setTaskBusy(taskId);
+    try {
+      const r = await fetch('/api/profile', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: act, initData, taskId }),
+      });
+      const j = await r.json();
+      if (j?.ok) { haptic('success'); await load(); }
+    } catch { /* сеть — просто снимаем блокировку кнопки */ }
+    setTaskBusy(null);
+  };
+
   const TABS: { key: Tab; label: string; icon: any }[] = [
     { key: 'overview', label: 'Обзор', icon: Trophy },
     { key: 'events', label: 'События', icon: Calendar },
@@ -347,7 +436,17 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
             <div className="space-y-5">
               <section className="space-y-2">
                 <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
-                  Складчина: что уже есть у круга
+                  Имущество клуба и складчина
+                </h3>
+                <p className="text-[11px] text-white/50 leading-snug">
+                  Что у клуба уже есть, у кого лежит и кто на это скидывался.
+                  Прежде чем покупать — посмотри сюда.
+                </p>
+                <ClubInventoryBlock />
+              </section>
+              <section className="space-y-2">
+                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
+                  Личное снаряжение круга
                 </h3>
                 <p className="text-[11px] text-white/50 leading-snug">
                   Своё, клубное и передачи из рук в руки. Прежде чем покупать или везти —
@@ -432,6 +531,62 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                             </span>
                           )}
                         </button>
+                      ))}
+                    </section>
+                  )}
+
+                  {/**
+                    * ЗАДАЧИ КРУГА. Бот вытаскивает обещания из чата события
+                    * («Stanislav: заказать новый термос»), но раньше они жили
+                    * только строкой в переписке и умирали там же. Здесь видно,
+                    * что взял ты, и что ещё никто не взял — с кнопками.
+                    */}
+                  {(data?.tasks || []).length > 0 && (
+                    <section className="space-y-2">
+                      <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40 flex items-center gap-1.5">
+                        <ListTodo className="w-3.5 h-3.5" /> Задачи круга
+                      </h3>
+                      {(data.tasks as any[]).map((t) => (
+                        <div
+                          key={t.id}
+                          className={`rounded-2xl border p-3 space-y-2 ${t.mine ? 'bg-brand/5 border-brand/25' : 'bg-white/5 border-white/10'}`}
+                        >
+                          <div className="text-[13px] leading-snug">{t.title}</div>
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-[9px] text-white/40 font-mono">
+                              {t.eventTitle || 'без события'}{t.mine ? ' · на тебе' : t.takenBy ? ' · занята' : ' · свободна'}
+                            </span>
+                            <div className="flex gap-1.5">
+                              {!t.mine && !t.takenBy && (
+                                <button
+                                  type="button" disabled={taskBusy === t.id}
+                                  onClick={() => taskAction(t.id, 'task_take')}
+                                  className="text-[10px] px-2.5 py-1 rounded-lg bg-brand text-black font-black uppercase border-none cursor-pointer disabled:opacity-40"
+                                >
+                                  Беру
+                                </button>
+                              )}
+                              {t.mine && (
+                                <button
+                                  type="button" disabled={taskBusy === t.id}
+                                  onClick={() => taskAction(t.id, 'task_drop')}
+                                  className="text-[10px] px-2.5 py-1 rounded-lg bg-white/10 text-white/60 font-bold uppercase border-none cursor-pointer disabled:opacity-40"
+                                >
+                                  Не смогу
+                                </button>
+                              )}
+                              {(t.mine || !t.takenBy) && (
+                                <button
+                                  type="button" disabled={taskBusy === t.id}
+                                  onClick={() => taskAction(t.id, 'task_done')}
+                                  className="text-[10px] px-2.5 py-1 rounded-lg bg-emerald-500/20 text-emerald-300 font-black uppercase border-none cursor-pointer disabled:opacity-40"
+                                >
+                                  Готово
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
                       ))}
                     </section>
                   )}

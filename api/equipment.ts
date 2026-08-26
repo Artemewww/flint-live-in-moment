@@ -60,6 +60,20 @@ export default async function handler(req: any, res: any) {
             returned: raw.returned === true,
             price: Number(raw.price) || null,
             priceNote: raw.priceNote ? String(raw.priceNote).slice(0, 60) : null,
+            /**
+             * Кто скидывался на вещь и сколько. Без этого «складчина» — просто
+             * слово: через месяц никто не помнит, чьи там деньги, и вещь по
+             * факту становится ничьей. Договорённость из чата (термос: трое по
+             * 17,6 BYN) должна лежать в реестре, а не в переписке.
+             */
+            contributors: Array.isArray(raw.contributors)
+              ? raw.contributors.slice(0, 20).map((c: any) => ({
+                  name: String(c?.name || '').slice(0, 60),
+                  amount: Number(c?.amount) || null,
+                  tgId: Number(c?.tgId) || null,
+                  paid: c?.paid === true,
+                })).filter((c: any) => c.name)
+              : [],
             note: raw.note ? String(raw.note).slice(0, 200) : null,
             updatedAt: new Date().toISOString(),
           };

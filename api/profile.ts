@@ -520,6 +520,35 @@ export default async function handler(req: any, res: any) {
         }));
       } catch { /* таблицы может не быть до миграции */ }
 
+      /**
+       * ЗАДАЧИ КРУГА. Бот вытаскивает обещания из переписки чата
+       * («Stanislav: заказать новый термос») и кладёт в tasks — но до сих пор
+       * они лежали мёртвым грузом: человек их не видел нигде, кроме одной
+       * строки в чате, которая уезжает вверх за десять минут. Отдаём:
+       *  • мои — которые я взял и не закрыл;
+       *  • свободные — по СВОИМ событиям, чтобы было что взять.
+       */
+      let tasks: any[] = [];
+      try {
+        const myEvIds = myEvents.map((e: any) => e.id).filter(Boolean);
+        const { data: tRows } = await supabase
+          .from('tasks')
+          .select('id,event_id,title,taken_by,done,created_at')
+          .or(`taken_by.eq.${user.id}${myEvIds.length ? `,event_id.in.(${myEvIds.map((x: string) => `"${x}"`).join(',')})` : ''}`)
+          .eq('done', false)
+          .order('created_at', { ascending: false })
+          .limit(40);
+        tasks = (tRows || []).map((t: any) => ({
+          id: t.id,
+          title: t.title,
+          eventId: t.event_id,
+          eventTitle: evMap[t.event_id]?.title || null,
+          mine: Number(t.taken_by) === Number(user.id),
+          takenBy: t.taken_by ? String(t.taken_by) : null,
+          createdAt: t.created_at,
+        }));
+      } catch { /* таблицы может не быть */ }
+
       const { count: referralsCount } = await supabase
         .from('members')
         .select('telegram_id', { count: 'exact', head: true })
@@ -552,6 +581,7 @@ export default async function handler(req: any, res: any) {
           signedUp: myEvents.length,
         },
         events: myEvents,
+        tasks,
         equipment: myGear || [],
         transfers,
         food,
@@ -603,6 +633,42 @@ export default async function handler(req: any, res: any) {
       const { error } = await supabase.from('members').update(patch).eq('telegram_id', user.id);
       if (error) return res.status(200).json({ ok: false, error: error.message });
       return res.status(200).json({ ok: true, saved: true });
+    }
+
+    /**
+     * === TASK: взять задачу или закрыть её ===
+     * Задача без кнопки — это просто текст: на Нарочи обещания из чата так и
+     * остались обещаниями. Брать можно только задачи по событиям, где человек
+     * записан; закрывать — только свои (или свободные, если он их и сделал).
+     */
+    if (action === 'task_take' || action === 'task_done' || action === 'task_drop') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      const taskId = Number(body.taskId);
+      if (!Number.isFinite(taskId)) return res.status(200).json({ ok: false, error: 'bad-task' });
+
+      const { data: t } = await supabase
+        .from('tasks').select('id,event_id,taken_by,done,title').eq('id', taskId).maybeSingle();
+      if (!t) return res.status(200).json({ ok: false, error: 'Задача не найдена' });
+
+      const { data: reg } = await supabase
+        .from('registrations').select('id')
+        .eq('event_id', (t as any).event_id).eq('telegram_id', user.id).neq('status', 'cancelled').maybeSingle();
+      if (!reg) return res.status(200).json({ ok: false, error: 'Это задача чужого события' });
+
+      const owner = Number((t as any).taken_by) || 0;
+      if (action === 'task_take') {
+        if (owner && owner !== user.id) return res.status(200).json({ ok: false, error: 'Задачу уже взял другой' });
+        await supabase.from('tasks').update({ taken_by: user.id }).eq('id', taskId);
+      } else if (action === 'task_drop') {
+        if (owner !== user.id) return res.status(200).json({ ok: false, error: 'Это не твоя задача' });
+        await supabase.from('tasks').update({ taken_by: null }).eq('id', taskId);
+      } else {
+        if (owner && owner !== user.id) return res.status(200).json({ ok: false, error: 'Закрыть может тот, кто взял' });
+        await supabase.from('tasks').update({ done: true, taken_by: owner || user.id }).eq('id', taskId);
+      }
+      return res.status(200).json({ ok: true });
     }
 
     /**

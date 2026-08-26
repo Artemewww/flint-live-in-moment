@@ -344,10 +344,17 @@ async function saveAndBroadcastExpense(evId: string, from: any, title: string, a
  */
 const DIGEST_EVERY_MS = 60 * 60 * 1000;
 
-async function maybeDigestChat(chatId: number, force = false): Promise<string | null> {
+async function maybeDigestChat(chatId: number, force = false, daysBack = 0): Promise<string | null> {
   const cursorKey = `chatdigest:${chatId}`;
   const { data: cur } = await supabase.from('app_config').select('value').eq('key', cursorKey).maybeSingle();
-  const since = String((cur as any)?.value || '') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  let since = String((cur as any)?.value || '') || new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  /**
+   * `daysBack` — перечитать историю задним числом. Понадобилось после Нарочи:
+   * бота подключили к чату уже по ходу выезда, курсор проехал мимо сообщений
+   * «120 BYN стоянка», «100 BYN сапы», «все по 40 Стасу» — и расходы события
+   * так и остались нулевыми, а деньги считали руками в переписке неделю.
+   */
+  if (daysBack > 0) since = new Date(Date.now() - daysBack * 24 * 60 * 60 * 1000).toISOString();
   if (!force && Date.now() - new Date(since).getTime() < DIGEST_EVERY_MS) return null;
 
   const { data: link } = await supabase
@@ -371,9 +378,14 @@ async function maybeDigestChat(chatId: number, force = false): Promise<string | 
     '{"expenses":[{"title":"что купили","amount":число,"payer":"имя из чата"}],' +
     '"tasks":["что кто-то обещал сделать, но это ещё не сделано"],' +
     '"decisions":["принятые решения одной строкой"]}\n' +
-    'Правила: expenses — только реальные общие траты с суммой в рублях (BYN), ' +
-    'без личных покупок и без обещаний «скинемся». Если чего-то нет — пустой массив. ' +
-    'Не выдумывай. Пиши по-русски.\n\nПЕРЕПИСКА:\n' + transcript,
+    'Правила: expenses — реальные общие траты с суммой в рублях (BYN): аренда стоянки, ' +
+    'сапы, еда на всех, топливо, гид. Считай расходом и фразы вида «стоянка 120», ' +
+    '«сапы — 100», «я взял еды на 50» — даже если слово «купил» не сказано. ' +
+    'НЕ считай расходом личные покупки и суммы, которые люди переводят друг другу ' +
+    '(«скинь мне 40», «по 8,5 Жене») — это возврат доли, а не новая трата. ' +
+    'В tasks обязательно пиши ответственного первым словом с двоеточием: ' +
+    '«Имя: что сделать». Если чего-то нет — пустой массив. Не выдумывай. ' +
+    'Пиши по-русски.\n\nПЕРЕПИСКА:\n' + transcript,
   );
 
   // Ключ не отвечает — оставляем курсор на месте, чтобы дочитать позже.
@@ -416,11 +428,45 @@ async function maybeDigestChat(chatId: number, force = false): Promise<string | 
   for (const t of tasks) {
     const title = String(t || '').slice(0, 120);
     if (title.length < 5) continue;
+    /**
+     * Мусор от модели: в задачи попадали строки вида «@campsflint_bot» и голые
+     * ссылки — упоминание бота в чате она принимала за поручение. Требуем хотя
+     * бы три слова и запрещаем строки, состоящие из одного упоминания/ссылки.
+     */
+    const words = title.replace(/https?:\/\/\S+/g, '').trim().split(/\s+/).filter(Boolean);
+    if (words.length < 3 || /^@?\S+$/.test(title.trim())) continue;
     const { data: dup } = await supabase
       .from('tasks').select('id').eq('event_id', evId).ilike('title', title.slice(0, 40) + '%').limit(1);
     if ((dup || []).length) continue;
-    await supabase.from('tasks').insert({ event_id: evId, title, created_by: 0, done: false });
-    notes.push(`📋 ${title}`);
+
+    /**
+     * Модель пишет задачу как «Stanislav: заказать новый термос» — то есть
+     * ИМЯ ОТВЕТСТВЕННОГО У НЕЁ ЕСТЬ, а задача всё равно ложилась ничьей
+     * (taken_by=null). После Нарочи так повисли пять обещаний: их не видел ни
+     * автор, ни организатор. Достаём имя, находим человека в этой же
+     * переписке и сразу закрепляем задачу за ним — с правом отказаться.
+     */
+    const m = title.match(/^([^:]{2,30}):\s*(.+)$/);
+    const takenBy = m ? (nameToId.get(m[1].trim().toLowerCase()) || null) : null;
+
+    const { data: ins } = await supabase
+      .from('tasks').insert({ event_id: evId, title, created_by: 0, done: false, taken_by: takenBy })
+      .select('id').maybeSingle();
+    const taskId = Number((ins as any)?.id || 0);
+
+    if (takenBy && taskId) {
+      // Личное сообщение тому, кто это пообещал: в чате строка уезжает вверх
+      // за десять минут, а здесь она ждёт ответа.
+      await tg('sendMessage', {
+        chat_id: takenBy, parse_mode: 'HTML',
+        text: `📋 <b>Задача с тебя</b>\n\n${esc(m ? m[2] : title)}\n\n<i>Записал из переписки чата события. Подтверди — и она будет в твоём кабинете.</i>`,
+        reply_markup: kb([
+          [{ text: '✅ Беру', callback_data: `tkok_${taskId}` }, { text: '✔️ Уже сделал', callback_data: `tkdn_${taskId}` }],
+          [{ text: '🙅 Это не я', callback_data: `tkno_${taskId}` }],
+        ]),
+      });
+    }
+    notes.push(`📋 ${title}${takenBy ? ' — записал на человека' : ''}`);
   }
 
   const decisions = Array.isArray((parsed as any).decisions) ? (parsed as any).decisions.slice(0, 5) : [];
@@ -2627,7 +2673,13 @@ export default async function handler(req: any, res: any) {
             text: '🚬 <b>С чем человек зашёл и что перерос</b>\n\n' +
               'Это не наказание: курит — значит организатор знает, где будет курилка. ' +
               'Перевёл в «перерос» — клуб фиксирует рост, и человек получает за это плюс.\n\n' +
-              'Тап по пункту переключает: нет → есть → перерос → нет.',
+              'Тап по пункту переключает: нет → есть → перерос → нет.\n\n' +
+              // Закон РБ № 99-З «О защите персональных данных»: здоровье и
+              // зависимости — чувствительная категория. Ставить их «со стороны»
+              // без согласия человека юридически рискованно, поэтому пишем это
+              // прямо в интерфейсе, а не прячем в документации.
+              '⚠️ 🩺 здоровье, 🍺 алкоголь и 🚬 курение — данные о здоровье. ' +
+              'Отмечай их, только если человек сам о них сказал и не против, чтобы клуб это учитывал.',
             reply_markup: kb([
               ...Object.entries(REP_TRAITS).map(([k, d]) => {
                 const st = cur.get(k);
@@ -3084,6 +3136,36 @@ export default async function handler(req: any, res: any) {
             text: '✅ Записал: ты разделяешь ценности клуба. Переспросим через год — не потому что не верим, а потому что люди меняются.',
           });
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * Ответ на задачу, вытащенную из переписки. Три кнопки вместо одной:
+       * «не я» — важнее остальных, иначе ошибка разбора превращается в
+       * несправедливо висящий долг перед кругом.
+       */
+      if (data.startsWith('tkok_') || data.startsWith('tkdn_') || data.startsWith('tkno_')) {
+        const taskId = Number(data.slice(5));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        if (Number.isFinite(taskId) && taskId > 0) {
+          if (data.startsWith('tkok_')) {
+            await supabase.from('tasks').update({ taken_by: tgId }).eq('id', taskId);
+          } else if (data.startsWith('tkdn_')) {
+            await supabase.from('tasks').update({ taken_by: tgId, done: true }).eq('id', taskId);
+          } else {
+            // Снимаем с человека, но задачу не удаляем: она всё ещё нужна кругу.
+            await supabase.from('tasks').update({ taken_by: null }).eq('id', taskId);
+          }
+        }
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: data.startsWith('tkok_')
+            ? '✅ Записал на тебя. Задача видна в кабинете — там же кнопка «Готово».'
+            : data.startsWith('tkdn_')
+              ? '👏 Отлично, закрыл задачу.'
+              : '🙅 Понял, снял с тебя. Задача вернулась в общий список.',
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -6492,8 +6574,13 @@ export default async function handler(req: any, res: any) {
         // После замены выдохшегося ключа — дочитать всё, что бот пропустил,
         // не дожидаясь следующего часа.
         if (gcmd === '/дочитать' || gcmd === '/reread' || gcmd === '/разбор') {
-          await tg('sendMessage', { chat_id: chatId, text: '🤖 Читаю переписку…' });
-          const out = await maybeDigestChat(chatId, true);
+          // «/дочитать 7» — перечитать неделю назад, а не только с курсора.
+          const daysBack = Math.min(60, Math.max(0, parseInt(String(text || '').replace(/^\S+\s*/, ''), 10) || 0));
+          await tg('sendMessage', {
+            chat_id: chatId,
+            text: daysBack ? `🤖 Читаю переписку за ${daysBack} дн…` : '🤖 Читаю переписку…',
+          });
+          const out = await maybeDigestChat(chatId, true, daysBack);
           if (!out) {
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
