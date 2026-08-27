@@ -939,6 +939,70 @@ export default async function handler(req: any, res: any) {
             .from('members').select('first_name,username').eq('telegram_id', (event as any).deputy_id).maybeSingle();
           orgName = (om as any)?.first_name || ((om as any)?.username ? '@' + (om as any).username : '');
         }
+
+        /**
+         * СОГЛАСОВАНИЕ ДАТ МЕЖДУ ОРГАНИЗАТОРАМИ.
+         * Живая претензия организатора: «может так выйти, что к тебе не соберём,
+         * так как я подметил свой заезд на конец месяца, а потом ко мне не
+         * соберём, так как половина поедет с тобой». Клуб небольшой, два выезда
+         * на соседние выходные делят один и тот же круг людей.
+         * Поэтому при постановке события на одобрение показываем костяку все
+         * события, которые пересекаются по датам (±3 дня), и пишем организатору
+         * соседнего события — чтобы они договорились ДО публикации, а не после.
+         */
+        const clash: string[] = [];
+        try {
+          const startIso = String((event as any).date || '');
+          const endIso = String((event as any).date_end || (event as any).date || '');
+          if (startIso) {
+            const pad = (iso: string, days: number) => {
+              const d = new Date(`${iso}T00:00:00`);
+              d.setDate(d.getDate() + days);
+              return d.toISOString().slice(0, 10);
+            };
+            const { data: others } = await supabase
+              .from('events').select('id,title,date,date_end,deputy_id,status')
+              .neq('id', (event as any).id).neq('status', 'cancelled')
+              .gte('date', pad(startIso, -14)).lte('date', pad(endIso, 14));
+            for (const o of others || []) {
+              const oStart = String((o as any).date || '');
+              const oEnd = String((o as any).date_end || (o as any).date || '');
+              // Пересечение интервалов с зазором в 3 дня: люди не поедут на два
+              // выезда подряд, даже если формально даты не совпали.
+              if (!oStart) continue;
+              if (pad(oEnd, 3) < startIso || oStart > pad(endIso, 3)) continue;
+
+              let oOrg = '';
+              if ((o as any).deputy_id) {
+                const { data: oo } = await supabase
+                  .from('members').select('first_name,username').eq('telegram_id', (o as any).deputy_id).maybeSingle();
+                oOrg = (oo as any)?.first_name || ((oo as any)?.username ? '@' + (oo as any).username : '');
+              }
+              clash.push(`• «${String((o as any).title || '').replace(/</g, '&lt;')}» — ${oStart}${oEnd !== oStart ? `–${oEnd}` : ''}${oOrg ? `, организатор ${oOrg}` : ''}`);
+
+              // Пишем организатору соседнего события — он узнаёт о пересечении
+              // от бота, а не постфактум в общем чате.
+              const otherOrgId = Number((o as any).deputy_id) || 0;
+              if (otherOrgId > 0 && otherOrgId !== Number((event as any).deputy_id)) {
+                try {
+                  await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      chat_id: otherOrgId, parse_mode: 'HTML',
+                      text: `📅 <b>Пересечение по датам</b>\n\n` +
+                        `На даты твоего события «${String((o as any).title || '').replace(/</g, '&lt;')}» ` +
+                        `${orgName ? `${orgName} ставит` : 'ставится'} «${String((event as any).title || '').replace(/</g, '&lt;')}» ` +
+                        `(${(event as any).date}${(event as any).date_end && (event as any).date_end !== (event as any).date ? `–${(event as any).date_end}` : ''}).\n\n` +
+                        `Клуб один, круг людей тоже один — договоритесь между собой, ` +
+                        `иначе оба события соберут по половине. Событие ещё не опубликовано.`,
+                    }),
+                  });
+                } catch { /* организатор мог не начинать чат с ботом */ }
+              }
+            }
+          }
+        } catch { /* проверка дат не должна ронять сохранение */ }
+
         try {
           await fetch(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendMessage`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -947,6 +1011,9 @@ export default async function handler(req: any, res: any) {
               text: `🆕 <b>Событие на одобрение</b>\n\n«${String((event as any).title || '').replace(/</g, '&lt;')}»\n` +
                 `${(event as any).date || ''} · ${String((event as any).location || '').replace(/</g, '&lt;')}\n` +
                 (orgName ? `Организатор: ${orgName}\n` : '') +
+                (clash.length
+                  ? `\n⚠️ <b>Пересекается по датам:</b>\n${clash.join('\n')}\n\nОрганизаторам ушло уведомление — пусть согласуют между собой.\n`
+                  : '') +
                 `\nПока не одобрено — в афише его нет.`,
               reply_markup: { inline_keyboard: [[
                 { text: '✅ Опубликовать', callback_data: `evok_${(event as any).id}` },

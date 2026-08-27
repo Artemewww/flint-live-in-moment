@@ -187,6 +187,20 @@ function appBtn(text: string, site: string, params: Record<string, string> = {})
 
 async function getEvent(id: string) {
   const { data } = await supabase.from('events').select('*').eq('id', id).single();
+  if (!data) return data;
+  /**
+   * Имя организатора кладём прямо в объект события: живая жалоба участника —
+   * «там не сказано, кто организатор и какая тема, куча слов, толку — ноль».
+   * Человек должен с первой строки понимать, куда он едет и кто за это отвечает.
+   */
+  try {
+    const dep = Number((data as any).deputy_id) || 0;
+    if (dep > 0) {
+      const { data: org } = await supabase
+        .from('members').select('first_name,username').eq('telegram_id', dep).maybeSingle();
+      (data as any).organizer_name = String((org as any)?.first_name || (org as any)?.username || '') || null;
+    }
+  } catch { /* без имени карточка просто не покажет строку */ }
   return data;
 }
 
@@ -725,13 +739,43 @@ function itineraryBlock(ev: any): string {
   return `\n🧭 <b>Маршрут дня</b>\n${lines.join('\n')}\n`;
 }
 
+/** Тип события человеческим языком — первая строка карточки. */
+const EVENT_TYPE_RU: Record<string, string> = {
+  hike: 'поход',
+  camping: 'выезд с ночёвкой',
+  sport: 'спорт и активность',
+  online: 'онлайн-встреча',
+  meetup: 'встреча в городе',
+  retreat: 'ретрит, перезагрузка',
+  mixed: 'выезд клуба',
+  party: 'вечеринка без алкоголя',
+  culture: 'культура и творчество',
+};
+
+/** 1996-04-01 → «1 апреля 1996». В профиле дата должна читаться, а не парситься. */
+function fmtBirthday(v: any): string {
+  const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return String(v || '');
+  const MON = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  return `${Number(m[3])} ${MON[Number(m[2]) - 1] || ''} ${m[1]}`;
+}
+
 function eventCard(ev: any): string {
   const aud = ev.entry_type === 'male' ? '👨 Только мужчины'
     : ev.entry_type === 'female' ? '👩 Только женщины' : '👥 Все';
   const when = whenPhrase(ev.date);
   const day = dayPhrase(ev.date);
+  // Суть одной строкой: тип события + чей это выезд. Без этого человек читает
+  // «кучу слов» и не понимает, «может это собрание фанатов литл пони».
+  const topic = EVENT_TYPE_RU[String(ev.type || '').toLowerCase()] || '';
+  const head = [
+    topic ? `🎯 ${esc(topic)}` : '',
+    ev.organizer_name ? `🧭 организатор: ${esc(ev.organizer_name)}` : '',
+  ].filter(Boolean).join(' · ');
   return (
-    `<b>${esc(ev.title)}</b>\n\n` +
+    `<b>${esc(ev.title)}</b>\n` +
+    (head ? `${head}\n` : '') +
+    '\n' +
     // Сначала — когда и через сколько: это первое, что человек хочет знать.
     (day ? `🗓 ${esc(day)}${ev.time ? `, ${esc(ev.time)}` : ''}\n` : '') +
     (when ? `⏳ <b>${esc(when)}</b>\n` : '') +
@@ -1133,18 +1177,19 @@ function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
  * Старые тексты кнопок продолжаем понимать — клавиатура у людей кешируется.
  */
 function mainMenu(admin = false) {
-  // UX: 2×2, высокочастотное сверху. «Мои события» (мои брони/логистика) —
-  // самое частое; «Все события» — обзор афиши; профиль/помощь — редкие.
+  // UX: 2×2 + одна нижняя. Кнопок было шесть, и участник всё равно писал
+  // «я слепой»: «Как это работает» дублировала «Поддержку», а «Профиль» тонул
+  // в третьем ряду. Оставили четыре разных потребности — мои поездки, я сам,
+  // афиша, живой человек. Справка переехала кнопкой внутрь профиля.
   // Костяку — третий ряд с быстрым входом в панель организатора.
   const rows: any[] = [
-    [{ text: '🗓 Мои события' }, { text: '📅 Все события' }],
+    [{ text: '🗓 Мои события' }, { text: '👤 Профиль' }],
+    [{ text: '📅 Все события' }, { text: '💬 Поддержка' }],
     // «Помощь» → «Как это работает»: старое название путали с «Поддержкой»
     // (обе выглядели как «куда написать, если что-то не так»). Чек-лист убран
     // отсюда — он общий для всего клуба, а не под конкретное событие, здесь
     // как отдельная кнопка не нужен (/checklist и раздел в карточке события
     // остаются). «Поддержка» — отдельной строкой, частое действие.
-    [{ text: '👤 Профиль' }, { text: 'ℹ️ Как это работает' }],
-    [{ text: '💬 Поддержка' }],
   ];
   // Нижняя кнопка: костяку — панель организатора, участнику — SOS
   // (экстренный сигнал организаторам всегда под рукой).
@@ -2222,9 +2267,17 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
 
   // «О тебе» — то, что бот знает и учитывает.
   const about: string[] = [];
-  if (genderStr) about.push(`🚻 Пол: <b>${genderStr}</b>`);
-  if (m.phone) about.push(`📞 Телефон: <code>${esc(m.phone)}</code>`);
-  if (m.birthday) about.push(`🎂 День рождения: <b>${esc(m.birthday)}</b>`);
+  /**
+   * Пустые поля показываем ЯВНО. Живая жалоба участника: «в профиле нет, куда
+   * писать ДР» — поле просто не рисовалось, пока не заполнено, и человек решил,
+   * что его в системе нет вовсе. Пустая строка с пометкой «не указан» — это и
+   * подсказка, и приглашение заполнить.
+   */
+  about.push(genderStr ? `🚻 Пол: <b>${genderStr}</b>` : '🚻 Пол: <i>не указан</i>');
+  about.push(m.phone ? `📞 Телефон: <code>${esc(m.phone)}</code>` : '📞 Телефон: <i>не указан</i>');
+  about.push(m.birthday
+    ? `🎂 День рождения: <b>${esc(fmtBirthday(m.birthday))}</b>`
+    : '🎂 День рождения: <i>не указан</i> — нажми кнопку ниже');
   if (m.dietary) about.push(`🍽 Питание: <b>${esc(dietMap[String(m.dietary)] || m.dietary)}</b>`);
   if (m.allergies) about.push(`⚠️ Аллергии: <b>${esc(m.allergies)}</b>`);
   if (reg?.equipment) about.push(`🎒 Снаряжение: <b>${esc(String(reg.equipment).split(',').filter(Boolean).join(', '))}</b>`);
@@ -2236,6 +2289,8 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
   const rows: any[] = [];
   const row1: any[] = [{ text: '🍽 Питание', callback_data: 'setdiet' }, { text: '📖 Как это работает', callback_data: 'helpguide' }];
   rows.push(row1);
+  // Заполнить прямо в боте, не уходя в приложение: человек уже здесь.
+  rows.push([{ text: m.birthday ? '🎂 Изменить день рождения' : '🎂 Указать день рождения', callback_data: 'setbd' }]);
   if (link) {
     const invite = 'Это «Живи в моменте» — закрытый клуб трезвых событий. Заходи по моей ссылке.';
     rows.push([{ text: '📤 Отправить другу', url: `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(invite)}` }]);
@@ -2383,7 +2438,7 @@ async function runSetup(req: any, res: any) {
     drop_pending_updates: false,
   });
   const menu = await tg('setChatMenuButton', {
-    menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } },
+    menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } },
   });
   const me = await tg('getMe', {});
 
@@ -2412,7 +2467,7 @@ export default async function handler(req: any, res: any) {
   try {
     const update = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const site = siteUrl(req);
-    const openBtn = { text: '🗓 Открыть афишу', web_app: { url: site } };
+    const openBtn = { text: '🚀 Открыть FLINT', web_app: { url: site } };
 
     // Отметка живости: любой апдейт от человека = бот у него не заблокирован.
     // Без этого нельзя честно сказать, сколько участников реально получат рассылку.
@@ -2975,7 +3030,7 @@ export default async function handler(req: any, res: any) {
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text: '✅ <b>Правила приняты.</b> Спасибо — теперь запись на события открыта.\n\nОткрой афишу и выбирай, куда поедешь.',
-          reply_markup: kb([[{ text: '📅 Открыть афишу', web_app: { url: `${siteUrl(req)}/` } }]]),
+          reply_markup: kb([[{ text: '🚀 Открыть FLINT', web_app: { url: `${siteUrl(req)}/` } }]]),
         });
         if (ADMIN_CHAT_ID) {
           try {
@@ -3169,6 +3224,22 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * День рождения прямо в боте. Раньше поле жило только в мини-приложении,
+       * и участник, который смотрел профиль в чате, писал: «в профиле нет, куда
+       * писать ДР». Гонять человека в приложение ради одной даты — лишний шаг.
+       */
+      if (data === 'setbd') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await setSession(tgId, 'set_birthday', {});
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '🎂 Напиши дату рождения одним сообщением: <b>ДД.ММ.ГГГГ</b>\n\nНапример: <code>01.04.1996</code>\n\n' +
+            '<i>Зачем: клуб поздравляет своих, а возраст помогает подбирать события и состав круга.</i>',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       /** «Зачем мне клуб» от действующего члена — свободный текст. */
       if (data === 'whyme') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -3243,7 +3314,7 @@ export default async function handler(req: any, res: any) {
           gender, agreed_pd: true, status: 'approved',
         }).eq('telegram_id', tgId);
         // Онбординг завершён → включаем мини-апп «Афиша» для этого чата.
-        try { await tg('setChatMenuButton', { chat_id: chatId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }); } catch { /* no-op */ }
+        try { await tg('setChatMenuButton', { chat_id: chatId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
         await tg('sendMessage', { chat_id: chatId, text: '✅ Профиль заполнен, добро пожаловать! Двери клуба открыты.' });
         if (ctx.evPayload && String(ctx.evPayload).startsWith('event_')) {
@@ -3500,7 +3571,7 @@ export default async function handler(req: any, res: any) {
         try {
           if (approve) {
             // Показать web-кнопку «Афиша» только принятым участникам.
-            try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }); } catch { /* no-op */ }
+            try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ }
             // Сразу показываем события: «нажми /start» — лишний шаг и потеря человека.
             const { data: evs } = await supabase
               .from('events').select('id,title,date').eq('status', 'open').order('date', { ascending: true }).limit(6);
@@ -7297,6 +7368,48 @@ export default async function handler(req: any, res: any) {
           'ℹ️ Как это работает', 'ℹ️ Помощь', '❓ Помощь', '💬 Поддержка', '💬 Написать в поддержку',
           '🆘 SOS', '🏠 Главная', '⚙️ Панель организатора', '🎒 Чек-лист',
         ]);
+        /**
+         * Ввод даты рождения. Стоит ПОСЛЕ MENU_BTNS: если человек передумал и
+         * нажал кнопку меню, это не должно улететь в парсер даты и выдать
+         * «не понял дату» на нажатие «Профиль».
+         */
+        if (sess && sess.state === 'set_birthday') {
+          if (MENU_BTNS.has(text)) {
+            await clearSession(msg.from.id);
+            // не return — падаем в обработчики кнопок меню ниже
+          } else {
+            const dm = String(text).trim().match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/)
+              || String(text).trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+            let iso = '';
+            if (dm) {
+              const [d, mo, y] = dm[0].includes('-') && dm[1].length === 4
+                ? [Number(dm[3]), Number(dm[2]), Number(dm[1])]
+                : [Number(dm[1]), Number(dm[2]), Number(dm[3])];
+              const nowY = new Date().getFullYear();
+              // Границы: без них в базе появляются «2026 год рождения» — такие
+              // записи уже есть, и день рождения клуба превращается в мусор.
+              if (y >= 1930 && y <= nowY - 14 && mo >= 1 && mo <= 12 && d >= 1 && d <= 31) {
+                iso = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+              }
+            }
+            if (!iso) {
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: '🤔 Не понял дату. Нужен формат <b>ДД.ММ.ГГГГ</b>, например <code>01.04.1996</code>.\n\nПопробуй ещё раз или нажми любую кнопку меню, чтобы выйти.',
+              });
+              return res.status(200).json({ ok: true });
+            }
+            await supabase.from('members').update({ birthday: iso }).eq('telegram_id', msg.from.id);
+            await clearSession(msg.from.id);
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `✅ Записал: <b>${esc(fmtBirthday(iso))}</b>. Клуб не забудет.`,
+              reply_markup: mainMenu(await isCore(msg.from.id)),
+            });
+            return res.status(200).json({ ok: true });
+          }
+        }
+
         if (sess && sess.state === 'support_text' && MENU_BTNS.has(text)) {
           await clearSession(msg.from.id);
           // не return — падаем в обработчики кнопок меню ниже
@@ -8120,7 +8233,7 @@ export default async function handler(req: any, res: any) {
         try {
           const approvedNow = await isApproved(msg.from.id);
           await tg('setChatMenuButton', approvedNow
-            ? { chat_id: chatId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }
+            ? { chat_id: chatId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }
             : { chat_id: chatId, menu_button: { type: 'default' } });
         } catch { /* no-op */ }
         // /start всегда обрывает недоделанный диалог. Иначе человек, начавший
@@ -8308,7 +8421,7 @@ export default async function handler(req: any, res: any) {
                 : '🚪 К сожалению, заявка в клуб отклонена. Если это ошибка — напиши в поддержку.',
               reply_markup: approve ? kb([[openBtn]]) : kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
             });
-            if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Афиша', web_app: { url: site } } }); } catch { /* no-op */ } }
+            if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ } }
           } catch { /* заявитель мог не начинать чат */ }
         }
         return res.status(200).json({ ok: true });
