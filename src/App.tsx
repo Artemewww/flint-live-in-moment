@@ -236,7 +236,7 @@ export default function App() {
     return name.trim().charAt(0).toUpperCase() || '?';
   }, []);
   /** С какой вкладки открыть профиль (deep-link ?checklist ведёт в «Снаряжение»). */
-  const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'settings'>('overview');
+  const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'kb' | 'settings'>('overview');
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -371,6 +371,33 @@ export default function App() {
     if (!want) return;
     checklistDeepLinkDone.current = true;
     setProfileTab('gear');
+    setShowUserStats(true);
+  }, []);
+
+  /**
+   * Deep-link `?open=<экран>` — единая точка входа из бота.
+   *
+   * Курс, заданный владельцем: Telegram остаётся каналом коротких уведомлений,
+   * вся работа — в приложении. Значит каждое сообщение бота должно открывать
+   * НУЖНЫЙ экран, а не выкидывать человека на главную, где он ищет заново.
+   *   ?open=tasks    — задачи круга (живут в «Обзоре»)
+   *   ?open=profile  — личный кабинет
+   *   ?open=gear     — снаряжение и складчина
+   *   ?open=kb       — база знаний (только костяк и организаторы)
+   */
+  const openDeepLinkDone = useRef(false);
+  useEffect(() => {
+    if (openDeepLinkDone.current) return;
+    let target = '';
+    try { target = new URLSearchParams(window.location.search).get('open') || ''; } catch { /* нет window */ }
+    if (!target) {
+      const m = getStartParam().match(/(?:^|_)open-([a-z]+)/);
+      if (m) target = m[1];
+    }
+    if (!target) return;
+    openDeepLinkDone.current = true;
+    const tab = target === 'gear' ? 'gear' : target === 'kb' ? 'kb' : target === 'events' ? 'events' : 'overview';
+    setProfileTab(tab as any);
     setShowUserStats(true);
   }, []);
 

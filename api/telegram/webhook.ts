@@ -168,6 +168,12 @@ async function logSupport(telegramId: number, direction: 'in' | 'out', text: str
   } catch { /* таблицы может не быть до миграции — не критично */ }
 }
 
+/**
+ * Домен приложения без объекта запроса. Нужен там, где клавиатура строится вне
+ * обработчика (mainMenu вызывается из десятка мест, req туда не дотянуть).
+ */
+const APP_URL = (process.env.SITE_URL || 'https://flint-live-in-moment.vercel.app').replace(/\/$/, '');
+
 function siteUrl(req: any): string {
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app';
   return `https://${host}`;
@@ -1320,29 +1326,24 @@ function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
  * нагрузки, логистика переехала внутрь карточки события (кнопка там есть).
  * Старые тексты кнопок продолжаем понимать — клавиатура у людей кешируется.
  */
-function mainMenu(admin = false) {
-  // UX: 2×2 + одна нижняя. Кнопок было шесть, и участник всё равно писал
-  // «я слепой»: «Как это работает» дублировала «Поддержку», а «Профиль» тонул
-  // в третьем ряду. Оставили четыре разных потребности — мои поездки, я сам,
-  // афиша, живой человек. Справка переехала кнопкой внутрь профиля.
-  // Костяку — третий ряд с быстрым входом в панель организатора.
-  const rows: any[] = [
-    [{ text: '🗓 Мои события' }, { text: '👤 Профиль' }],
-    [{ text: '📅 Все события' }, { text: '💬 Поддержка' }],
-    // «Помощь» → «Как это работает»: старое название путали с «Поддержкой»
-    // (обе выглядели как «куда написать, если что-то не так»). Чек-лист убран
-    // отсюда — он общий для всего клуба, а не под конкретное событие, здесь
-    // как отдельная кнопка не нужен (/checklist и раздел в карточке события
-    // остаются). «Поддержка» — отдельной строкой, частое действие.
-  ];
-  // Нижняя кнопка: костяку — панель организатора, участнику — SOS
-  // (экстренный сигнал организаторам всегда под рукой).
-  rows.push([{ text: admin ? '⚙️ Панель организатора' : '🆘 SOS' }]);
-  return {
-    keyboard: rows,
-    resize_keyboard: true,
-    is_persistent: true,
-  };
+function mainMenu(_admin = false) {
+  /**
+   * Курс владельца (28.08): «вся коммуникация — в мини-приложении, в Telegram
+   * только самое важное и очень коротко». Клавиатура из пяти-шести кнопок
+   * дублировала приложение и пугала объёмом — участник писал «я слепой».
+   *
+   * Осталось ровно две вещи, которые Telegram делает лучше приложения:
+   *  • вход в приложение одним тапом (кнопка web_app прямо в клавиатуре);
+   *  • SOS — он нужен в ту секунду, когда открывать приложение некогда.
+   * Всё остальное — события, профиль, поддержка, база знаний, инвентарь —
+   * живёт внутри FLINT и доступно оттуда.
+   */
+  const rows: any[][] = [[
+    { text: '🚀 Открыть FLINT', web_app: { url: APP_URL } },
+    { text: '🆘 SOS' },
+  ]];
+  if (_admin) rows.push([{ text: '⚙️ Организатору' }]);
+  return { keyboard: rows, resize_keyboard: true, is_persistent: true };
 }
 
 /**
@@ -1392,51 +1393,41 @@ function eventRow(ev: any, site: string) {
 }
 
 async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false, isOrgUser = false) {
-  const site = openBtn?.web_app?.url || '';
+  /**
+   * ОДНО короткое сообщение вместо ленты карточек и десяти кнопок.
+   *
+   * Курс владельца (28.08): вся работа — в мини-приложении, Telegram остаётся
+   * каналом коротких уведомлений. Раньше на /start прилетала афиша с фото,
+   * пять кнопок-событий, четыре кнопки организатора, кнопка приложения и
+   * отдельное «Меню всегда снизу» — восемь экранов прокрутки, из которых
+   * человеку нужен один тап. Ближайшее событие теперь одной строкой в тексте,
+   * подробности — внутри приложения, где для них есть место.
+   */
+  const site = openBtn?.web_app?.url || APP_URL;
   const today = new Date().toISOString().slice(0, 10);
   const { data: raw } = await supabase
     .from('events')
-    .select('id,title,date,date_end,location,image,telegram_image')
+    .select('id,title,date,date_end')
     .eq('status', 'open')
     .order('date', { ascending: true })
     .limit(12);
   const evs = (raw || []).filter((e: any) => isUpcomingEvent(e, today));
 
-  // Костяку — быстрый вход в панель организатора прямо с Главной (не в сайт-админку).
-  const tailRows: any[][] = [];
-  if (isCoreUser) tailRows.push([{ text: '⚙️ Панель организатора', callback_data: 'admhome' }]);
-  // База знаний и репутация — для ВСЕХ, кто ведёт события. Раньше кнопка
-  // висела только на костяке, и организатор (role='organizer') не видел
-  // методик, по которым от него же требуют вести событие.
-  if (isCoreUser || isOrgUser) {
-    tailRows.push([{ text: '📚 База знаний организатора', callback_data: 'kbhome' }]);
-    tailRows.push([{ text: '🧭 Репутация круга', callback_data: 'rephome' }]);
+  const lines = ['👋 <b>«Живи в моменте»</b> — трезвый клуб живых встреч.'];
+  if (evs.length) {
+    const [first] = evs;
+    lines.push('', `Ближайшее: <b>${esc(first.title)}</b> · ${esc(whenPhrase(first.date))}` +
+      (evs.length > 1 ? `\nВсего в афише: ${evs.length}` : ''));
   }
-  if (isCoreUser) tailRows.push([{ text: '📦 Инвентарь клуба', callback_data: 'invhome' }]);
-  tailRows.push([openBtn as any]);
+  lines.push('', 'Афиша, запись, логистика и профиль — в приложении 👇');
 
-  await tg('sendMessage', {
-    chat_id: chatId,
-    parse_mode: 'HTML',
-    text:
-      '👋 Добро пожаловать в <b>«Живи в моменте»</b>!\n\n' +
-      'Живая афиша трезвого сообщества.' + (evs.length ? ' Ближайшее — ниже 👇' : ''),
-    reply_markup: evs.length ? undefined : { inline_keyboard: tailRows },
-  });
-  if (!evs.length) return;
-
-  // Только ОДНА афиша с фото (самая ближайшая) — дальше текстом, без картинок,
-  // чтобы список не превращался в очередь фото-сообщений.
-  const [first, ...rest] = evs;
-  await sendEventCard(chatId, first, site);
-  const nextFew = rest.slice(0, 4);
-  const more = rest.length - nextFew.length;
-  const rows = nextFew.map((e: any) => eventRow(e, site));
-  rows.push(...tailRows);
+  // Клавиатура ставится этим же сообщением: вход в приложение и SOS уже в ней,
+  // поэтому инлайн-кнопки не нужны, а отдельное «Меню всегда снизу 👇» —
+  // лишнее сообщение, которое мы убрали.
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
-    text: !nextFew.length ? 'Вся программа и фильтры — в афише:' : (more > 0 ? `Ещё ${more} — в афише:` : 'Ещё ближайшее:'),
-    reply_markup: kb(rows),
+    text: lines.join('\n'),
+    reply_markup: mainMenu(isCoreUser || isOrgUser),
   });
 }
 
@@ -1844,16 +1835,25 @@ async function sendCatchup(chatId: number, tgId: number) {
       }
       const openUnvoted = (pollsOpen || []).filter((p: any) => (!p.options?.status || p.options.status === 'open') && !myVotes.has(Number(p.id)));
       if (!gaps.length && !(freeTasks || []).length && !openUnvoted.length) continue;
-      const lines: string[] = [`⚡ <b>Пока тебя не было — «${esc((ev as any).title)}»</b>`];
-      if (gaps.length) lines.push(`\n📋 Дозаполни анкету: ${gaps.join(', ')}`);
-      if ((freeTasks || []).length) lines.push(`\n🆓 Свободные задачи:\n${(freeTasks || []).map((t: any) => `• ${esc(t.title)}`).join('\n')}`);
-      if (openUnvoted.length) lines.push(`\n🗳 Ты ещё не голосовал:\n${openUnvoted.map((p: any) => `• ${esc(p.question)}`).join('\n')}`);
-      const btns: any[][] = [];
-      if (gaps.includes('🚗 транспорт')) btns.push([{ text: '🚗 Указать транспорт', callback_data: `trask_${(ev as any).id}` }]);
-      if (gaps.length) btns.push([{ text: '📋 Заполнить анкету', callback_data: `org_${(ev as any).id}` }]);
-      if ((freeTasks || []).length) btns.push([{ text: '📋 Открыть задачи', callback_data: `tasks_${(ev as any).id}` }]);
-      if (openUnvoted.length) btns.push([{ text: '🗳 Голосования', callback_data: `polls_${(ev as any).id}` }]);
-      await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: lines.join('\n'), reply_markup: btns.length ? kb(btns) : undefined });
+      /**
+       * Догоняющее сообщение — это ПУШ, а не отчёт. Раньше сюда вываливались
+       * списком все свободные задачи, все голосования и пробелы анкеты, а под
+       * ними четыре кнопки: человек читал экран текста в чате вместо того,
+       * чтобы открыть приложение, где всё это можно нормально показать.
+       * Теперь: одна строка «что ждёт» и одна кнопка внутрь приложения.
+       */
+      const waiting: string[] = [];
+      if (gaps.length) waiting.push(`анкета (${gaps.join(', ')})`);
+      if ((freeTasks || []).length) waiting.push(`свободных задач: ${(freeTasks || []).length}`);
+      if (openUnvoted.length) waiting.push(`голосований: ${openUnvoted.length}`);
+      await tg('sendMessage', {
+        chat_id: chatId, parse_mode: 'HTML',
+        text: `⚡ <b>${esc((ev as any).title)}</b> — тебя ждёт: ${waiting.join(' · ')}`,
+        reply_markup: kb([[{
+          text: '🚀 Открыть',
+          web_app: { url: `${APP_URL}/?ev=${encodeURIComponent(String((ev as any).id))}` },
+        }]]),
+      });
     }
   } catch { /* дайджест — best-effort */ }
 }
@@ -2740,6 +2740,33 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * Инструменты организатора одним меню. На главной их больше нет: участнику
+       * они не нужны, а костяк доходит сюда одним тапом. Панель организатора —
+       * это веб-админка, поэтому она открывается ссылкой, а не в чате.
+       */
+      if (data === 'orgmenu') {
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Только для организаторов и костяка', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const rows: any[][] = [
+          [{ text: '📚 База знаний', web_app: { url: `${siteUrl(req)}/?open=kb` } }],
+          [{ text: '🧭 Репутация круга', callback_data: 'rephome' }],
+        ];
+        if (await isCore(tgId)) {
+          rows.push([{ text: '📦 Инвентарь клуба', callback_data: 'invhome' }]);
+          rows.push([{ text: '⚙️ Панель организатора', url: `${siteUrl(req)}/admin` }]);
+        }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '⚙️ <b>Инструменты организатора</b>',
+          reply_markup: kb(rows),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       /* ═══════════════════ РЕПУТАЦИЯ: взгляд организатора ═══════════════════
        * Закрытый раздел. Участник своих красных флажков не видит и видеть не
        * должен — иначе опрос круга мгновенно превращается в выяснение
@@ -3470,7 +3497,6 @@ export default async function handler(req: any, res: any) {
         } else {
           await sendWelcome(chatId, openBtn, await isCore(tgId), await isOrganizer(tgId));
         }
-        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(tgId)) });
         try { await askMediaConsent(chatId, tgId); } catch { /* no-op */ }
         return res.status(200).json({ ok: true });
       }
@@ -3716,17 +3742,14 @@ export default async function handler(req: any, res: any) {
           if (approve) {
             // Показать web-кнопку «Афиша» только принятым участникам.
             try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ }
-            // Сразу показываем события: «нажми /start» — лишний шаг и потеря человека.
-            const { data: evs } = await supabase
-              .from('events').select('id,title,date').eq('status', 'open').order('date', { ascending: true }).limit(6);
-            const rows = (evs || []).map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `ev_${e.id}` }]);
-            rows.push([openBtn as any]);
+            // Одно сообщение: поздравление + клавиатура с входом в приложение.
+            // Список событий сюда больше не вываливаем — он в афише приложения,
+            // и человеку не нужно выбирать из шести кнопок в первую же секунду.
             await tg('sendMessage', {
               chat_id: targetId, parse_mode: 'HTML',
-              text: '🎉 <b>Тебя приняли в клуб!</b>\n\nТеперь доступны все события: выбирай и записывайся в пару кликов.\nМеню всегда снизу.',
-              reply_markup: rows.length > 1 ? kb(rows) : kb([[openBtn]]),
+              text: '🎉 <b>Тебя приняли в клуб!</b>\n\nАфиша, запись и логистика — в приложении.',
+              reply_markup: mainMenu(),
             });
-            await tg('sendMessage', { chat_id: targetId, text: 'Меню 👇', reply_markup: mainMenu() });
             /**
              * Если человек попал в клуб мимо анкеты (реф-ссылка, ручное
              * добавление) — задаём главный вопрос сейчас. Иначе в базе снова
@@ -7511,6 +7534,7 @@ export default async function handler(req: any, res: any) {
           '🗓 Мои события', '📅 Все события', '📅 Ближайшие события', '👤 Профиль', '👤 Мой статус',
           'ℹ️ Как это работает', 'ℹ️ Помощь', '❓ Помощь', '💬 Поддержка', '💬 Написать в поддержку',
           '🆘 SOS', '🏠 Главная', '⚙️ Панель организатора', '🎒 Чек-лист',
+          '🚀 Открыть FLINT', '⚙️ Организатору',
         ]);
         /**
          * Ввод даты рождения. Стоит ПОСЛЕ MENU_BTNS: если человек передумал и
@@ -8411,6 +8435,26 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        if (text === '⚙️ Организатору' || text === '/организатору') {
+          if (!(await isOrganizer(msg.from.id))) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Раздел для организаторов и костяка.' });
+            return res.status(200).json({ ok: true });
+          }
+          const rows: any[][] = [
+            [{ text: '📚 База знаний', web_app: { url: `${siteUrl(req)}/?open=kb` } }],
+            [{ text: '🧭 Репутация круга', callback_data: 'rephome' }],
+          ];
+          if (await isCore(msg.from.id)) {
+            rows.push([{ text: '📦 Инвентарь клуба', callback_data: 'invhome' }]);
+            rows.push([{ text: '⚙️ Панель организатора', url: `${siteUrl(req)}/admin` }]);
+          }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '⚙️ <b>Инструменты организатора</b>', reply_markup: kb(rows),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         if (text === '🎒 Чек-лист' || text === '/checklist') {
           await sendChecklistMenu(chatId, siteUrl(req));
           return res.status(200).json({ ok: true });
@@ -8574,13 +8618,11 @@ export default async function handler(req: any, res: any) {
               text: eventCard(ev),
               reply_markup: kb(eventCardButtons(ev, openBtn, registered)),
             });
-            await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(msg.from.id)) });
             return res.status(200).json({ ok: true });
           }
         }
         // Приветствие + открытые события кнопками (со сроком до старта).
         await sendWelcome(chatId, openBtn, await isCore(msg.from.id), await isOrganizer(msg.from.id));
-        await tg('sendMessage', { chat_id: chatId, text: 'Меню всегда снизу 👇', reply_markup: mainMenu(await isCore(msg.from.id)) });
         // Догоняем вернувшегося: анкета/задачи/голосования, где нет его реакции.
         await sendCatchup(chatId, msg.from.id);
         return res.status(200).json({ ok: true });
