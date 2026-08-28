@@ -534,7 +534,18 @@ async function getActiveGeminiKey(): Promise<string> {
  * (api/ai.ts, api/admin/events.ts), и они автоматически едут за ротацией.
  * ═══════════════════════════════════════════════════════════════════════ */
 
-interface GKey { k: string; label?: string; addedAt?: string; cooldownUntil?: string | null; fails?: number }
+interface GKey {
+  k: string;
+  label?: string;
+  addedAt?: string;
+  /** Пока null — ключ нетронутый, «в запасе» (зелёный в панели). */
+  lastOkAt?: string | null;
+  /** Когда ключ упёрся в квоту в последний раз (красный в панели). */
+  exhaustedAt?: string | null;
+  cooldownUntil?: string | null;
+  uses?: number;
+  fails?: number;
+}
 
 let keyPoolCache: { keys: GKey[]; at: number } | null = null;
 
@@ -583,6 +594,22 @@ async function usableKeys(): Promise<string[]> {
 }
 
 /**
+ * Удачный вызов: считаем расход. Без этого счётчика в панели не отличить
+ * нетронутый ключ «в запасе» от того, что уже в работе, — а владельцу нужно
+ * видеть именно это, чтобы понимать, сколько ключей готовить заранее.
+ */
+async function markKeyOk(key: string): Promise<void> {
+  try {
+    const pool = await loadKeyPool();
+    const row = pool.find((x) => x.k === key);
+    if (!row) return;
+    row.uses = (row.uses || 0) + 1;
+    row.lastOkAt = new Date().toISOString();
+    await saveKeyPool(pool);
+  } catch { /* учёт не должен ломать сам ответ ИИ */ }
+}
+
+/**
  * Ключ упёрся в квоту: отправляем его отдыхать и переводим стрелку на
  * следующий живой — включая `gemini_api_key`, чтобы за ротацией поехали и
  * соседние функции (генерация события и афиши).
@@ -590,7 +617,11 @@ async function usableKeys(): Promise<string[]> {
 async function coolDownKey(key: string): Promise<void> {
   const pool = await loadKeyPool();
   const row = pool.find((x) => x.k === key);
-  if (row) { row.cooldownUntil = nextQuotaReset(); row.fails = (row.fails || 0) + 1; }
+  if (row) {
+    row.cooldownUntil = nextQuotaReset();
+    row.exhaustedAt = new Date().toISOString();
+    row.fails = (row.fails || 0) + 1;
+  }
   await saveKeyPool(pool);
 
   const next = (await usableKeys())[0];
@@ -661,7 +692,7 @@ async function geminiJSON(prompt: string): Promise<any | null> {
       try {
         const out = await attempt(model, key);
         if (out === 'quota') { quotaHit = true; break; }
-        if (out) return out;
+        if (out) { await markKeyOk(key); return out; }
       } catch { /* следующая модель */ }
     }
     if (quotaHit) await coolDownKey(key);
@@ -700,7 +731,7 @@ async function geminiText(prompt: string): Promise<string> {
       try {
         const out = await attempt(model, true, key);
         if (out === '\u0000quota') { quotaHit = true; break; }
-        if (out) return out;
+        if (out) { await markKeyOk(key); return out; }
       } catch { /* дальше */ }
     }
     if (!quotaHit) {
@@ -710,7 +741,7 @@ async function geminiText(prompt: string): Promise<string> {
         try {
           const out = await attempt(model, false, key);
           if (out === '\u0000quota') { quotaHit = true; break; }
-          if (out) return out;
+          if (out) { await markKeyOk(key); return out; }
         } catch { /* дальше */ }
       }
     }

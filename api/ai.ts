@@ -218,6 +218,30 @@ export default async function handler(req: any, res: any) {
         const j = await probe.json().catch(() => ({} as any));
         return res.status(200).json({ ok: false, error: `Google отклонил ключ (HTTP ${probe.status}): ${String((j as any)?.error?.message || '').slice(0, 160)}` });
       }
+      /**
+       * Ключ идёт В ПУЛ. Раньше он перезаписывал единственный `gemini_api_key`,
+       * и запасные ключи было негде держать: выдохся — бот молчит до тех пор,
+       * пока владелец не сядет за браузер. Пул позволяет заранее сложить
+       * несколько ключей, а ротацию делает бот сам (api/telegram/webhook.ts).
+       */
+      try {
+        const { data: poolRow } = await supabase
+          .from('app_config').select('value').eq('key', 'gemini_keys').maybeSingle();
+        let pool: any[] = [];
+        try { pool = JSON.parse(String((poolRow as any)?.value || '[]')); } catch { pool = []; }
+        if (!Array.isArray(pool)) pool = [];
+        const found = pool.find((x: any) => x && x.k === fresh);
+        if (found) {
+          // Уже был: снимаем «отдых» — возможно, квота успела сброситься.
+          found.cooldownUntil = null;
+          found.fails = 0;
+        } else {
+          pool.push({ k: fresh, label: 'из панели', addedAt: new Date().toISOString(), uses: 0, fails: 0 });
+        }
+        await supabase.from('app_config').upsert(
+          { key: 'gemini_keys', value: JSON.stringify(pool) }, { onConflict: 'key' });
+      } catch { /* если пул не сохранился — ниже всё равно ляжет одиночный ключ */ }
+
       const { error: saveErr } = await supabase
         .from('app_config').upsert({ key: 'gemini_api_key', value: fresh }, { onConflict: 'key' });
       if (saveErr) {
@@ -259,6 +283,53 @@ export default async function handler(req: any, res: any) {
           : `HTTP ${probe.status}: ${String((j as any)?.error?.message || '').slice(0, 160)}`;
       }
     }
+    /**
+     * ПУЛ КЛЮЧЕЙ ДЛЯ ПАНЕЛИ. Владельцу нужно видеть в реальном времени: сколько
+     * ключей всего, какой сейчас работает, сколько нетронутых в запасе и
+     * сколько уже сожжено — с датами. Иначе ИИ ложится посреди выезда, и
+     * выясняется это по молчанию бота.
+     *
+     * Три состояния (цвета в панели):
+     *   spare  🟢 — ни разу не использован, лежит в запасе;
+     *   active 🟡 — в работе, квота ещё есть;
+     *   burned 🔴 — упёрся в суточную квоту, ждёт сброса.
+     */
+    const { data: poolRow } = await supabase
+      .from('app_config').select('value').eq('key', 'gemini_keys').maybeSingle();
+    let rawPool: any[] = [];
+    try { rawPool = JSON.parse(String((poolRow as any)?.value || '[]')); } catch { rawPool = []; }
+    if (!Array.isArray(rawPool)) rawPool = [];
+
+    const nowMs = Date.now();
+    const pool = rawPool.filter((x: any) => x && x.k).map((x: any) => {
+      const resting = !!x.cooldownUntil && new Date(x.cooldownUntil).getTime() > nowMs;
+      const state = resting ? 'burned' : (x.uses || x.lastOkAt) ? 'active' : 'spare';
+      return {
+        masked: `…${String(x.k).slice(-6)}`,
+        state,
+        current: x.k === cur,
+        label: x.label || null,
+        addedAt: x.addedAt || null,
+        lastOkAt: x.lastOkAt || null,
+        exhaustedAt: x.exhaustedAt || null,
+        resetsAt: resting ? x.cooldownUntil : null,
+        uses: Number(x.uses) || 0,
+        fails: Number(x.fails) || 0,
+      };
+    });
+
+    const spare = pool.filter((x) => x.state === 'spare').length;
+    const active = pool.filter((x) => x.state === 'active').length;
+    const burned = pool.filter((x) => x.state === 'burned').length;
+
+    // Расход за неделю → сколько ключей готовить. Держим запас на два дня
+    // такого же расхода, но не меньше трёх — чтобы выезд не остался без ИИ.
+    const weekAgo = nowMs - 7 * 86400000;
+    const burnedWeek = pool.filter((x) => x.exhaustedAt && new Date(x.exhaustedAt).getTime() > weekAgo).length;
+    const perDay = burnedWeek / 7;
+    const recommendSpare = Math.max(3, Math.ceil(perDay * 2));
+    const needMore = Math.max(0, recommendSpare - spare);
+
     const { data: src, error: cfgErr } = await supabase.from('app_config').select('value').eq('key', 'gemini_api_key').maybeSingle();
     // Нет таблицы — ключ из панели физически некуда положить, скажем об этом.
     const storageBroken = !!cfgErr && /PGRST205|does not exist|schema cache/i.test(String(cfgErr.message || ''));
@@ -274,6 +345,17 @@ export default async function handler(req: any, res: any) {
       source: src?.value ? 'панель' : 'env',
       live,
       detail,
+      pool,
+      poolSummary: {
+        total: pool.length,
+        spare,
+        active,
+        burned,
+        burnedWeek,
+        perDay: Math.round(perDay * 10) / 10,
+        recommendSpare,
+        needMore,
+      },
       consoleUrl: 'https://aistudio.google.com/apikey',
     });
   }

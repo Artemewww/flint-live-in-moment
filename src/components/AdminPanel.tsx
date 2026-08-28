@@ -1559,6 +1559,18 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       setKeyStatus(await res.json());
     } catch { setKeyStatus({ ok: false, error: 'Нет связи с сервером' }); }
   };
+  /**
+   * Пока окно ключей открыто — обновляем статус раз в 30 секунд. Владелец
+   * просил видеть картину «в реальном времени»: ключ может сгореть прямо во
+   * время выезда, и статичный снимок при открытии тут бесполезен.
+   */
+  useEffect(() => {
+    if (!showAiKey) return;
+    const t = setInterval(() => { loadKeyStatus(); }, 30000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAiKey]);
+
   const saveAiKey = async () => {
     const key = keyInput.trim();
     if (!key || keySaving) return;
@@ -4047,6 +4059,101 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </div>
                     )}
                     {keyStatus.detail && <div className="text-white/70 mt-1 leading-snug">{keyStatus.detail}</div>}
+                  </div>
+                )}
+
+                {/**
+                  * ПУЛ КЛЮЧЕЙ. Зелёный — нетронутый, лежит в запасе; жёлтый —
+                  * в работе, квота ещё есть; красный — сгорел на суточной
+                  * квоте и ждёт сброса. Даты обязательны: по ним видно, с какой
+                  * скоростью клуб жжёт ключи и сколько готовить заранее.
+                  */}
+                {keyStatus?.poolSummary && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[10px] uppercase font-mono text-white/40">
+                        Пул ключей · всего {keyStatus.poolSummary.total}
+                      </span>
+                      <span className="text-[10px] font-mono text-white/40">обновляется каждые 30 сек</span>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {([
+                        ['spare', 'в запасе', 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'],
+                        ['active', 'в работе', 'bg-amber-500/10 border-amber-500/30 text-amber-300'],
+                        ['burned', 'сгорели', 'bg-rose-500/10 border-rose-500/30 text-rose-300'],
+                      ] as const).map(([k, label, cls]) => (
+                        <div key={k} className={`rounded-xl border p-2.5 ${cls}`}>
+                          <div className="text-xl font-black tabular-nums leading-none">{keyStatus.poolSummary[k]}</div>
+                          <div className="text-[9px] uppercase font-mono mt-1 opacity-80">{label}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Рекомендация: сколько ключей держать наготове. */}
+                    <div className={`rounded-xl border p-3 text-[11px] leading-snug ${
+                      keyStatus.poolSummary.needMore > 0
+                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-200'
+                        : 'bg-white/5 border-white/10 text-white/60'
+                    }`}>
+                      {keyStatus.poolSummary.needMore > 0 ? (
+                        <>
+                          <b>Подготовь ещё {keyStatus.poolSummary.needMore} {keyStatus.poolSummary.needMore === 1 ? 'ключ' : 'ключа'}.</b>{' '}
+                          В запасе {keyStatus.poolSummary.spare}, рекомендуемый минимум — {keyStatus.poolSummary.recommendSpare}.
+                        </>
+                      ) : (
+                        <><b>Запаса хватает.</b> Нетронутых ключей {keyStatus.poolSummary.spare} при рекомендуемых {keyStatus.poolSummary.recommendSpare}.</>
+                      )}
+                      {keyStatus.poolSummary.burnedWeek > 0 && (
+                        <> Расход: {keyStatus.poolSummary.burnedWeek} за неделю (~{keyStatus.poolSummary.perDay} в сутки).</>
+                      )}
+                    </div>
+
+                    <div className="space-y-1.5">
+                      {(keyStatus.pool || []).map((k: any) => {
+                        const tone = k.state === 'spare'
+                          ? { dot: 'bg-emerald-400', text: 'text-emerald-300', label: 'в запасе' }
+                          : k.state === 'active'
+                            ? { dot: 'bg-amber-400', text: 'text-amber-300', label: 'в работе' }
+                            : { dot: 'bg-rose-500', text: 'text-rose-300', label: 'сгорел' };
+                        const dt = (v?: string | null) => v
+                          ? new Date(v).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                          : '—';
+                        return (
+                          <div key={k.masked + k.addedAt} className="bg-white/5 border border-white/10 rounded-xl px-3 py-2 flex items-start gap-2.5">
+                            <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${tone.dot}`} />
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-mono text-xs text-white/80">{k.masked}</span>
+                                <span className={`text-[9px] uppercase font-mono ${tone.text}`}>{tone.label}</span>
+                                {k.current && (
+                                  <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-brand/20 text-brand">сейчас основной</span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-white/40 font-mono mt-0.5 flex flex-wrap gap-x-3">
+                                {k.state === 'spare' && <span>добавлен {dt(k.addedAt)}</span>}
+                                {k.state === 'active' && (
+                                  <>
+                                    <span>запросов: {k.uses}</span>
+                                    <span>последний {dt(k.lastOkAt)}</span>
+                                  </>
+                                )}
+                                {k.state === 'burned' && (
+                                  <>
+                                    <span className="text-rose-300/80">сгорел {dt(k.exhaustedAt)}</span>
+                                    <span>вернётся {dt(k.resetsAt)}</span>
+                                    <span>запросов: {k.uses}</span>
+                                  </>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {!(keyStatus.pool || []).length && (
+                        <p className="text-white/40 text-[11px] font-mono">Пул пуст — добавь ключи ниже.</p>
+                      )}
+                    </div>
                   </div>
                 )}
 
