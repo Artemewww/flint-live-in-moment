@@ -519,6 +519,90 @@ async function getActiveGeminiKey(): Promise<string> {
   return key;
 }
 
+/* ═══════════════════ ПУЛ КЛЮЧЕЙ GEMINI ═══════════════════════════════════
+ * Бесплатный тир Google — это суточный лимит запросов на ключ и на модель.
+ * Одно мероприятие съедает его за вечер: разбор чата, ответы эксперта,
+ * генерация афиши. Раньше ключ был ОДИН: он выдыхался, бот замолкал на сутки,
+ * владелец руками генерил новый и вставлял в панель — и так по кругу.
+ *
+ * Теперь ключей несколько. Выдохся — помечаем его отдыхающим до полуночи по
+ * тихоокеанскому времени (там у Google сбрасываются суточные квоты) и молча
+ * идём к следующему. Владельца дёргаем ТОЛЬКО когда отдыхают все.
+ *
+ * Ключи лежат в app_config['gemini_keys'] (JSON). Текущий рабочий дублируем в
+ * app_config['gemini_api_key'] — оттуда его читают генерация события и картинок
+ * (api/ai.ts, api/admin/events.ts), и они автоматически едут за ротацией.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+interface GKey { k: string; label?: string; addedAt?: string; cooldownUntil?: string | null; fails?: number }
+
+let keyPoolCache: { keys: GKey[]; at: number } | null = null;
+
+/** Полночь в Лос-Анджелесе — момент сброса суточных квот Google. */
+function nextQuotaReset(): string {
+  const now = new Date();
+  // -8/-7 часов от UTC; берём -8 (PST) — так ключ вернётся в строй не раньше сброса.
+  const pt = new Date(now.getTime() - 8 * 3600 * 1000);
+  pt.setUTCHours(24, 0, 0, 0);
+  return new Date(pt.getTime() + 8 * 3600 * 1000).toISOString();
+}
+
+async function loadKeyPool(): Promise<GKey[]> {
+  if (keyPoolCache && Date.now() - keyPoolCache.at < 60_000) return keyPoolCache.keys;
+  let keys: GKey[] = [];
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'gemini_keys').maybeSingle();
+    keys = JSON.parse(String((data as any)?.value || '[]'));
+    if (!Array.isArray(keys)) keys = [];
+  } catch { keys = []; }
+
+  // Миграция: одиночный ключ из панели и ключ из env тоже становятся частью пула.
+  const legacy = await getActiveGeminiKey();
+  const envKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || '';
+  for (const k of [legacy, envKey]) {
+    if (k && !keys.some((x) => x.k === k)) keys.push({ k, label: 'из настроек', addedAt: new Date().toISOString(), fails: 0 });
+  }
+  keyPoolCache = { keys, at: Date.now() };
+  return keys;
+}
+
+async function saveKeyPool(keys: GKey[]): Promise<void> {
+  keyPoolCache = { keys, at: Date.now() };
+  await supabase.from('app_config').upsert(
+    { key: 'gemini_keys', value: JSON.stringify(keys) }, { onConflict: 'key' });
+}
+
+/** Ключи, которые сейчас можно использовать: сначала те, что реже падали. */
+async function usableKeys(): Promise<string[]> {
+  const now = Date.now();
+  const pool = await loadKeyPool();
+  return pool
+    .filter((x) => x.k && (!x.cooldownUntil || new Date(x.cooldownUntil).getTime() < now))
+    .sort((a, b) => (a.fails || 0) - (b.fails || 0))
+    .map((x) => x.k);
+}
+
+/**
+ * Ключ упёрся в квоту: отправляем его отдыхать и переводим стрелку на
+ * следующий живой — включая `gemini_api_key`, чтобы за ротацией поехали и
+ * соседние функции (генерация события и афиши).
+ */
+async function coolDownKey(key: string): Promise<void> {
+  const pool = await loadKeyPool();
+  const row = pool.find((x) => x.k === key);
+  if (row) { row.cooldownUntil = nextQuotaReset(); row.fails = (row.fails || 0) + 1; }
+  await saveKeyPool(pool);
+
+  const next = (await usableKeys())[0];
+  if (next && next !== key) {
+    try {
+      await supabase.from('app_config').upsert(
+        { key: 'gemini_api_key', value: next, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      geminiKeyCache = { key: next, at: Date.now() };
+    } catch { /* не критично: пул всё равно отдаст ключ напрямую */ }
+  }
+}
+
 /** Уведомить админа о закончившейся квоте — не чаще раза в 2 часа (throttle в app_config). */
 async function notifyQuotaExhausted() {
   try {
@@ -529,14 +613,15 @@ async function notifyQuotaExhausted() {
     if (ADMIN_CHAT_ID) {
       await tg('sendMessage', {
         chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
-        text: '⚠️ <b>Квота Gemini закончилась</b>\n\n'
-          + 'ИИ-функции (разбор задач, ответы в чате, генерация события) молчат до следующих суток. '
-          + 'Остальное работает: частые вопросы в чате бот отвечает без ИИ.\n\n'
-          + '<b>Как починить за минуту:</b>\n'
-          + '1. Открой <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a>\n'
-          + '2. Create API key → выбери <b>другой проект</b> (в том же проекте квота та же) → скопируй ключ\n'
-          + '3. Панель организатора → <b>🔑 ИИ-ключ</b> → вставь и сохрани\n\n'
-          + 'Бесплатный тир — 20 запросов в сутки на модель. Чтобы не упираться совсем, включи оплату в Google Cloud для этого проекта.',
+        text: '⚠️ <b>Все ключи Gemini упёрлись в суточную квоту</b>\n\n'
+          + `Ключей в пуле: <b>${(await loadKeyPool()).length}</b>, свободных сейчас нет. `
+          + 'ИИ-функции (разбор чата, задачи, генерация события) молчат до сброса квоты — '
+          + 'ночью по тихоокеанскому времени. Остальное работает как обычно.\n\n'
+          + '<b>Как вернуть за минуту:</b>\n'
+          + '1. <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a> → Create API key\n'
+          + '2. Обязательно выбери <b>ДРУГОЙ проект</b> — в том же проекте квота та же самая\n'
+          + '3. Пришли мне сюда: <code>/ключ AIza...</code> — проверю и подключу сразу\n\n'
+          + 'Список ключей и кто из них отдыхает — команда /ключи',
         disable_web_page_preview: true,
       });
     }
@@ -546,15 +631,15 @@ async function notifyQuotaExhausted() {
 /** Гарантированный JSON от Gemini (responseMimeType) + повтор: текстовый
  *  вариант отвечал прозой и парс задач срабатывал через раз. */
 async function geminiJSON(prompt: string): Promise<any | null> {
-  const key = await getActiveGeminiKey();
-  if (!key) return null;
+  const keys = await usableKeys();
+  if (!keys.length) { await notifyQuotaExhausted(); return null; }
   // У каждой модели свой суточный лимит бесплатного тира (20 запросов),
   // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
   // замолкаем на весь день. gemini-2.5-flash для новых ключей отдаёт 404.
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
     'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
-  const attempt = async (model: string): Promise<any | null> => {
+  const attempt = async (model: string, key: string): Promise<any | null> => {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -562,20 +647,32 @@ async function geminiJSON(prompt: string): Promise<any | null> {
         generationConfig: { maxOutputTokens: 1200, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
       }),
     });
-    if (r.status === 429) sawQuotaError = true;
+    if (r.status === 429) { sawQuotaError = true; return 'quota' as any; }
     const j: any = await r.json();
     const txt = (j?.candidates?.[0]?.content?.parts || []).map((p: any) => p?.text || '').join('').trim();
     if (!txt) return null;
     try { return JSON.parse(txt); } catch { const m = txt.match(/\{[\s\S]*\}/); return m ? JSON.parse(m[0]) : null; }
   };
-  for (const model of models) { try { const out = await attempt(model); if (out) return out; } catch { /* next */ } }
+  // Ключ × модель: квота считается по обоим. Упёрлись ключом — не пытаемся
+  // другими моделями того же ключа, а сразу берём следующий ключ.
+  for (const key of keys.slice(0, 6)) {
+    let quotaHit = false;
+    for (const model of models) {
+      try {
+        const out = await attempt(model, key);
+        if (out === 'quota') { quotaHit = true; break; }
+        if (out) return out;
+      } catch { /* следующая модель */ }
+    }
+    if (quotaHit) await coolDownKey(key);
+  }
   if (sawQuotaError) await notifyQuotaExhausted();
   return null;
 }
 
 async function geminiText(prompt: string): Promise<string> {
-  const key = await getActiveGeminiKey();
-  if (!key) return '';
+  const keys = await usableKeys();
+  if (!keys.length) { await notifyQuotaExhausted(); return ''; }
   // У gemini-2.0-flash free-квота нулевая (limit: 0), у -latest — есть.
   // У каждой модели свой суточный лимит бесплатного тира (20 запросов),
   // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
@@ -583,7 +680,7 @@ async function geminiText(prompt: string): Promise<string> {
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
     'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
-  const attempt = async (model: string, fast: boolean): Promise<string> => {
+  const attempt = async (model: string, fast: boolean, key: string): Promise<string> => {
     const body: any = { contents: [{ parts: [{ text: prompt }] }] };
     // thinkingBudget:0 срезает «размышления» 2.5-моделей — иначе ответ идёт 30+ сек,
     // а вебхук должен уложиться в таймаут функции.
@@ -592,16 +689,32 @@ async function geminiText(prompt: string): Promise<string> {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    if (r.status === 429) sawQuotaError = true;
+    if (r.status === 429) { sawQuotaError = true; return '\u0000quota'; }
     const j: any = await r.json();
     const parts = j?.candidates?.[0]?.content?.parts || [];
     return parts.map((p: any) => p?.text || '').join('').trim();
   };
-  for (const model of models) {
-    try { const out = await attempt(model, true); if (out) return out; } catch { /* дальше */ }
-  }
-  for (const model of models.slice(0, 2)) {
-    try { const out = await attempt(model, false); if (out) return out; } catch { /* дальше */ }
+  for (const key of keys.slice(0, 6)) {
+    let quotaHit = false;
+    for (const model of models) {
+      try {
+        const out = await attempt(model, true, key);
+        if (out === '\u0000quota') { quotaHit = true; break; }
+        if (out) return out;
+      } catch { /* дальше */ }
+    }
+    if (!quotaHit) {
+      // Вторая попытка без ограничения на «размышления» — только для двух
+      // первых моделей: она медленнее и упирается в таймаут функции.
+      for (const model of models.slice(0, 2)) {
+        try {
+          const out = await attempt(model, false, key);
+          if (out === '\u0000quota') { quotaHit = true; break; }
+          if (out) return out;
+        } catch { /* дальше */ }
+      }
+    }
+    if (quotaHit) await coolDownKey(key);
   }
   if (sawQuotaError) await notifyQuotaExhausted();
   return '';
@@ -8204,6 +8317,69 @@ export default async function handler(req: any, res: any) {
           });
           return res.status(200).json({ ok: true });
         }
+        /**
+         * `/ключ AIza...` — добавить ключ Gemini в пул, `/ключи` — посмотреть пул.
+         * Раньше замена ключа шла через панель организатора в браузере; когда ИИ
+         * ложится посреди выезда, до браузера никто не идёт. Теперь ключ
+         * добавляется одним сообщением с телефона, и пул сам переключается.
+         */
+        if (text === '/ключи' || text === '/keys') {
+          if (!(await isCore(msg.from.id))) { await tg('sendMessage', { chat_id: chatId, text: 'Только костяк.' }); return res.status(200).json({ ok: true }); }
+          const pool = await loadKeyPool();
+          const now = Date.now();
+          const lines = pool.map((k, i) => {
+            const rest = k.cooldownUntil && new Date(k.cooldownUntil).getTime() > now;
+            const when = rest ? new Date(k.cooldownUntil as string).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '';
+            return `${i + 1}. <code>…${esc(k.k.slice(-6))}</code> — ${rest ? `😴 отдыхает до ${when}` : '✅ в строю'}${k.fails ? ` · сбоев: ${k.fails}` : ''}`;
+          });
+          const live = (await usableKeys()).length;
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `🔑 <b>Ключи Gemini: ${live} из ${pool.length} в строю</b>\n\n${lines.join('\n') || 'Пул пуст.'}\n\n` +
+              `Добавить: <code>/ключ AIza...</code>\nВзять новый: <a href="https://aistudio.google.com/apikey">aistudio.google.com/apikey</a> (обязательно ДРУГОЙ проект — в том же квота общая).`,
+            disable_web_page_preview: true,
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (text.startsWith('/ключ ') || text.startsWith('/key ')) {
+          if (!(await isCore(msg.from.id))) { await tg('sendMessage', { chat_id: chatId, text: 'Только костяк.' }); return res.status(200).json({ ok: true }); }
+          const newKey = text.replace(/^\S+\s+/, '').trim();
+          if (newKey.length < 20) { await tg('sendMessage', { chat_id: chatId, text: 'Это не похоже на ключ. Формат: /ключ AIza...' }); return res.status(200).json({ ok: true }); }
+          // Проверяем ключ живым запросом: пустой пул из мёртвых ключей хуже,
+          // чем его отсутствие — бот будет молчать и думать, что всё хорошо.
+          const probe = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${encodeURIComponent(newKey)}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ contents: [{ parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 8 } }),
+          });
+          if (!probe.ok) {
+            const err = await probe.text();
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `❌ Ключ не принят (HTTP ${probe.status}).\n\n<code>${esc(err.slice(0, 300))}</code>`,
+            });
+            return res.status(200).json({ ok: true });
+          }
+          const pool = await loadKeyPool();
+          if (pool.some((x) => x.k === newKey)) {
+            // Уже есть — снимаем отдых: возможно, квота уже сбросилась.
+            const row = pool.find((x) => x.k === newKey)!;
+            row.cooldownUntil = null; row.fails = 0;
+          } else {
+            pool.push({ k: newKey, label: `от ${msg.from.first_name || msg.from.id}`, addedAt: new Date().toISOString(), fails: 0 });
+          }
+          await saveKeyPool(pool);
+          await supabase.from('app_config').upsert(
+            { key: 'gemini_api_key', value: newKey, updated_at: new Date().toISOString(), updated_by: msg.from.id }, { onConflict: 'key' });
+          geminiKeyCache = { key: newKey, at: Date.now() };
+          try { await tg('deleteMessage', { chat_id: chatId, message_id: msg.message_id }); } catch { /* ключ остался в переписке — не критично в личке */ }
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `✅ Ключ добавлен и проверен. В строю: <b>${(await usableKeys()).length}</b> из ${pool.length}.\n\n` +
+              `Сообщение с ключом удалил. Список — /ключи`,
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         if (text === '🎒 Чек-лист' || text === '/checklist') {
           await sendChecklistMenu(chatId, siteUrl(req));
           return res.status(200).json({ ok: true });
