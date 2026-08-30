@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0A0A0A" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="description" content="FLINT — инструкция для членов клуба: как пользоваться ботом и платформой." />
+    <title>FLINT • Как пользоваться ботом — для членов клуба</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300..900;1,300..900;1,700&family=Montserrat:wght@700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: '#E6FD3A',
+              'brand-hover': '#d2ea20',
+              surface: '#121212',
+            },
+            fontFamily: {
+              sans: ['"Inter Tight"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+              display: ['Montserrat', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html { scroll-behavior: smooth; }
+      body { background-color: #0A0A0A; color: #fff; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+      ::selection { background: #E6FD3A; color: #000; }
+      .grid-bg {
+        background-image:
+          linear-gradient(rgba(230,253,58,0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(230,253,58,0.045) 1px, transparent 1px);
+        background-size: 56px 56px;
+        mask-image: radial-gradient(ellipse 90% 70% at 50% 20%, #000 30%, transparent 75%);
+        -webkit-mask-image: radial-gradient(ellipse 90% 70% at 50% 20%, #000 30%, transparent 75%);
+      }
+      .glow { position: absolute; border-radius: 9999px; filter: blur(110px); pointer-events: none; }
+      .card { border-radius: 1rem; border: 1px solid rgba(255,255,255,.08); background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,0) 55%), #121212; }
+      .card-hover { transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+      .card-hover:hover { transform: translateY(-3px); border-color: rgba(230,253,58,.35); box-shadow: 0 18px 50px -20px rgba(230,253,58,.18); }
+      .chip { display: inline-flex; align-items: center; gap: .5rem; padding: .3rem .8rem; border-radius: 9999px; border: 1px solid rgba(230,253,58,.3); background: rgba(230,253,58,.06); font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #E6FD3A; }
+      .kbd { font-family: 'JetBrains Mono', monospace; font-size: .8em; padding: .15em .5em; border-radius: .4em; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: #E6FD3A; }
+      .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+      .reveal.on { opacity: 1; transform: none; }
+      @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
+      /* Интро-видео логотипа */
+      #flint-intro { position: fixed; inset: 0; z-index: 9999; background: #000; display: flex; align-items: center; justify-content: center; transition: opacity .8s ease, visibility .8s ease; }
+      #flint-intro video { width: 100%; height: 100%; object-fit: contain; }
+      #flint-intro.done { opacity: 0; visibility: hidden; pointer-events: none; }
+    </style>
+  </head>
+  <body class="font-sans">
+
+    <!-- ======= ИНТРО: видео-логотип FLINT, затем контент ======= -->
+    <div id="flint-intro" aria-hidden="true">
+      <video id="flintIntroVideo" autoplay muted playsinline preload="auto">
+        <source src="assets/hero.mp4" type="video/mp4" />
+      </video>
+    </div>
+
+    <!-- ======================= HEADER ======================= -->
+    <header class="fixed top-0 inset-x-0 z-50 backdrop-blur-md bg-[#0A0A0A]/80 border-b border-white/10">
+      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between gap-4">
+        <a href="performance.html" class="flex items-center gap-2.5 shrink-0" aria-label="FLINT — на главную">
+          <svg viewBox="0 0 328 117" fill="none" class="h-7 w-auto" xmlns="http://www.w3.org/2000/svg">
+            <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z" fill="#E6FD3A"/>
+            <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z" fill="#E6FD3A"/>
+            <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z" fill="#E6FD3A"/>
+            <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z" fill="#E6FD3A"/>
+            <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z" fill="#E6FD3A"/>
+            <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z" fill="#E6FD3A"/>
+            <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="black"/>
+          </svg>
+        </a>
+        <span class="chip hidden md:inline-flex">🔒 Только для членов клуба</span>
+        <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="hidden sm:inline-flex px-4 py-2 rounded-xl font-mono text-[11px] font-bold uppercase tracking-widest bg-brand text-black hover:bg-brand-hover transition-all">
+          Открыть бота
+        </a>
+      </div>
+    </header>
+
+    <main id="top" class="relative">
+      <!-- ======================= HERO ======================= -->
+      <section class="relative pt-36 pb-16 px-4 overflow-hidden">
+        <!-- Анимация сборки логотипа FLINT: точки-люди → камень → молния -->
+        <div class="absolute top-0 inset-x-0 h-[420px] pointer-events-none" aria-hidden="true" style="z-index:0">
+          <canvas class="bolt-canvas absolute inset-0 w-full h-full"></canvas>
+        </div>
+        <div class="absolute inset-0 grid-bg pointer-events-none" aria-hidden="true"></div>
+        <div class="glow w-[560px] h-[560px] bg-brand/10 -top-52 -left-32" aria-hidden="true"></div>
+        <div class="glow w-[420px] h-[420px] bg-brand/5 top-24 right-0" aria-hidden="true"></div>
+
+        <div class="relative max-w-5xl mx-auto text-center">
+          <span class="chip">Инструкция члена клуба · редакция 28.08.2026</span>
+          <h1 class="mt-6 font-display font-black uppercase tracking-tight text-4xl md:text-6xl leading-tight">
+            Как пользоваться <span class="text-brand">ботом FLINT</span>
+          </h1>
+          <p class="mt-6 max-w-2xl mx-auto text-lg text-white/70 leading-relaxed">
+            Вся жизнь клуба — в боте <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="text-brand hover:text-brand-hover font-medium">@campsflint_bot</a>:
+            афиша, запись, чек-листы, расходы, имущество и чаты событий.
+            Люди занимаются людьми, система — всей рутиной.
+          </p>
+          <div class="mt-8 rounded-2xl border border-brand/25 bg-brand/5 p-5 md:p-6 max-w-2xl mx-auto text-left">
+            <p class="text-sm text-white/75 leading-relaxed">
+              <span class="text-brand font-bold">Эта страница — для членов клуба.</span>
+              Здесь описано то, что не видно гостям: механика записи, внутренние разделы и приватность.
+              Не передавайте ссылку дальше круга — вход в клуб по приглашению, и это касается информации тоже.
+            </p>
+          </div>
+          <div class="relative mt-14 grid lg:grid-cols-12 gap-10 items-stretch" id="phone-tabs">
+            <div class="lg:col-span-6 flex justify-center">
+              <div class="relative" aria-hidden="true">
+                <div class="absolute -inset-6 bg-[#E6FD3A]/10 blur-3xl rounded-full"></div>
+                <img id="phone-screen" src="assets/phones/phone_feed.png" alt="Экран бота FLINT"
+                     class="relative w-auto max-h-[620px] mx-auto object-contain rounded-[2.4rem] border border-white/10 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)] transition-opacity duration-300" loading="lazy" />
+              </div>
+            </div>
+            <div class="lg:col-span-6 flex flex-col justify-center gap-2.5 pr-1">
+              <button type="button" data-phone="phone_feed" class="phonetab w-full text-left rounded-2xl border px-6 py-4 flex items-start gap-5 bg-brand/[0.08] border-brand/40 text-white transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-9 text-center text-brand">01</span>
+                <span><span class="font-display font-bold text-lg block">Закрытая афиша</span><span class="block text-sm text-white/55 leading-relaxed mt-1">События видны только подтверждённым членам клуба.</span></span>
+              </button>
+              <button type="button" data-phone="phone_feed" class="phonetab w-full text-left rounded-2xl border px-6 py-4 flex items-start gap-5 bg-white/[0.03] border-white/[0.08] text-white/75 hover:border-white/20 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-9 text-center text-brand">02</span>
+                <span><span class="font-display font-bold text-lg block">Анкета и приём</span><span class="block text-sm text-white/55 leading-relaxed mt-1">Заявка, ответ «зачем», подтверждение ценностей — костяк принимает решение.</span></span>
+              </button>
+              <button type="button" data-phone="phone_feed" class="phonetab w-full text-left rounded-2xl border px-6 py-4 flex items-start gap-5 bg-white/[0.03] border-white/[0.08] text-white/75 hover:border-white/20 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-9 text-center text-brand">03</span>
+                <span><span class="font-display font-bold text-lg block">Логистика и чек-листы</span><span class="block text-sm text-white/55 leading-relaxed mt-1">Машины, места, точки сбора и задачи с ответственными в одном месте.</span></span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+      </section>
+      <!-- ======================= /HERO ======================= -->
+
+      <!-- ======================= 01 СТАРТ ======================= -->
+      <!-- ======================= 01 СТАРТ ======================= -->
+      <section id="start" class="relative py-16 px-4 scroll-mt-24">
+        <div class="glow w-[480px] h-[480px] bg-brand/5 top-10 -right-40" aria-hidden="true"></div>
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">01 · Старт</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Три шага до афиши
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Бот и афиша — одно целое: афиша открывается как Mini App прямо внутри Telegram.
+            Личность подтверждает сам Telegram — никаких паролей и кодов.
+          </p>
+          <div class="mt-10 grid md:grid-cols-3 gap-4">
+            <div class="card card-hover p-6 reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">1</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Найдите бота</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Откройте <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="text-brand hover:text-brand-hover">@campsflint_bot</a> и нажмите <span class="kbd">/start</span> (или «Запустить»).</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">2</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Нажмите «Открыть афишу»</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Кнопка меню бота открывает афишу как Mini App — приложение внутри Telegram, сразу развёрнутое на весь экран.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">3</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Вы в системе</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Афиша узнаёт вас по Telegram-аккаунту. Отдельный вход не нужен: кто в Telegram — тот и вы.</p>
+            </div>
+          </div>
+          <div class="mt-6 card p-6 reveal">
+            <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Важно знать</div>
+            <p class="mt-3 text-sm text-white/70 leading-relaxed max-w-3xl">
+              Если открыть афишу в обычном браузере, а не из Telegram — вы «гость»:
+              часть данных (точное место сбора, дни рождения резидентов) скрыта намеренно.
+              Это не баг, а приватность клуба в действии.
+            </p>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /01 СТАРТ ======================= -->
+
+      <section id="poster" class="relative py-16 px-4 scroll-mt-24">
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">02 · Афиша</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Афиша: статусы событий
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Каждое событие живёт по одинаковому циклу. По статусу сразу видно, что можно делать:
+            записываться, ждать открытия или смотреть архив.
+          </p>
+          <div class="mt-10 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Locked</div>
+              <h3 class="mt-3 font-display font-bold text-lg">🔒 Анонс под замком</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Даты уточняются, набор скоро откроется. Записи ещё нет — жмите «Сообщить об открытии», и бот пришлёт уведомление первым.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Open</div>
+              <h3 class="mt-3 font-display font-bold text-lg">✍️ Запись открыта</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Можно записываться. После подтверждения бот пришлёт карточку события с местом сбора и деталями.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Full</div>
+              <h3 class="mt-3 font-display font-bold text-lg">⛔ Мест нет</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Лимит достигнут. Подпишитесь на следующее — события появляются регулярно, свои придут.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Past</div>
+              <h3 class="mt-3 font-display font-bold text-lg">📁 Архив</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Прошедшие уходят в архив по дате. Видно историю клуба: сколько прошли и что было.</p>
+            </div>
+          </div>
+          <div class="mt-6 grid md:grid-cols-2 gap-4">
+            <div class="card p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Deep-link</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Карточка события в чате</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">После записи бот присылает карточку: логистика, задачи, чат мероприятия. Искать ничего не нужно — всё приходит само.</p>
+            </div>
+            <div class="card p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Подписка</div>
+              <h3 class="mt-3 font-display font-bold text-lg">«Сообщить об открытии»</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">На событии «под замком» жмите подписку — бот уведомит при открытии набора, и вы запишетесь первым.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /02 АФИША ======================= -->
+
+      <!-- ======================= 03 ЖИЗНЬ СОБЫТИЯ ======================= -->
+      <section id="event-life" class="relative py-16 px-4 scroll-mt-24">
+        <div class="glow w-[460px] h-[460px] bg-brand/5 top-20 -left-40" aria-hidden="true"></div>
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">03 · Жизнь события</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            От записи до разъезда
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            У события есть ритм, который платформа держит за вас: бади, задачи, чек-лист,
+            расходы. Ниже — как это выглядит для участника.
+          </p>
+          <div class="mt-10 grid lg:grid-cols-2 gap-4">
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Роль</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Бади — напарник от сбора до разъезда</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">На каждом событии у вас есть напарник, который держит вас в поле зрения. Новичок не остаётся один. Что-то пошло не так — сначала к бади, потом к организатору.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Роль</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Организатор и помощники</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Событие больше десяти человек ведут трое: организатор и два помощника — перекличка, деньги, безопасность. Вопросы логистики — к ним.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Подготовка</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Чек-лист снаряжения</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">К событию прилагается чек-лист: что взять, что выдаёт клуб, что личное. Отметки сохраняются — в следующий раз начинаете с готового.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Деньги</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Расходы и долги — прозрачно</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Кто что потратил и кто кому должен — фиксируется платформой. Взносы по факту расходов, без наценки: видно, куда ушёл рубль.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Чат события</div>
+              <h3 class="mt-3 font-display font-bold text-lg">ИИ разбирает переписку</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Бот сам достаёт из чата расходы, задачи и решения. Не нужно листать двести сообщений — итоги приходят структурированно.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">После</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Обратная связь и рост</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">После события оставьте отклик — это вход в репутацию и геймификацию: вклад фиксируется, рост замечается.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /03 ЖИЗНЬ СОБЫТИЯ ======================= -->
+
+      <!-- ======================= 04 РАЗДЕЛЫ ======================= -->
+      <section id="sections" class="relative py-16 px-4 scroll-mt-24">
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">04 · Разделы афиши</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Что где лежит
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Краткая карта разделов Mini App — чтобы не искать нужное перебором вкладок.
+          </p>
+          <div class="mt-10 grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Афиша</div>
+              <h3 class="mt-3 font-display font-bold text-lg">События и статусы</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Список с фильтром по фазе: открытые, под замком, архив. Запись — в один клик.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Событие</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Карточка с деталями</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Описание, место сбора, участники, задачи с ответственными, чек-лист и чат — всё на одной карточке.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Программа</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Голосование</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Идеи будущих событий собираются голосованием: программа клуба складывается из голосов участников.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Имущество</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Складчина с именами</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Мангал, флаги, термос: видно, кто скидывался, у кого вещь на руках и кому возвращать. Общее не «ничьё».</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Профиль</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Ваши данные</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Контакты, участия, согласия. Сведения о здоровье фиксируются только со слов самого участника.</p>
+            </div>
+            <div class="card card-hover p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Дни рождения</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Календарь резидентов</h3>
+              <p class="mt-2 text-sm text-white/65 leading-relaxed">Виден только внутри Telegram-сессии — как и всё личное. Не забудьте поздравить.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /04 РАЗДЕЛЫ ======================= -->
+
+      <!-- ======================= 05 ПРИВАТНОСТЬ ======================= -->
+      <section id="privacy" class="relative py-16 px-4 scroll-mt-24">
+        <div class="glow w-[460px] h-[460px] bg-brand/5 top-24 -right-40" aria-hidden="true"></div>
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">05 · Приватность</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Что видно и кому
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Клуб работает с данными людей — и делает это осознанно. Правило простое:
+            доступ к человеку даёт только событие, на которое он записался.
+          </p>
+          <div class="mt-10 grid md:grid-cols-3 gap-4">
+            <div class="card p-6 reveal">
+              <div class="text-2xl">👁</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Видят участники события</h3>
+              <ul class="mt-3 space-y-2 text-sm text-white/65 leading-relaxed">
+                <li class="flex gap-2"><span class="text-brand">✓</span>Состав участников своего события</li>
+                <li class="flex gap-2"><span class="text-brand">✓</span>Логистика: место сбора, машины, точки</li>
+                <li class="flex gap-2"><span class="text-brand">✓</span>Задачи, которые вы взяли</li>
+              </ul>
+            </div>
+            <div class="card p-6 reveal">
+              <div class="text-2xl">🙈</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Скрыто от чужих</h3>
+              <ul class="mt-3 space-y-2 text-sm text-white/65 leading-relaxed">
+                <li class="flex gap-2"><span class="text-brand">✕</span>Дни рождения — вне Telegram-сессии</li>
+                <li class="flex gap-2"><span class="text-brand">✕</span>Точное место сбора — до записи</li>
+                <li class="flex gap-2"><span class="text-brand">✕</span>Данные о здоровье — только со слов участника</li>
+              </ul>
+            </div>
+            <div class="card p-6 reveal">
+              <div class="text-2xl">🤝</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Согласия — явные</h3>
+              <ul class="mt-3 space-y-2 text-sm text-white/65 leading-relaxed">
+                <li class="flex gap-2"><span class="text-brand">✓</span>Согласие на съёмку берётся отдельно</li>
+                <li class="flex gap-2"><span class="text-brand">✓</span>Сказанное в круге остаётся в круге</li>
+                <li class="flex gap-2"><span class="text-brand">✓</span>Личное не пересылается дальше круга</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /05 ПРИВАТНОСТЬ ======================= -->
+
+      <!-- ======================= 06 ЭТИКЕТ ======================= -->
+      <section id="etiquette" class="relative py-16 px-4 scroll-mt-24">
+        <div class="relative max-w-6xl mx-auto">
+          <span class="chip">06 · Цифровой этикет</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Как общаемся в чатах событий
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Чат события — рабочий инструмент, а не лента. Несколько правил делают его полезным для всех.
+          </p>
+          <div class="mt-10 grid md:grid-cols-2 gap-4">
+            <div class="card p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Да</div>
+              <ul class="mt-3 space-y-2.5 text-sm text-white/70 leading-relaxed">
+                <li class="flex gap-2.5"><span class="text-brand font-black">✓</span>Пишите по делу: логистика, вопросы, подтверждения.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✓</span>Культура речи — без мата, как и вживую.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✓</span>Расходы и задачи фиксируйте в чате — их оттуда достанет ИИ.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✓</span>Взяли задачу — отметьтесь, когда сделали.</li>
+              </ul>
+            </div>
+            <div class="card p-6 reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Нет</div>
+              <ul class="mt-3 space-y-2.5 text-sm text-white/70 leading-relaxed">
+                <li class="flex gap-2.5"><span class="text-brand font-black">✕</span>Соры и споры — не для чата события.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✕</span>Сказанное в круге — не выносится в чаты и соцсети.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✕</span>Мемы и флуд — не для рабочего чата.</li>
+                <li class="flex gap-2.5"><span class="text-brand font-black">✕</span>Без тревожных сообщений ночью — у людей будни.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /06 ЭТИКЕТ ======================= -->
+
+      <!-- ======================= 07 FAQ ======================= -->
+      <section id="faq" class="relative py-16 px-4 scroll-mt-24">
+        <div class="relative max-w-4xl mx-auto">
+          <span class="chip">07 · Вопрос-ответ</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Частые вопросы
+          </h2>
+          <div class="mt-10 space-y-3">
+            <details class="card p-0 reveal">
+              <summary class="flex items-center justify-between gap-4 cursor-pointer list-none px-6 py-5 font-display font-bold">
+                Записался, но не могу пойти. Что делать?
+                <span class="text-brand text-xl leading-none shrink-0">+</span>
+              </summary>
+              <p class="px-6 pb-5 text-sm text-white/65 leading-relaxed">Скажите организатору сразу — место уйдёт следующему из листа ожидания. Это нормально: события живут на ответственности, а не на явке любой ценой.</p>
+            </details>
+            <details class="card p-0 reveal">
+              <summary class="flex items-center justify-between gap-4 cursor-pointer list-none px-6 py-5 font-display font-bold">
+                Не приходит уведомление от бота
+                <span class="text-brand text-xl leading-none shrink-0">+</span>
+              </summary>
+              <p class="px-6 pb-5 text-sm text-white/65 leading-relaxed">Проверьте, что запускали бота (<span class="kbd">/start</span>) и чат бота не на «без звука». Подписка «Сообщить об открытии» сработает при открытии набора.</p>
+            </details>
+            <details class="card p-0 reveal">
+              <summary class="flex items-center justify-between gap-4 cursor-pointer list-none px-6 py-5 font-display font-bold">
+                Меня нет в списке участников, но я записывался
+                <span class="text-brand text-xl leading-none shrink-0">+</span>
+              </summary>
+              <p class="px-6 pb-5 text-sm text-white/65 leading-relaxed">Напишите организатору события — он подтвердит запись или поправит статус. Сбои фиксируются в поддержке.</p>
+            </details>
+            <details class="card p-0 reveal">
+              <summary class="flex items-center justify-between gap-4 cursor-pointer list-none px-6 py-5 font-display font-bold">
+                Кто видит мой профиль?
+                <span class="text-brand text-xl leading-none shrink-0">+</span>
+              </summary>
+              <p class="px-6 pb-5 text-sm text-white/65 leading-relaxed">Участники событий, на которые вы записались. Доступ к человеку даёт только событие, на которое он записался.</p>
+            </details>
+            <details class="card p-0 reveal">
+              <summary class="flex items-center justify-between gap-4 cursor-pointer list-none px-6 py-5 font-display font-bold">
+                Где посмотреть мои долги по расходов?
+                <span class="text-brand text-xl leading-none shrink-0">+</span>
+              </summary>
+              <p class="px-6 pb-5 text-sm text-white/65 leading-relaxed">Раздел расходов на карточке события: кто что потратил и кому должен. ИИ подтягивает расходы из чата автоматически.</p>
+            </details>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /07 FAQ ======================= -->
+
+      <!-- ======================= СОБЫТИЯ И ВЫЗОВЫ ======================= -->
+      <section class="relative py-16 px-4">
+        <div class="max-w-6xl mx-auto">
+          <span class="chip">События и вызовы</span>
+          <h2 class="mt-5 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Всё это происходит вживую
+          </h2>
+          <p class="mt-5 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Походы, баня, выступления, чтения и большие выезды — живые встречи глаза в глаза,
+            без телефонов и уведомлений. Афиша событий живёт в боте: оформление и участие — парой нажатий.
+          </p>
+
+          <div class="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface">
+              <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Поход" class="w-full aspect-[4/3] object-cover" />
+              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Поход · Ислочь</figcaption>
+            </figure>
+            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface">
+              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Баня" class="w-full aspect-[4/3] object-cover" />
+              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Нано-баня</figcaption>
+            </figure>
+            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface">
+              <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="Выступление" class="w-full aspect-[4/3] object-cover" />
+              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Выступления</figcaption>
+            </figure>
+            </div>
+
+          <!-- Прошедшие события: вертикальное видео слева + два горизонтальных справа -->
+          <div class="mt-10">
+            <div class="flex items-center gap-3">
+              <span class="chip">Прошедшие события</span>
+              <span class="hidden sm:inline-flex items-center gap-2 text-xs text-white/50 font-mono uppercase tracking-wider">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="text-brand"><path d="M8 5v14l11-7z"/></svg>
+                Нажмите, чтобы посмотреть
+              </span>
+            </div>
+            <div class="mt-6 grid lg:grid-cols-12 gap-4 items-stretch">
+              <figure class="lg:col-span-7 rounded-2xl overflow-hidden border border-white/10 bg-surface">
+                <video controls preload="none" poster="assets/vibeo/flint-isloch-poster.jpg" playsinline
+                       class="w-full h-full object-cover aspect-[9/16] sm:aspect-auto sm:h-full" style="background:#000">
+                  <source src="assets/vibeo/flint-isloch-2025.mp4" type="video/mp4" />
+                </video>
+                <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2">
+                  <span>Ислочь · выезд 2025</span><span class="text-brand">▶ смотреть</span>
+                </figcaption>
+              </figure>
+              <div class="lg:col-span-5 flex flex-col gap-4">
+                <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface flex-1">
+                  <video controls preload="none" poster="assets/vibeo/flint-melovcarier-2026.mp4" playsinline class="w-full aspect-video object-cover" style="background:#000">
+                    <source src="assets/vibeo/flint-melovcarier-2026.mp4" type="video/mp4" />
+                  </video>
+                  <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2"><span>Меловкарьер · выезд 2026</span><span class="text-brand">▶</span></figcaption>
+                </figure>
+                <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface flex-1">
+                  <video controls preload="none" poster="assets/vibeo/flint-lv-event.mp4" playsinline class="w-full aspect-video object-cover" style="background:#000">
+                    <source src="assets/vibeo/flint-lv-event.mp4" type="video/mp4" />
+                  </video>
+                  <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2"><span>Живое событие клуба</span><span class="text-brand">▶</span></figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+
+          <div class="mt-6 flex flex-wrap items-center gap-3">
+            <span class="chip">Вызовы клуба:</span>
+            <span class="px-4 py-2 rounded-full border border-brand/25 bg-brand/[0.06] text-brand font-mono text-[11px] uppercase tracking-wider">Спорт</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Походы</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Без телефона</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Отказ от сигарет</span>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /СОБЫТИЯ И ВЫЗОВЫ ======================= -->
+
+      <!-- ======================= CTA ======================= -->
+      <section class="relative py-24 px-4 overflow-hidden">
+        <div class="absolute inset-0 grid-bg pointer-events-none" aria-hidden="true"></div>
+        <div class="glow w-[700px] h-[400px] bg-brand/10 bottom-0 left-1/2 -translate-x-1/2" aria-hidden="true"></div>
+        <div class="relative max-w-3xl mx-auto text-center">
+          <h2 class="font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Всё под рукой — <span class="text-brand">в одном боте</span>
+          </h2>
+          <p class="mt-5 text-lg text-white/70 leading-relaxed">
+            Люди занимаются людьми, система — всей рутиной. Вопросы по боту — в поддержку клуба или организатору события.
+          </p>
+          <div class="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="px-10 py-4 rounded-2xl bg-brand text-black font-mono text-sm font-black uppercase tracking-widest hover:bg-brand-hover transition-all shadow-lg shadow-brand/10">
+              Открыть бота
+            </a>
+            <a href="performance.html" class="px-10 py-4 rounded-2xl border border-white/15 bg-white/5 text-white font-mono text-sm font-bold uppercase tracking-widest hover:bg-white/10 transition-colors">
+              На главную
+            </a>
+          </div>
+          <p class="mt-6 text-xs text-white/35 font-mono">FLINT · «Живи в моменте» · Минск, Беларусь</p>
+        </div>
+      </section>
+    </main>
+
+    <!-- ======================= FOOTER ======================= -->
+    <footer class="border-t border-white/10">
+      <div class="max-w-6xl mx-auto px-4 py-10 flex flex-col md:flex-row items-center justify-between gap-4 text-xs text-white/40 font-mono">
+        <p>FLINT · Инструкция для членов клуба · редакция от 28.08.2026</p>
+        <p class="text-white/30">🔒 Закрытая информация — не для распространения вне круга</p>
+      </div>
+    </footer>
+
+    <script>
+      // Появление карточек при скролле + интерактив FAQ
+      window.addEventListener('DOMContentLoaded', function () {
+        var els = document.querySelectorAll('.reveal');
+        if ('IntersectionObserver' in window) {
+          var io = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) {
+              if (en.isIntersecting) { en.target.classList.add('on'); io.unobserve(en.target); }
+            });
+          }, { threshold: 0.12 });
+          els.forEach(function (el) { io.observe(el); });
+        } else {
+          els.forEach(function (el) { el.classList.add('on'); });
+        }
+        // плюс/минус в FAQ
+        document.querySelectorAll('details').forEach(function (d) {
+          d.addEventListener('toggle', function () {
+            var s = d.querySelector('summary span');
+            if (s) s.textContent = d.open ? '−' : '+';
+          });
+        });
+      });
+    </script>
+
+<!-- Анимация сборки логотипа FLINT -->
+    <script src="assets/bolt.js" defer></script>
+
+    <!-- Интро: видео-логотип играет один раз, затем контент -->
+    <script>
+      (function () {
+        var v = document.getElementById('flintIntroVideo');
+        var intro = document.getElementById('flint-intro');
+        if (!v || !intro) return;
+        function done() {
+          setTimeout(function () { intro.classList.add('done'); }, 150);
+        }
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return; }
+        v.addEventListener('ended', done);
+        // страховка: не дольше 4 секунд
+        setTimeout(done, 4000);
+      })();
+    </script>
+
+  </body>
+</html>

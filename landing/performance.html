@@ -1,0 +1,1319 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0A0A0A" />
+    <meta name="description" content="FLINT — закрытый клуб живых трезвых событий в Минске. Живые встречи, 100% трезвость, понятные правила. Оставьте заявку — вступление по приглашению." />
+    <title>FLINT • «Живи в моменте» — клуб живых трезвых событий в Минске</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:ital,wght@0,300..900;1,300..900&family=Montserrat:ital,wght@0,700;0,800;0,900;1,700;1,800;1,900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              brand: '#E6FD3A',
+              'brand-hover': '#d2ea20',
+              surface: '#121212',
+            },
+            fontFamily: {
+              sans: ['"Inter Tight"', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+              display: ['Montserrat', 'sans-serif'],
+              mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      html { scroll-behavior: smooth; }
+      body { background-color: #0A0A0A; color: #fff; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+      ::selection { background: #E6FD3A; color: #000; }
+      .grid-bg {
+        background-image:
+          linear-gradient(rgba(230,253,58,0.045) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(230,253,58,0.045) 1px, transparent 1px);
+        background-size: 56px 56px;
+      }
+      input:focus, select:focus, textarea:focus { outline: none; border-color: rgba(230,253,58,0.5) !important; }
+      /* Medlevel-полировка: стеклянные карточки, свечение, reveal */
+      .card-hover { transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease; }
+      .card-hover:hover { transform: translateY(-3px); border-color: rgba(230,253,58,.35); box-shadow: 0 18px 50px -20px rgba(230,253,58,.18); }
+      .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+      .reveal.on { opacity: 1; transform: none; }
+      @media (prefers-reduced-motion: reduce) { .reveal { opacity: 1; transform: none; transition: none; } html { scroll-behavior: auto; } }
+      /* Интро-видео логотипа */
+      #flint-intro { position: fixed; inset: 0; z-index: 9999; background: #000; display: flex; align-items: center; justify-content: center; transition: opacity .8s ease, visibility .8s ease; }
+      #flint-intro video { width: 100%; height: 100%; object-fit: contain; }
+      #flint-intro.done { opacity: 0; visibility: hidden; pointer-events: none; }
+    </style>
+  </head>
+  <body class="font-sans">
+
+    <!-- ======= ИНТРО: видео-логотип FLINT, затем контент ======= -->
+    <div id="flint-intro" aria-hidden="true">
+      <video id="flintIntroVideo" autoplay muted playsinline preload="auto">
+        <source src="assets/hero.mp4" type="video/mp4" />
+      </video>
+    </div>
+
+    <!-- ======================= HEADER ======================= -->
+    <header class="fixed top-0 inset-x-0 z-50 border-b border-white/10 bg-[#0A0A0A]/85 backdrop-blur-md">
+      <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+        <a href="#top" class="h-7 w-auto flex items-center" aria-label="FLINT">
+          <svg viewBox="0 0 328 117" fill="none" class="h-7 w-auto" xmlns="http://www.w3.org/2000/svg">
+            <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z" fill="#E6FD3A"/>
+            <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z" fill="#E6FD3A"/>
+            <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z" fill="#E6FD3A"/>
+            <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z" fill="#E6FD3A"/>
+            <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z" fill="#E6FD3A"/>
+            <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z" fill="#E6FD3A"/>
+            <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="black"/>
+          </svg>
+        </a>
+
+        <nav class="hidden lg:flex items-center gap-5 font-mono text-[11px] uppercase tracking-wider text-white/60">
+          <a href="#for" class="hover:text-brand transition-colors">Для кого</a>
+          <a href="#people" class="hover:text-brand transition-colors">Кто в клубе</a>
+          <a href="#events" class="hover:text-brand transition-colors">Мероприятия</a>
+          <a href="#clean" class="hover:text-brand transition-colors">Практики</a>
+          <a href="#detox" class="hover:text-brand transition-colors">Без зависимостей</a>
+          <a href="#rules" class="hover:text-brand transition-colors">Правила</a>
+          <a href="#product" class="hover:text-brand transition-colors">Платформа</a>
+          <a href="#review" class="hover:text-brand transition-colors">Вопрос-ответ</a>
+        </nav>
+
+        <a href="#apply" class="hidden md:inline-flex px-4 py-2 rounded-xl font-mono text-[11px] font-bold uppercase tracking-widest bg-brand text-black hover:bg-brand-hover transition-all">
+          Оставить заявку
+        </a>
+
+        <button id="burger-btn" aria-expanded="false" aria-label="Меню"
+          class="lg:hidden p-2 rounded-xl border border-white/10 bg-white/5 text-white hover:bg-white/10 transition-colors cursor-pointer">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+        </button>
+      </div>
+
+      <!-- Мобильное меню -->
+      <div id="mobile-menu" class="hidden lg:hidden border-t border-white/10 bg-[#0A0A0A]/90 px-4 py-4">
+        <nav class="flex flex-col gap-3 font-mono text-[12px] uppercase tracking-wider text-white/70">
+          <a href="#for" class="hover:text-brand transition-colors py-1">Для кого</a>
+          <a href="#people" class="hover:text-brand transition-colors py-1">Кто в клубе</a>
+          <a href="#events" class="hover:text-brand transition-colors py-1">Мероприятия</a>
+          <a href="#clean" class="hover:text-brand transition-colors py-1">Практики</a>
+          <a href="#detox" class="hover:text-brand transition-colors py-1">Без зависимостей</a>
+          <a href="#product" class="hover:text-brand transition-colors py-1">Платформа</a>
+          <a href="#rules" class="hover:text-brand transition-colors py-1">Правила</a>
+          <a href="#review" class="hover:text-brand transition-colors py-1">Вопрос-ответ</a>
+          <a href="#apply" class="mt-2 text-center px-4 py-3 rounded-xl bg-brand text-black font-bold">Оставить заявку</a>
+        </nav>
+      </div>
+    </header>
+    <!-- ======================= /HEADER ======================= -->
+
+    <!-- ======================= HERO + ФОРМА ======================= -->
+    <main id="top" class="relative">
+
+      <section class="relative pt-32 pb-20 px-4 overflow-hidden">
+        <!-- Анимация сборки логотипа FLINT: точки-люди → камень → молния -->
+        <div class="absolute top-0 right-0 w-[46%] h-[520px] pointer-events-none" aria-hidden="true" style="z-index:0">
+          <canvas class="bolt-canvas absolute inset-0 w-full h-full"></canvas>
+        </div>
+        <div class="absolute inset-0 grid-bg opacity-60 pointer-events-none" aria-hidden="true"></div>
+        <div class="absolute -top-40 right-0 w-[600px] h-[600px] bg-brand/10 blur-[140px] rounded-full pointer-events-none" aria-hidden="true"></div>
+        <div class="absolute inset-0 pointer-events-none" aria-hidden="true">
+          <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="" class="w-full h-full object-cover opacity-15" />
+          <div class="absolute inset-0 bg-gradient-to-b from-[#0A0A0A]/70 via-[#0A0A0A]/60 to-[#0A0A0A]"></div>
+        </div>
+
+        <div class="relative max-w-6xl mx-auto grid lg:grid-cols-12 gap-12 items-center">
+          <!-- Оффер -->
+          <div class="lg:col-span-7">
+            <span class="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-brand/30 bg-brand/5 font-mono text-[11px] uppercase tracking-widest text-brand">
+              <span class="w-1.5 h-1.5 rounded-full bg-brand animate-pulse"></span>
+              Закрытый клуб · приём по приглашению
+            </span>
+
+            <h1 class="mt-6 font-display font-black uppercase leading-[0.95] tracking-tight">
+              <span class="block text-[clamp(2.2rem,6vw,4.2rem)]">Живые события, где трезвость — <span class="text-brand">не подвиг, а норма</span></span>
+            </h1>
+
+            <p class="mt-6 max-w-xl text-lg md:text-xl text-white/70 leading-relaxed">
+              Клуб FLINT — среда, в которой вы меняетесь без силы воли. Выезды, походы, баня,
+              костёр и разговоры по душам. Рядом двадцать человек, для которых это уже норма.
+            </p>
+
+            <ul class="mt-8 grid sm:grid-cols-2 gap-3 text-sm text-white/75">
+              <li class="flex items-start gap-2"><span class="text-brand font-black">✓</span>100% трезвость — без исключений</li>
+              <li class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Живые встречи глаза в глаза, не переписка</li>
+              <li class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Бади-напарник на каждом событии</li>
+              <li class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Прозрачные деньги — взносы по факту расходов</li>
+            </ul>
+
+            <div class="mt-8 flex flex-wrap gap-4">
+              <a href="#apply" class="px-8 py-4 rounded-2xl bg-brand text-black font-mono text-xs font-black uppercase tracking-widest hover:bg-brand-hover transition-all shadow-lg shadow-brand/10">
+                Оставить заявку
+              </a>
+              <a href="#for" class="px-8 py-4 rounded-2xl border border-white/15 bg-white/5 text-white font-mono text-xs font-bold uppercase tracking-widest hover:bg-white/10 transition-colors">
+                Кому подойдёт
+              </a>
+            </div>
+
+            <div class="mt-10 flex flex-wrap items-center gap-x-8 gap-y-3 text-white/50 font-mono text-xs">
+              <span class="flex items-center gap-2"><span class="font-display font-black text-2xl text-brand">События</span> прошли и впереди</span>
+              <span class="flex items-center gap-2"><span class="font-display font-black text-2xl text-brand">Вызовы</span> спорт · походы · испытания</span>
+              <span class="flex items-center gap-2"><span class="font-display font-black text-2xl text-brand">Ядро</span> постоянные люди</span>
+              <span class="flex items-center gap-2"><span class="font-display font-black text-2xl text-brand">Живо</span> без телефонов и экранов</span>
+            </div>
+          </div>
+
+          <!-- Форма заявки -->
+          <div class="lg:col-span-5">
+            <div class="rounded-3xl border border-white/12 bg-surface p-6 md:p-8 shadow-2xl relative">
+              <div class="absolute -top-3 -right-3 bg-brand text-black font-mono text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full rotate-3">
+                Приём открыт
+              </div>
+              <h2 class="font-display font-black uppercase text-2xl tracking-tight">Вступление по приглашению</h2>
+              <p class="mt-2 text-sm text-white/55">Оставьте заявку — организатор свяжется и ответит на вопросы.</p>
+
+              <form id="apply-form" class="mt-6 space-y-3">
+                <input type="text" name="name" placeholder="Имя *" required
+                  class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors" />
+                <input type="text" name="contact" placeholder="Telegram или телефон *" required
+                  class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors" />
+                <textarea name="why" rows="2" placeholder="Зачем вам клуб? (2–3 слова)"
+                  class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors resize-none"></textarea>
+                <button type="submit"
+                  class="w-full bg-brand hover:bg-brand-hover text-black py-4 rounded-xl font-mono text-xs font-black uppercase tracking-widest transition-all flex items-center justify-center gap-2">
+                  Подать заявку →
+                </button>
+                <p class="text-[11px] text-white/35 text-center leading-relaxed">
+                  Ничего не оплачиваете при подаче. Взносы — только по факту расходов события, без наценки.
+                </p>
+              </form>
+
+              <div id="apply-success" class="hidden mt-6 rounded-xl border border-brand/30 bg-brand/5 p-5 text-center">
+                <div class="font-display font-black text-brand text-xl uppercase">Заявка принята</div>
+                <p class="mt-2 text-sm text-white/65">Организатор свяжется с вами в течение дня.</p>
+              </div>
+
+              <div id="apply-fail" class="hidden mt-6 rounded-xl border border-red-500/30 bg-red-500/5 p-5 text-center">
+                <div class="font-display font-black text-red-400 text-lg uppercase">Не удалось отправить</div>
+                <p class="mt-2 text-sm text-white/65">Подайте заявку прямо в боте — это займёт минуту.</p>
+                <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="mt-3 inline-block px-5 py-2 rounded-xl bg-brand text-black font-mono text-[11px] font-black uppercase tracking-widest hover:bg-brand-hover transition-all">Написать боту</a>
+              </div>
+
+              <div class="mt-5 pt-5 border-t border-white/10 flex items-center justify-between font-mono text-[10px] uppercase tracking-widest text-white/35">
+                <span>FLINT · Минск</span>
+                <span>ежедневно</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /HERO ======================= -->
+
+      <!-- ======================= ДЛЯ КОГО / БОЛИ ======================= -->
+      <section id="for" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-y border-white/10">
+        <div class="max-w-6xl mx-auto">
+          <div class="grid lg:grid-cols-2 gap-12 items-center">
+            <div>
+              <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Для кого</span>
+              <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+                Если что-то из этого — <span class="text-brand">про вас</span>
+              </h2>
+              <p class="mt-6 text-lg text-white/70 leading-relaxed">
+                Это не список жалоб, а механика, от которой вы устаёте. Мы меняем не человека,
+                а среду вокруг него — и в этой среде всё перестаёт быть подвигом.
+              </p>
+              <p class="mt-5 text-sm text-white/45 font-mono">Форма поиска проблема → решение уже встроена в клуб.</p>
+            </div>
+
+            <div class="space-y-3">
+              <div class="flex items-start gap-3 rounded-2xl border border-white/10 bg-surface p-5">
+                <span class="shrink-0 w-8 h-8 rounded-lg bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">1</span>
+                <div>
+                  <div class="font-display font-bold">Общение подменили перепиской</div>
+                  <p class="mt-1 text-sm text-white/60">Контактов много, живых встреч почти нет. В переписке нельзя ни опереться, ни быть увиденным.</p>
+                </div>
+              </div>
+              <div class="flex items-start gap-3 rounded-2xl border border-white/10 bg-surface p-5">
+                <span class="shrink-0 w-8 h-8 rounded-lg bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">2</span>
+                <div>
+                  <div class="font-display font-bold">Алкоголь как обязательный протокол</div>
+                  <p class="mt-1 text-sm text-white/60">Любой взрослый досуг предполагает выпивку. Тому, кто не пьёт, идти некуда — трезвость выталкивает из жизни.</p>
+                </div>
+              </div>
+              <div class="flex items-start gap-3 rounded-2xl border border-white/10 bg-surface p-5">
+                <span class="shrink-0 w-8 h-8 rounded-lg bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">3</span>
+                <div>
+                  <div class="font-display font-bold">Круг, который только забирает</div>
+                  <p class="mt-1 text-sm text-white/60">Энергия уходит и не возвращается. Выгорание — не от нагрузки, а от того, что вы везде донор.</p>
+                </div>
+              </div>
+              <div class="flex items-start gap-3 rounded-2xl border border-white/10 bg-surface p-5">
+                <span class="shrink-0 w-8 h-8 rounded-lg bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">4</span>
+                <div>
+                  <div class="font-display font-bold">Некому сказать «нет»</div>
+                  <p class="mt-1 text-sm text-white/60">Отказ считается конфликтом. В клубе «нет» уважается сразу и без объяснений.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= КТО УЖЕ В КЛУБЕ ======================= -->
+      <section id="people" class="relative py-20 px-4 scroll-mt-20">
+        <div class="max-w-6xl mx-auto">
+          <div class="grid lg:grid-cols-12 gap-12 items-start">
+            <div class="lg:col-span-5">
+              <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Кто уже внутри</span>
+              <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+                Разные люди, <span class="text-brand">одна среда</span>
+              </h2>
+              <p class="mt-6 text-lg text-white/70 leading-relaxed">
+                В клубе нет «одного типа» участника. Здесь программисты и дизайнеры, руководители и
+                предприниматели, студенты и семейные пары. Люди, которые реально многого добились —
+                и люди, которые только в начале пути. Мировая практика сервисов доверия сходится в
+                одном: чем разнообразнее круг, тем ценнее каждый в нём.
+              </p>
+              <p class="mt-4 text-sm text-white/45 font-mono">Профессия и статус не дают преимуществ: в круге все равны.</p>
+            </div>
+
+            <div class="lg:col-span-7 grid sm:grid-cols-2 gap-4">
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Профессии</div>
+                <p class="mt-2 text-sm text-white/65 leading-relaxed">Программисты, дизайнеры, руководители, предприниматели, врачи, инженеры — люди, которые привыкли отвечать за результат.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Поколения</div>
+                <p class="mt-2 text-sm text-white/65 leading-relaxed">Молодёжь, которая ищет опору, и те, кто уже построил карьеру и семью. Разница в опыте — то, что делает круг сильнее.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Семейные</div>
+                <p class="mt-2 text-sm text-white/65 leading-relaxed">Те, кто живёт семейной жизнью, делятся опытом этапов: отношения, дети, дом, баланс. Молодым это экономит годы.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Достижения</div>
+                <p class="mt-2 text-sm text-white/65 leading-relaxed">Здесь люди, которые реально чего-то добились — и не превозносят себя за это. Заслуги остаются за порогом круга.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Живые кадры с событий -->
+          <div class="mt-10 grid sm:grid-cols-2 gap-4">
+            <figure class="rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Живой круг у бани" class="w-full h-full object-cover" loading="lazy" />
+              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Баня — живой круг без телефонов</figcaption>
+            </figure>
+            <figure class="rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Люди на закате на Браславах" class="w-full h-full object-cover" loading="lazy" />
+              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Закат на Браславах — общий момент</figcaption>
+            </figure>
+          </div>
+
+          <!-- Обмен опытом -->
+          <div class="mt-8 rounded-2xl border border-brand/25 bg-brand/5 p-6 md:p-8">
+            <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Обмен опытом</div>
+            <h3 class="mt-3 font-display font-bold text-xl md:text-2xl max-w-3xl">Каждый проходит свой этап — и показывает его другим</h3>
+            <p class="mt-3 text-sm md:text-base text-white/70 leading-relaxed max-w-3xl">
+              Кто-то меняет профессию, кто-то становится родителем, кто-то выходит из кризиса.
+              Человек подсвечивает свой этап в круге — и те, кто уже прошёл его, помогают пройти лучше.
+              Так опыт одного становится опорой для всех.
+            </p>
+            <div class="mt-6 grid sm:grid-cols-3 gap-4">
+              <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div class="font-display font-bold text-brand">Профессиональный обмен</div>
+                <p class="mt-2 text-sm text-white/60">Делятся опытом ремесла: код, дизайн, управление, бизнес. Не нетворкинг — взаимопомощь.</p>
+              </div>
+              <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div class="font-display font-bold text-brand">Жизненные этапы</div>
+                <p class="mt-2 text-sm text-white/60">Кто-то прошёл развод, кто-то — переезд, кто-то — выгорание. Опыт передаётся из первых рук.</p>
+              </div>
+              <div class="rounded-xl border border-white/10 bg-white/5 p-4">
+                <div class="font-display font-bold text-brand">Наставничество</div>
+                <p class="mt-2 text-sm text-white/60">Старшие по пути помогают младшим. Не сверху вниз, а рядом: равный — равному.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Конфиденциальность -->
+          <div class="mt-4 rounded-2xl border border-white/10 bg-surface p-6 md:p-8">
+            <div class="flex items-start gap-4">
+              <span class="shrink-0 w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">🔒</span>
+              <div>
+                <h3 class="font-display font-bold text-lg">Всё сказанное в круге — остаётся в круге</h3>
+                <p class="mt-2 text-sm text-white/65 leading-relaxed max-w-3xl">
+                  Люди рассказывают здесь то, что не расскажут на работе или в соцсетях: о кризисах, ошибках,
+                  поиске, семье. Это возможно только потому, что конфиденциальность — не просьба, а правило
+                  клуба. Вынос сказанного в круге за его пределы — одно из самых грубых нарушений
+                  (см. раздел «Правила»): за него выводят сразу.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /КТО УЖЕ В КЛУБЕ ======================= -->
+
+      <!-- ======================= /ДЛЯ КОГО ======================= -->
+
+      <!-- ======================= ПРАКТИКИ / ДИСЦИПЛИНЫ ======================= -->
+      <section id="clean" class="relative py-20 px-4 scroll-mt-20">
+        <div class="max-w-6xl mx-auto">
+          <div class="grid lg:grid-cols-12 gap-12 items-start">
+            <div class="lg:col-span-5">
+              <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Практики</span>
+              <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+                Цифровой детокс и <span class="text-brand">культура общения</span>
+              </h2>
+              <p class="mt-6 text-lg text-white/70 leading-relaxed">
+                Мы не «просто встречаемся» — за каждым событием стоит осознанная практика,
+                которая возвращает человека в живое. Всё просто и без магии.
+              </p>
+              <p class="mt-4 text-sm text-white/45 font-mono">Правила принимаются отдельно и подтверждаются каждым участником.</p>
+            </div>
+
+            <div class="lg:col-span-7 grid sm:grid-cols-2 gap-4">
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+                <div class="w-11 h-11 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E6FD3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="2" width="14" height="20" rx="2"/><line x1="12" y1="18" x2="12.01" y2="18"/></svg>
+                </div>
+                <h3 class="mt-4 font-display font-bold text-lg">Мероприятия без телефона</h3>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Телефоны сдаются на входе в общий бокс. Никаких уведомлений, лент и «я только гляну» — только вы и круг.</p>
+              </div>
+
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+                <div class="w-11 h-11 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E6FD3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
+                </div>
+                <h3 class="mt-4 font-display font-bold text-lg">Культура речи без мата</h3>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Общаемся чисто и уважительно. Мат и агрессивный сленг — не то, чем мы обмениваемся в кругу.</p>
+              </div>
+
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+                <div class="w-11 h-11 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E6FD3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                </div>
+                <h3 class="mt-4 font-display font-bold text-lg">Цифровой детокс</h3>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">День без соцсетей, тиктока и шортсов. Мозг отдыхает от «быстрого дофамина» и снова учится вниманию.</p>
+              </div>
+
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+                <div class="w-11 h-11 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center">
+                  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#E6FD3A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>
+                </div>
+                <h3 class="mt-4 font-display font-bold text-lg">Говорим глаза в глаза</h3>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Разговор в кругу, а не в переписке. Здесь можно опереться и быть увиденным — во всём объёме.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ПРАКТИКИ ======================= -->
+
+      <!-- ======================= БЕЗ ЗАВИСИМОСТЕЙ ======================= -->
+      <section id="detox" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-y border-white/10">
+        <div class="max-w-6xl mx-auto grid lg:grid-cols-12 gap-12 items-start">
+          <div class="lg:col-span-5">
+            <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Осознанность</span>
+            <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+              От чего освобождает <span class="text-brand">живая среда</span>
+            </h2>
+            <p class="mt-6 text-lg text-white/70 leading-relaxed">
+              Клуб не лечит и не даёт гарантий избавления от зависимостей — это не терапия.
+              Но среда FLINT устроена так, что деструктивные привычки не находят здесь почвы:
+              им просто нет места в живом кругу.
+            </p>
+            <p class="mt-4 text-sm text-white/45 font-mono">«Вата» — пустое, лёгкое времяпрепровождение на быстром дофамине. Мы возвращаем вкус к реальному.</p>
+
+            <div class="mt-8 rounded-2xl border border-white/10 bg-surface p-6 text-center">
+              <img src="assets/flint-wheel-900.jpg" alt="Колесо привычек" class="w-full max-w-xs mx-auto rounded-xl" />
+              <p class="mt-3 text-xs text-white/40 font-mono">Колесо привычек и практик клуба</p>
+            </div>
+          </div>
+
+          <div class="lg:col-span-7">
+            <p class="text-sm text-white/55 leading-relaxed mb-6">
+              Ниже — пример того, от каких форм компульсивного и зависимого поведения
+              уходит человек, попадая в живую трезвую среду. Список сгруппирован и не
+              является ни диагнозом, ни обещанием лечения.
+            </p>
+            <div class="grid sm:grid-cols-2 gap-3">
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Цифровые зависимости</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Зависимость от телефона и гаджетов · соцсети · тикток и шортсы · думскроллинг и новостная лента · чрезмерное общение онлайн.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Развлекательный контент</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Сериалы и голливудские фильмы · телешоу и стендапы · YouTube-псевдообучение · ширпотребные детективы и эротика.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Игры и гэмблинг</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Компьютерные и онлайн-игры · игры на телефоне · онлайн-казино, ставки на спорт и покер · гэмблинг всех видов.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Еда и покупки</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Компульсивная еда · фастфуд · чрезмерное время в ТЦ · компульсивный онлайн-шоппинг.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Химические зависимости</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Алкоголь · курение и вейпинг · наркотики. В клубе — 100% трезвость и ноль никотина на событиях.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-5 card-hover reveal">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Поведенческие</div>
+                <p class="mt-2 text-sm text-white/60 leading-relaxed">Беспорядочные связи и сексуальные компульсии, включая их экстремальные практики — тема, которая не выносится в круг. Об этом говорят бережно и конфиденциально.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /БЕЗ ЗАВИСИМОСТЕЙ ======================= -->
+
+      <!-- ======================= ПРАВИЛА И ДИСЦИПЛИНА ======================= -->
+      <section id="rules" class="relative py-20 px-4 scroll-mt-20">
+        <div class="max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Ответственность</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight max-w-3xl">
+            Правила — здесь закон, а не пожелание
+          </h2>
+          <p class="mt-6 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Клуб построен на договорённостях. Каждое правило ты принимаешь отдельно,
+            по одному экрану на пункт. И оно работает: нарушение договорённостей,
+            саботаж или вынос «сора из избы» — это не мелкая шалость, а вопрос доверия.
+          </p>
+
+          <div class="mt-12 grid lg:grid-cols-2 gap-4">
+            <!-- Что ведёт к мерам -->
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 md:p-8">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Что недопустимо</div>
+              <h3 class="mt-3 font-display font-bold text-xl">За это — выход без предупреждений</h3>
+              <ul class="mt-5 space-y-3 text-sm text-white/65 leading-relaxed">
+                <li class="flex gap-3"><span class="text-brand font-black shrink-0">✕</span>Нарушение трезвости — до и во время встречи, без исключений.</li>
+                <li class="flex gap-3"><span class="text-brand font-black shrink-0">✕</span>Саботаж договорённостей и ролей на событии.</li>
+                <li class="flex gap-3"><span class="text-brand font-black shrink-0">✕</span>Вынос «сора из избы» — того, что сказано в круге, за пределы круга.</li>
+                <li class="flex gap-3"><span class="text-brand font-black shrink-0">✕</span>Неуважение к правилу «нет» — оно действует сразу и без объяснений.</li>
+              </ul>
+            </div>
+
+            <!-- Коллегиальность + репутация -->
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 md:p-8">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Коллегиально</div>
+              <h3 class="mt-3 font-display font-bold text-xl">Решает костяк, а не один человек</h3>
+              <p class="mt-3 text-sm text-white/65">Любая отметка, любой вопрос о человеке проходит через коллектив. Репутация фиксируется платформой: виден и вклад, и проблемы. Красная отметка требует двух независимых голосов или подтверждения организатора — и решение всегда принимают люди.</p>
+              <div class="mt-5 rounded-xl border border-brand/25 bg-brand/5 p-4 text-sm text-white/70 leading-relaxed">
+                Никто не «выгоняет по настроению». Каждое решение — с основанием и голосом круга.
+              </div>
+            </div>
+          </div>
+
+          <!-- Система ошибок -->
+          <div class="mt-10 rounded-2xl border border-white/10 bg-surface p-6 md:p-8">
+            <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Цена ошибки</div>
+            <h3 class="mt-3 font-display font-bold text-xl">Выход — есть. Цена — растёт</h3>
+            <p class="mt-2 text-sm text-white/60 max-w-2xl">Никто не «сгорает» с первой ошибки. Система даёт шанс исправиться, но каждая следующая ошибка стоит дороже — и это прописано, а не решается на эмоциях.</p>
+
+            <div class="mt-6 grid sm:grid-cols-3 gap-4">
+              <div class="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+                <div class="font-display font-black text-2xl text-brand">1-я ошибка</div>
+                <div class="mt-3 font-display font-black text-4xl text-white">6 мес.</div>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Отстранение. После — можно вернуться и продолжить.</p>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-white/5 p-6 text-center">
+                <div class="font-display font-black text-2xl text-brand">2-я ошибка</div>
+                <div class="mt-3 font-display font-black text-4xl text-white">1 год</div>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Год на переосмысление. Возврат возможен, но с ноля доверия.</p>
+              </div>
+              <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6 text-center">
+                <div class="font-display font-black text-2xl text-brand">3-я ошибка</div>
+                <div class="mt-3 font-display font-black text-4xl text-brand">Навсегда</div>
+                <p class="mt-3 text-sm text-white/70 leading-relaxed">Исключение из клуба без возврата. Круг ограждён.</p>
+              </div>
+            </div>
+
+            <div class="mt-6 rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/60 leading-relaxed">
+              Отдельные грубые нарушения — трезвость, саботаж, вынос «сора» — выводят из события и клуба сразу, без лестницы ошибок.
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ПРАВИЛА И ДИСЦИПЛИНА ======================= -->
+
+      <!-- ======================= ЧТО ВЫ ПОЛУЧИТЕ ======================= -->
+      <section id="benefits" class="relative py-20 px-4 scroll-mt-20">
+        <div class="max-w-6xl mx-auto">
+          <div class="flex flex-col md:flex-row md:items-end justify-between gap-6">
+            <div>
+              <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Что вы получите</span>
+              <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+                Шесть гарантий клуба
+              </h2>
+            </div>
+            <p class="md:max-w-sm text-sm text-white/55 leading-relaxed">
+              Каждый пункт — не пожелание, а закреплённое правило, за нарушение которого человека выводят из события и из клуба.
+            </p>
+          </div>
+
+          <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">01</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Только живое общение</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Выезд, поход, баня, костёр, разговор в кругу. Онлайн — только организация, не замена встрече.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">02</div>
+              <h3 class="mt-4 font-display font-bold text-lg">100% трезвость</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Без алкоголя и веществ — до и во время встречи, без исключений. Нарушение — выход из события и из клуба.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">03</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Равенство в круге</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Нет статусов и «випов». «Нет» уважается сразу и без объяснений. Сказанное в круге — остаётся в круге.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">04</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Бади-напарник</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">У каждого есть напарник от сбора до разъезда. Новичок не остаётся один — ни на минуту.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="w-10 h-10 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-brand">05</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Приносить, а не потреблять</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Каждый берёт часть: маршрут, еду, машину, роль. Клуб — не сервис: у него нет клиентов, только участники.</p>
+            </div>
+            <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6">
+              <div class="w-10 h-10 rounded-xl bg-brand text-black flex items-center justify-center font-display font-black">06</div>
+              <h3 class="mt-4 font-display font-bold text-lg">Прозрачные деньги</h3>
+              <p class="mt-2 text-sm text-white/70 leading-relaxed">Взносы — по факту расходов, без наценки. Вы видите, куда ушёл рубль и что купленное принадлежит кругу.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ЧТО ВЫ ПОЛУЧИТЕ ======================= -->
+
+      <!-- ======================= МЕРОПРИЯТИЯ ======================= -->
+      <section id="events" class="relative py-20 px-4 scroll-mt-20">
+        <div class="max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Мероприятия</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Какие события мы проводим
+          </h2>
+          <p class="mt-6 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Это всегда живая встреча глаза в глаза — без экранов и уведомлений. Онлайн
+            используется только для организации, но никогда не заменяет встречу.
+          </p>
+
+          <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Баня" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Выезд</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Баня</h3>
+                <p class="mt-1 text-xs text-white/70">Трезвый пар, ледяная вода и круг — без телефонов.</p>
+              </div>
+            </div>
+
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Лесной поход" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Активный выезд</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Поход</h3>
+                <p class="mt-1 text-xs text-white/70">Ислочь, маршрут, костёр и разговор в кругу.</p>
+              </div>
+            </div>
+
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Закат на Браславах" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Семейный формат</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Браславы</h3>
+                <p class="mt-1 text-xs text-white/70">Озёра, закаты и большой живой круг.</p>
+              </div>
+            </div>
+
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/reading_smysly_1780473826786.jpg" alt="Чтение и смыслы" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Интеллектуальный круг</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Чтение и смыслы</h3>
+                <p class="mt-1 text-xs text-white/70">Разбор книг и идей — вместо клипов и шортсов.</p>
+              </div>
+            </div>
+
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="Прогулка с гирей" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Активный выезд</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Движение и сила</h3>
+                <p class="mt-1 text-xs text-white/70">Физическая работа на себя — заряд вместо «ваты».</p>
+              </div>
+            </div>
+
+            <div class="group relative rounded-2xl overflow-hidden border border-white/10 aspect-[16/10]">
+              <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="Оратор" class="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent"></div>
+              <div class="absolute bottom-0 left-0 right-0 p-5">
+                <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Развитие</div>
+                <h3 class="mt-1 font-display font-black uppercase text-xl">Речь и оратор</h3>
+                <p class="mt-1 text-xs text-white/70">Учимся говорить и быть услышанным вживую.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Видео пройдённых событий -->
+          <div class="mt-12">
+            <div class="flex items-center gap-3">
+              <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Прошедшие события</span>
+              <span class="hidden sm:inline-flex items-center gap-2 text-xs text-white/50 font-mono uppercase tracking-wider">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="text-brand"><path d="M8 5v14l11-7z"/></svg>
+                Нажмите, чтобы посмотреть
+              </span>
+            </div>
+            <div class="mt-6 grid lg:grid-cols-12 gap-4 items-stretch">
+              <figure class="lg:col-span-7 rounded-2xl overflow-hidden border border-white/10 bg-surface">
+                <video controls preload="none" poster="assets/vibeo/flint-isloch-poster.jpg" playsinline
+                       class="w-full h-full object-cover aspect-[9/16] lg:aspect-auto lg:h-full" style="background:#000">
+                  <source src="assets/vibeo/flint-isloch-2025.mp4" type="video/mp4" />
+                </video>
+                <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2">
+                  <span>Ислочь · выезд 2025</span><span class="text-brand">▶ смотреть</span>
+                </figcaption>
+              </figure>
+              <div class="lg:col-span-5 flex flex-col gap-4">
+                <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface flex-1">
+                  <video controls preload="none" poster="assets/vibeo/flint-melovcarier-2026.mp4" playsinline class="w-full aspect-video object-cover" style="background:#000">
+                    <source src="assets/vibeo/flint-melovcarier-2026.mp4" type="video/mp4" />
+                  </video>
+                  <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2"><span>Меловкарьер · выезд 2026</span><span class="text-brand">▶</span></figcaption>
+                </figure>
+                <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface flex-1">
+                  <video controls preload="none" poster="assets/vibeo/flint-lv-event.mp4" playsinline class="w-full aspect-video object-cover" style="background:#000">
+                    <source src="assets/vibeo/flint-lv-event.mp4" type="video/mp4" />
+                  </video>
+                  <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono flex items-center justify-between gap-2"><span>Живое событие клуба</span><span class="text-brand">▶</span></figcaption>
+                </figure>
+              </div>
+            </div>
+          </div>
+
+          <!-- Вызовы -->
+          <div class="mt-8 flex flex-wrap items-center gap-3">
+            <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Вызовы клуба:</span>
+            <span class="px-4 py-2 rounded-full border border-brand/25 bg-brand/[0.06] text-brand font-mono text-[11px] uppercase tracking-wider">Спорт</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Походы</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Отказ от сигарет</span>
+            <span class="px-4 py-2 rounded-full border border-white/12 bg-white/5 text-white/70 font-mono text-[11px] uppercase tracking-wider">Без телефона</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= КАК ВСТУПИТЬ ======================= -->
+      <section id="steps" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-y border-white/10">
+        <div class="max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Как вступить</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Четыре шага до вашего первого события
+          </h2>
+
+          <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 relative">
+              <span class="absolute top-5 right-5 font-display font-black text-4xl text-white/10">01</span>
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Шаг 1</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Приглашение</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Вы приходите от действующего члена клуба или оставляете заявку — попадаете в лист ожидания.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 relative">
+              <span class="absolute top-5 right-5 font-display font-black text-4xl text-white/10">02</span>
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Шаг 2</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Анкета</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Отвечаете своими словами, зачем вам клуб. Подтверждаете ценности — по одному правилу на экран, без галочки «согласен со всем».</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 relative">
+              <span class="absolute top-5 right-5 font-display font-black text-4xl text-white/10">03</span>
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Шаг 3</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Решение костяка</h3>
+              <p class="mt-2 text-sm text-white/60 leading-relaxed">Люди, а не алгоритм, решают: красная отметка требует двух голосов или подтверждения организатора.</p>
+            </div>
+            <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6 relative">
+              <span class="absolute top-5 right-5 font-display font-black text-4xl text-brand/20">04</span>
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Шаг 4</div>
+              <h3 class="mt-3 font-display font-bold text-lg">Первое событие</h3>
+              <p class="mt-2 text-sm text-white/70 leading-relaxed">С бади-напарником от сбора до разъезда. Вам не нужно ничего уметь — нужна включённость.</p>
+            </div>
+          </div>
+        <div class="mt-10 rounded-2xl border border-white/10 bg-surface p-6 md:p-8 grid md:grid-cols-12 gap-8 items-center">
+            <div class="md:col-span-4">
+              <img src="assets/flint-stages.jpg" alt="Этапы вступления в клуб" class="w-full rounded-xl" loading="lazy" />
+            </div>
+            <div class="md:col-span-8">
+              <span class="font-mono text-[10px] uppercase tracking-widest text-brand">Этапы</span>
+              <h3 class="mt-2 font-display font-bold text-2xl">Путь от заявки до своего круга</h3>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">
+                На каждом этапе вы не остаётесь один: систему сопровождает платформа,
+                а людей — бади-напарник и костяк. Договорённости живут не в забытой переписке,
+                а в понятной механике клуба.
+              </p>
+              <div class="mt-4 grid sm:grid-cols-3 gap-3 text-sm text-white/70">
+                <div class="border-l-2 border-brand pl-3"><span class="font-display font-bold">1.</span> Заявка и анкета</div>
+                <div class="border-l-2 border-brand pl-3"><span class="font-display font-bold">2.</span> Подтверждение ценностей</div>
+                <div class="border-l-2 border-brand pl-3"><span class="font-display font-bold">3.</span> Первый живой круг</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ======================= ЧТО УЖЕ РАБОТАЕТ ======================= -->
+      <section class="relative py-20 px-4">
+        <div class="max-w-6xl mx-auto grid lg:grid-cols-12 gap-12 items-center">
+          <div class="lg:col-span-7">
+            <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Технология</span>
+            <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+              Рутину держит платформа. <span class="text-brand">Люди занимаются людьми</span>
+            </h2>
+            <p class="mt-6 text-lg text-white/70 leading-relaxed">
+              FLINT App и бот в Telegram уже работают в боевом режиме и обслуживают все события
+              клуба. Вы не тонем в чатах и таблицах — система берёт всё повторяющееся на себя.
+            </p>
+
+            <div class="mt-8 grid sm:grid-cols-2 gap-3 text-sm text-white/70">
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Закрытая афиша с проверкой членства</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Анкета и приём в клуб</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Логистика выездов: машины, места, точки сбора</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Чек-листы снаряжения</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Голосования по программе</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Расходы, долги и реестр имущества</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>Задачи события с ответственными</div>
+              <div class="flex items-start gap-2"><span class="text-brand font-black">✓</span>ИИ разбирает чат и достаёт расходы и задачи</div>
+            </div>
+          </div>
+
+          <div class="lg:col-span-5">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+                <div class="font-display font-black text-5xl text-brand">◎</div>
+                <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">живые события — регулярно, вживую</div>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+                <div class="font-display font-black text-5xl text-brand">⚡</div>
+                <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">вызовы — спорт, походы, испытания</div>
+              </div>
+              <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+                <div class="font-display font-black text-5xl text-brand">◉</div>
+                <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">принятые в круг — снова и снова рядом</div>
+              </div>
+              <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6 text-center">
+                <div class="font-display font-black text-5xl text-brand">⟳</div>
+                <div class="mt-2 text-xs text-white/70 font-mono uppercase tracking-wider">саморегуляция: организация уже не ручная</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ЧТО УЖЕ РАБОТАЕТ ======================= -->
+
+      <!-- ======================= СТОИМОСТЬ ======================= -->
+      <section id="price" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-y border-white/10">
+        <div class="max-w-5xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Стоимость</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Прозрачные деньги, <span class="text-brand">не бизнес</span>
+          </h2>
+          <p class="mt-6 max-w-3xl text-lg text-white/70 leading-relaxed">
+            В клубе нет ни ценников, ни наценок, ни прибыли. Взносы собираются по факту
+            расходов конкретного события — вы видите каждый рубль и то, кому что принадлежит.
+          </p>
+
+          <div class="mt-12 grid md:grid-cols-3 gap-4">
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Взнос события</div>
+              <div class="mt-3 font-display font-black text-3xl">По факту расходов</div>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">Делится честно между участниками. Никакой наценки «на организацию» — организатор платит наравне со всеми.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 card-hover reveal">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Вступление</div>
+              <div class="mt-3 font-display font-black text-3xl">Бесплатно</div>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">Анкета и приём не продаются и не тарифицируются. Заявка не обязывает вас ни к чему.</p>
+            </div>
+            <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6">
+              <div class="font-mono text-[10px] uppercase tracking-widest text-brand">Имущество клуба</div>
+              <div class="mt-3 font-display font-black text-3xl">Складчина с именами</div>
+              <p class="mt-3 text-sm text-white/70 leading-relaxed">Мангал, термос, снаряжение. Видно, кто вложился и кому что возвращается. Общее не становится ничьим.</p>
+            </div>
+          </div>
+
+          <div class="mt-8 grid grid-cols-12 gap-px bg-white/10 rounded-2xl overflow-hidden text-sm border border-white/10">
+            <div class="col-span-12 sm:col-span-6 bg-surface px-5 py-4 flex items-center justify-between font-mono text-[11px] uppercase tracking-widest text-brand">Что входит</div>
+            <div class="col-span-12 sm:col-span-6 bg-surface px-5 py-4 flex items-center justify-between font-mono text-[11px] uppercase tracking-widest text-brand">Чего у нас нет</div>
+            <div class="col-span-12 sm:col-span-6 bg-surface px-5 py-4 text-white/70 leading-relaxed">Полная смета по каждому событию · прозрачные графы расходов · долги видны всем · общее имущество на реестре</div>
+            <div class="col-span-12 sm:col-span-6 bg-surface px-5 py-4 text-white/70 leading-relaxed">Наценки, скрытых платежей и «партнёрских договорённостей» · прибыли и личного обогащения · продажи статусов и VIP</div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /СТОИМОСТЬ ======================= -->
+
+      <!-- ======================= ПЛАТФОРМА / ПРОДУКТ ======================= -->
+      <section id="product" class="relative py-20 px-4 scroll-mt-20 overflow-hidden">
+        <div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[900px] h-[500px] bg-brand/8 blur-[150px] rounded-full pointer-events-none" aria-hidden="true"></div>
+        <div class="relative max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Платформа</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight max-w-3xl">
+            Вся механика — в боте и приложении FLINT
+          </h2>
+          <p class="mt-6 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Люди занимаются людьми, система — всем повторяющимся. FLINT App и бот в Telegram
+            уже работают в боевом режиме: афиша, анкета, логистика, расходы, задачи — всё на них.
+          </p>
+
+          <div class="mt-14 grid lg:grid-cols-12 gap-10 items-stretch lg:h-[620px]">
+            <!-- Телефон слева: высота = высоте блока справа -->
+            <div class="lg:col-span-5 flex justify-center items-stretch">
+              <div class="relative w-full flex items-center justify-center">
+                <img id="phone-screen" src="assets/phones/phone_feed.png" alt="Экран бота FLINT" class="h-full w-auto max-h-[620px] object-contain rounded-[2.5rem] drop-shadow-[0_30px_70px_rgba(230,253,58,0.25)] transition-opacity duration-300" loading="lazy" />
+              </div>
+            </div>
+
+            <!-- Кнопки разделов: справа, клик меняет скриншот в телефоне слева -->
+            <div class="lg:col-span-7 space-y-2.5 overflow-y-auto pr-1" id="phone-tabs">
+              <button type="button" data-phone="phone_form" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-4 bg-brand/10 border-brand/50 text-white transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">01</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Закрытая афиша</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">События видны только подтверждённым членам клуба. Вход и запись — одним нажатием в боте.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_cards" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">02</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Анкета и приём</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Заявка, ответ «зачем», подтверждение ценностей по одному правилу на экран. Решение принимает костяк.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_detail" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">03</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Логистика и чек-листы</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Машины, места, точки сбора, снаряжение и задачи с ответственными — вся рутина в одном месте.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_feed2" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">04</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">ИИ разбирает чат события</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Бот сам достаёт из переписки расходы, задачи и решения — итоги приходят структурированно, без ручной работы.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_cards" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">05</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Коллегиальное решение</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Вопрос каждого участника — приём, конфликт, спор — решает костяк, а не один человек. Голос коллектива, а не мнение сверху.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_feed" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">06</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Репутация каждого</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Платформа фиксирует и вклад, и проблемы. Красная отметка требует двух независимых голосов или подтверждения организатора.</span>
+                </span>
+              </button>
+              <button type="button" data-phone="phone_detail" class="phonetab w-full text-left rounded-2xl border px-5 py-3 flex items-start gap-3 bg-white/5 border-white/10 text-white/75 hover:border-white/25 transition-all">
+                <span class="shrink-0 font-display font-black text-2xl w-8 text-center text-brand">07</span>
+                <span class="block">
+                  <span class="font-display font-bold text-lg block">Геймификация прогресса</span>
+                  <span class="block text-sm text-white/60 leading-relaxed mt-1">Клуб замечает рост: бросил курить, заговорил на новом языке, стал организатором. Достижения на маршруте и в жизни — наравне.</span>
+                </span>
+              </button>
+
+              <div class="pt-2 flex flex-wrap gap-3">
+                <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="px-6 py-3 rounded-xl bg-brand text-black font-mono text-xs font-black uppercase tracking-widest hover:bg-brand-hover transition-all">
+                  Открыть бота
+                </a>
+                <a href="#apply" class="px-6 py-3 rounded-xl border border-white/15 bg-white/5 text-white font-mono text-xs font-bold uppercase tracking-widest hover:bg-white/10 transition-colors">
+                  Подать заявку
+                </a>
+              </div>
+            </div>
+          </div>
+
+          </div>
+      </section>
+      <!-- ======================= /ПЛАТФОРМА ======================= -->
+
+      <!-- ======================= ГОРИЗОНТЫ ======================= -->
+      <section class="relative py-20 px-4">
+        <div class="max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Долгосрочность</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight max-w-3xl">
+            Клуб строится на столетие
+          </h2>
+          <p class="mt-6 max-w-2xl text-lg text-white/70 leading-relaxed">
+            Это последовательность, а не список пожеланий: следующий горизонт возможен,
+            только когда закрыт предыдущий.
+          </p>
+
+          <div class="mt-12 grid md:grid-cols-4 gap-4">
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+              <div class="font-display font-black text-2xl text-brand">1 год</div>
+              <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">юр. тело</div>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">Кооператив, паи, ритм событий и снаряжение на балансе, а не «в гараже».</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+              <div class="font-display font-black text-2xl text-brand">5–10 лет</div>
+              <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">своя земля</div>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">Постоянная база и живое ядро людей. Клуб не зависит от одного организатора.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6 text-center">
+              <div class="font-display font-black text-2xl text-brand">20–30 лет</div>
+              <div class="mt-2 text-xs text-white/55 font-mono uppercase tracking-wider">институт</div>
+              <p class="mt-3 text-sm text-white/60 leading-relaxed">Пай передаётся по наследству, управление выборное, «один член — один голос».</p>
+            </div>
+            <div class="rounded-2xl border border-brand/40 bg-brand/5 p-6 text-center">
+              <div class="font-display font-black text-2xl text-brand">100 лет</div>
+              <div class="mt-2 text-xs text-brand font-mono uppercase tracking-wider">традиция</div>
+              <p class="mt-3 text-sm text-white/70 leading-relaxed">Поколения семей-основателей. Мерило простое: одинокому есть куда прийти.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ГОРИЗОНТЫ ======================= -->
+
+      <!-- ======================= ВОПРОС-ОТВЕТ ======================= -->
+      <section id="review" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-t border-white/10">
+        <div class="max-w-4xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Вопрос-ответ</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+            Частые вопросы
+          </h2>
+
+          <div class="mt-10 space-y-3">
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Я не пью. Мне придётся как-то оправдываться?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">Нет. Трезвость здесь — не исключение, а условие входа. Вам не нужно объяснять и защищаться: это норма, на которой держится весь круг. До и во время встречи — без алкоголя и веществ, без исключений.</p>
+            </details>
+
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Я новичок и не знаю никого. Не будет ли неловко?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">У каждого участника на событии есть бади-напарник, который держит его в поле зрения от сбора до разъезда. Новичок не остаётся один ни на минуту — вы быстро станете «своим».</p>
+            </details>
+
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Мне нужна «сила воли», чтобы удержаться?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">Нет, и в этом вся идея. Мы не про дисциплину-из-под палки: рядом двадцать человек, для которых нужное поведение уже норма. Сила воли как особая способность не работает — работает среда, в которую вы попадаете.</p>
+            </details>
+
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Сколько это стоит?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">Вступление бесплатное. Взносы на события — по факту расходов, без наценки: вы видите каждый рубль и куда он ушёл. Никаких скрытых платежей, прибыли и VIP.</p>
+            </details>
+
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Это секта, терапия или политика?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">Нет. Клуб сознательно не занимается политикой, религией, коммерцией и терапией. Мы не лечим и не заменяем врача — мы даём среду и живое общение. Форма — потребительский кооператив с выбранной на столетие юридической рамкой.</p>
+            </details>
+
+            <details class="group rounded-2xl border border-white/10 bg-surface overflow-hidden open:border-brand/30">
+              <summary class="flex items-center justify-between gap-4 p-5 cursor-pointer list-none">
+                <span class="font-display font-bold text-lg">Что, если я нарушу правила?</span>
+                <span class="text-brand font-display font-black text-xl group-open:rotate-45 transition-transform">+</span>
+              </summary>
+              <p class="px-5 pb-5 text-sm text-white/65 leading-relaxed">Нарушение трезвости — выход из события и из клуба, без исключений. По другим вопросам решают люди: красная отметка требует двух независимых голосов или подтверждения организатора. Речь о человеке, а не приговор.</p>
+            </details>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ВОПРОС-ОТВЕТ ======================= -->
+
+      <!-- ======================= ГОРМОНЫ СЧАСТЬЯ ======================= -->
+      <section id="hormones" class="relative py-20 px-4 scroll-mt-20 bg-surface/40 border-y border-white/10">
+        <div class="max-w-6xl mx-auto">
+          <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Почему это важно</span>
+          <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight max-w-3xl">
+            Живые встречи поднимают гормоны, которые экран не даёт
+          </h2>
+          <p class="mt-6 max-w-3xl text-lg text-white/70 leading-relaxed">
+            Лента и челленджи гоняют дофамин по касательной. Мы строим среду, где те же химии тела
+            работают на полную: через тело, природу, общее дело и живой круг.
+          </p>
+          <div class="mt-10 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="rounded-2xl border border-white/10 bg-surface p-6">
+              <div class="text-3xl">⚡</div>
+              <h3 class="mt-3 font-display font-bold text-base">Дофамин — радость цели</h3>
+              <p class="mt-2 text-sm text-white/55">Вызовы, спорт, походы и победы на маршруте — честный отклик тела.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6">
+              <div class="text-3xl">☀️</div>
+              <h3 class="mt-3 font-display font-bold text-base">Серотонин — ритм и стабильность</h3>
+              <p class="mt-2 text-sm text-white/55">Солнце, природа и регулярные встречи без хаоса дают опору.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6">
+              <div class="text-3xl">🔥</div>
+              <h3 class="mt-3 font-display font-bold text-base">Окситоцин — близость и доверие</h3>
+              <p class="mt-2 text-sm text-white/55">Общее дело, круг у костра и честный разговор тепло внутри.</p>
+            </div>
+            <div class="rounded-2xl border border-white/10 bg-surface p-6">
+              <div class="text-3xl">🏃</div>
+              <h3 class="mt-3 font-display font-bold text-base">Эндорфины — лёгкость и устойчивость</h3>
+              <p class="mt-2 text-sm text-white/55">Баня, спорт до усталости, смех и преодоление — ясность без веществ.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ГОРМОНЫ СЧАСТЬЯ ======================= -->
+
+      <!-- ======================= ФИНАЛЬНЫЙ CTA ======================= -->
+      <section id="apply" class="relative py-24 px-4 scroll-mt-20 overflow-hidden">
+        <div class="absolute inset-0 grid-bg opacity-60 pointer-events-none" aria-hidden="true"></div>
+        <div class="absolute -bottom-40 left-1/2 -translate-x-1/2 w-[1000px] h-[500px] bg-brand/10 blur-[150px] rounded-full pointer-events-none" aria-hidden="true"></div>
+
+        <div class="relative max-w-5xl mx-auto grid lg:grid-cols-2 gap-12 items-center">
+          <div>
+            <span class="font-mono text-[11px] uppercase tracking-widest text-brand">Начать</span>
+            <h2 class="mt-4 font-display font-black uppercase tracking-tight text-3xl md:text-5xl leading-tight">
+              Первый шаг — <span class="text-brand">просто сказать</span>
+            </h2>
+            <p class="mt-6 text-lg text-white/70 leading-relaxed">
+              Оставьте заявку — организатор свяжется, ответит на вопросы и расскажет,
+              как попасть на первое событие. Никакой оплаты при подаче и никаких обязательств.
+            </p>
+            <div class="mt-8 flex items-center gap-6 text-white/50 font-mono text-xs flex-wrap">
+              <span>ежедневно, без выходных</span>
+              <span>ответ в течение дня</span>
+              <span>Минск · Беларусь</span>
+            </div>
+          </div>
+
+          <div class="rounded-3xl border border-white/12 bg-surface p-6 md:p-8">
+            <h3 class="font-display font-black uppercase text-xl tracking-tight">Оставить заявку на вступление</h3>
+            <form id="apply-form-2" class="mt-5 space-y-3">
+              <input type="text" name="name" placeholder="Имя *" required
+                class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors" />
+              <input type="text" name="contact" placeholder="Telegram или телефон *" required
+                class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors" />
+              <textarea name="why" rows="2" placeholder="Зачем вам клуб? (2–3 слова)"
+                class="w-full bg-white/5 border border-white/10 rounded-xl p-3.5 text-sm text-white placeholder:text-white/25 transition-colors resize-none"></textarea>
+              <button type="submit"
+                class="w-full bg-brand hover:bg-brand-hover text-black py-4 rounded-xl font-mono text-xs font-black uppercase tracking-widest transition-all">
+                Подать заявку →
+              </button>
+            </form>
+            <div id="apply-success-2" class="hidden mt-4 rounded-xl border border-brand/30 bg-brand/5 p-5 text-center">
+              <div class="font-display font-black text-brand text-lg uppercase">Заявка принята</div>
+              <p class="mt-1 text-sm text-white/65">Организатор свяжется с вами в течение дня.</p>
+            </div>
+            <div id="apply-fail-2" class="hidden mt-4 rounded-xl border border-red-500/30 bg-red-500/5 p-5 text-center">
+              <div class="font-display font-black text-red-400 text-lg uppercase">Не удалось отправить</div>
+              <p class="mt-1 text-sm text-white/65">Подайте заявку прямо в боте.</p>
+              <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="mt-2 inline-block px-5 py-2 rounded-xl bg-brand text-black font-mono text-[11px] font-black uppercase tracking-widest hover:bg-brand-hover transition-all">Написать боту</a>
+            </div>
+            <p class="mt-4 text-[11px] text-white/35 text-center leading-relaxed">Нажимая «Подать заявку», вы соглашаетесь на обработку персональных данных для связи по заявке.</p>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ФИНАЛЬНЫЙ CTA ======================= -->
+
+    </main>
+
+    <!-- ======================= КОНТАКТЫ / FOOTER ======================= -->
+    <footer class="border-t border-white/10">
+      <div class="max-w-6xl mx-auto px-4 py-14">
+        <div class="grid md:grid-cols-3 gap-10">
+          <div>
+            <div class="h-7 flex items-center">
+              <svg viewBox="0 0 328 117" fill="none" class="h-7 w-auto" xmlns="http://www.w3.org/2000/svg">
+                <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z" fill="#E6FD3A"/>
+                <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z" fill="#E6FD3A"/>
+                <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z" fill="#E6FD3A"/>
+                <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z" fill="#E6FD3A"/>
+                <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z" fill="#E6FD3A"/>
+                <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z" fill="#E6FD3A"/>
+                <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="black"/>
+              </svg>
+            </div>
+            <p class="mt-4 text-sm text-white/50 leading-relaxed">Закрытый клуб живых трезвых событий. Среда, в которой человек становится собой.</p>
+          </div>
+
+          <div>
+            <div class="font-mono text-[10px] uppercase tracking-widest text-white/40">Навигация</div>
+            <ul class="mt-4 space-y-2 text-sm text-white/65">
+              <li><a href="#for" class="hover:text-brand transition-colors">Для кого</a></li>
+              <li><a href="#people" class="hover:text-brand transition-colors">Кто в клубе</a></li>
+              <li><a href="#events" class="hover:text-brand transition-colors">Мероприятия</a></li>
+              <li><a href="#clean" class="hover:text-brand transition-colors">Практики</a></li>
+              <li><a href="#detox" class="hover:text-brand transition-colors">Без зависимостей</a></li>
+              <li><a href="#rules" class="hover:text-brand transition-colors">Правила</a></li>
+              <li><a href="#product" class="hover:text-brand transition-colors">Платформа</a></li>
+              <li><a href="#review" class="hover:text-brand transition-colors">Вопрос-ответ</a></li>
+            </ul>
+            <a href="index.html" class="mt-4 inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-widest text-brand hover:text-brand-hover transition-colors">Манифест клуба →</a>
+          </div>
+
+          <div>
+            <div class="font-mono text-[10px] uppercase tracking-widest text-white/40">Контакты</div>
+            <ul class="mt-4 space-y-2 text-sm text-white/65">
+              <li>Telegram: <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer" class="text-brand hover:text-brand-hover">@campsflint_bot</a></li>
+              <li>Минск, Беларусь</li>
+              <li>Приём по приглашению</li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="mt-12 pt-6 border-t border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-[11px] text-white/35 font-mono">
+          <p>FLINT · «Живи в моменте» · Редакция от 27.08.2026</p>
+          <p>© 2026 Клуб FLINT · не политика, не религия, не коммерция, не терапия</p>
+        </div>
+        <p class="mt-4 text-[11px] text-white/25 font-mono text-center">
+          <a href="guide.html" class="hover:text-brand transition-colors">🔒 Инструкция для членов клуба</a>
+        </p>
+      </div>
+    </footer>
+    <!-- ======================= /КОНТАКТЫ/FOOTER ======================= -->
+
+    <!-- ======================= СКРИПТ ФОРМЫ ======================= -->
+    <script>
+      // Отправка заявки. В продакшене (Vercel, тот же домен) данные уходят в
+      // /api/profile (action='apply') и прилетают организаторам в Telegram.
+      // Если API недоступен (локальный vault/vite без serverless) — честно сообщаем
+      // и предлагаем подать заявку прямо в боте.
+      function sendApply(payload) {
+        return fetch('/api/profile', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'apply',
+            firstName: payload.name,
+            sourceHint: payload.why,
+            phone: payload.contact,
+          }),
+        }).then(function (r) {
+          return r.json();
+        });
+      }
+
+      function wireLiveForm(formId, successId, failId) {
+        var form = document.getElementById(formId);
+        var success = document.getElementById(successId);
+        var fail = document.getElementById(failId);
+        if (!form) return;
+        form.addEventListener('submit', function (e) {
+          e.preventDefault();
+          var name = (form.querySelector('[name=name]').value || '').trim();
+          var contact = (form.querySelector('[name=contact]').value || '').trim();
+          var why = (form.querySelector('[name=why]').value || '').trim();
+          if (!name || !contact) return;
+
+          var btn = form.querySelector('[type=submit]');
+          var old = btn.textContent;
+          btn.textContent = 'Отправляем…';
+          btn.disabled = true;
+
+          sendApply({ name: name, contact: contact, why: why })
+            .then(function () {
+              form.classList.add('hidden');
+              if (success) success.classList.remove('hidden');
+            })
+            .catch(function () {
+              // API недоступен — предлагаем подать заявку в боте.
+              if (fail) fail.classList.remove('hidden');
+              btn.textContent = old;
+              btn.disabled = false;
+            });
+        });
+      }
+
+      // Меню-бургер для мобильных
+      function wireBurger(btnId, menuId) {
+        var btn = document.getElementById(btnId);
+        var menu = document.getElementById(menuId);
+        if (!btn || !menu) return;
+        btn.addEventListener('click', function () {
+          var open = menu.classList.toggle('hidden');
+          btn.setAttribute('aria-expanded', String(!open));
+        });
+        menu.querySelectorAll('a').forEach(function (a) {
+          a.addEventListener('click', function () { menu.classList.add('hidden'); });
+        });
+      }
+
+      window.addEventListener('DOMContentLoaded', function () {
+        wireLiveForm('apply-form', 'apply-success', 'apply-fail');
+        wireLiveForm('apply-form-2', 'apply-success-2', 'apply-fail-2');
+        wireBurger('burger-btn', 'mobile-menu');
+        // Появление карточек при скролле (Medlevel-полировка)
+        var els = document.querySelectorAll('.reveal');
+        if ('IntersectionObserver' in window) {
+          var io = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) {
+              if (en.isIntersecting) { en.target.classList.add('on'); io.unobserve(en.target); }
+            });
+          }, { threshold: 0.12 });
+          els.forEach(function (el) { io.observe(el); });
+        } else {
+          els.forEach(function (el) { el.classList.add('on'); });
+        }
+
+        // Интерактивный телефон: клик по разделу меняет скриншот
+        var phoneImg = document.getElementById('phone-screen');
+        var phoneTabs = document.getElementById('phone-tabs');
+        if (phoneImg && phoneTabs) {
+          phoneTabs.querySelectorAll('.phonetab').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+              var name = btn.getAttribute('data-phone');
+              phoneImg.style.opacity = '0';
+              setTimeout(function () {
+                phoneImg.src = 'assets/phones/' + name + '.png';
+                phoneImg.style.opacity = '1';
+              }, 180);
+              phoneTabs.querySelectorAll('.phonetab').forEach(function (b) {
+                b.classList.remove('bg-brand/10', 'border-brand/50', 'text-white');
+                b.classList.add('bg-white/5', 'border-white/10', 'text-white/70');
+              });
+              btn.classList.remove('bg-white/5', 'border-white/10', 'text-white/70');
+              btn.classList.add('bg-brand/10', 'border-brand/50', 'text-white');
+            });
+          });
+        }
+      });
+    </script>
+    <!-- ======================= /СКРИПТ ФОРМЫ ======================= -->
+    <!-- Анимация сборки логотипа FLINT -->
+    <script src="assets/bolt.js" defer></script>
+
+    <!-- Интро: видео-логотип играет один раз, затем контент -->
+    <script>
+      (function () {
+        var v = document.getElementById('flintIntroVideo');
+        var intro = document.getElementById('flint-intro');
+        if (!v || !intro) return;
+        function done() {
+          setTimeout(function () { intro.classList.add('done'); }, 150);
+        }
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return; }
+        v.addEventListener('ended', done);
+        setTimeout(done, 4000);
+      })();
+    </script>
+
+  </body>
+</html>
