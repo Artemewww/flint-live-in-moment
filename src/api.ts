@@ -59,6 +59,22 @@ export async function submitClubApplication(payload: {
   sourceHint?: string;
   /** Реф-код пригласившего — снимает ручную модерацию. */
   refCode?: string;
+  /**
+   * Всё, что человек рассказал о себе на онбординге вступления. Раньше заявка
+   * несла только имя и телефон, и костяк решал вслепую, а правила человек
+   * принимал уже после приёма — или не принимал вовсе.
+   */
+  gender?: 'male' | 'female';
+  birthday?: string;
+  occupation?: string;
+  activities?: string[];
+  transport?: string;
+  seats?: number;
+  gear?: string[];
+  why?: string;
+  usePhoto?: boolean;
+  rulesMap?: Record<string, number>;
+  rulesVersion?: string;
 }): Promise<RegisterResult & { code?: string; approved?: boolean }> {
   try {
     const res = await fetch('/api/profile', {

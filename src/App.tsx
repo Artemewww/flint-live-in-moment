@@ -9,6 +9,7 @@ import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
 import RegistrationModal from './components/RegistrationModal';
+import ClubOnboarding from './components/ClubOnboarding';
 import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
 import VerificationModal from './components/VerificationModal';
@@ -239,6 +240,8 @@ export default function App() {
   const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'kb' | 'settings'>('overview');
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
+  const [isCoreUser, setIsCoreUser] = useState<boolean>(false);
+  const [applySent, setApplySent] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   // Клуб закрытый: без реф-ссылки афиша не видна. Аварийно открыть: VITE_GATE_ENABLED=0.
   const gateEnabled = import.meta.env.VITE_GATE_ENABLED !== '0';
@@ -415,6 +418,10 @@ export default function App() {
       .then((d) => {
         const p = d?.profile;
         setClubApproved(!!p && (p.status === 'approved' || p.isCore));
+        // Админку показываем ТОЛЬКО костяку. Раньше кнопка «Админ» висела в
+        // шапке у всех («всегда виден»), и обычный участник видел вход в
+        // панель, которая ему не принадлежит.
+        setIsCoreUser(!!p && !!p.isCore);
         // Костяк не блокируется; для остальных статус 'blocked' закрывает афишу.
         setBanned(!!p && p.status === 'blocked' && !p.isCore);
       })
@@ -707,19 +714,41 @@ export default function App() {
      * сервер не отдавал афишу — человек упирался в «Только для участников» со
      * ссылкой «Вступить через бот», а анкеты там не было вообще.
      */
-    if (showApplyForm || invitedByRef) {
+    if (applySent) {
       return (
-        <GateScreen
-          applyOnly
-          onPass={() => {
+        <div className="min-h-screen bg-[#0A0A0A] text-white flex flex-col items-center justify-center px-6 text-center">
+          <div className="text-5xl mb-5">🤝</div>
+          <h1 className="font-display font-black text-2xl uppercase tracking-tight mb-3">Заявка ушла костяку</h1>
+          <p className="text-sm text-white/60 max-w-sm leading-relaxed">
+            Правила приняты, анкета заполнена. Костяк смотрит каждую заявку руками —
+            обычно в течение дня. Ответ придёт в этот же чат с ботом.
+          </p>
+        </div>
+      );
+    }
+
+    /**
+     * Вступление идёт через полноценный онбординг: знакомство → восемь правил
+     * по одному → анкета о себе → заявка. Раньше здесь была короткая форма
+     * «имя, фамилия, телефон», человек попадал в клуб, не приняв правил, и
+     * костяк решал вслепую.
+     */
+    if (showApplyForm || invitedByRef) {
+      let ref: string | undefined;
+      try { ref = new URLSearchParams(window.location.search).get('ref') || localStorage.getItem('flint_ref') || undefined; } catch { ref = undefined; }
+      return (
+        <ClubOnboarding
+          refCode={ref}
+          onDone={(approved) => {
+            if (!approved) { setApplySent(true); return; }
             setMembersOnly(false);
             setShowApplyForm(false);
+            try { localStorage.setItem('flint_gate_ok', '1'); } catch { /* приватный режим */ }
             // Афишу очистили на 403 — после вступления её нужно перезапросить,
             // иначе новый участник видит пустой экран вместо событий.
             setEventsLoading(true);
             window.dispatchEvent(new Event('flint:events-refetch'));
           }}
-          onAdmin={() => setShowAdminPanel(true)}
         />
       );
     }
@@ -883,7 +912,8 @@ export default function App() {
               )}
             </button>
 
-            {/* Admin Panel button - всегда виден */}
+            {/* Вход в админку — только костяку. */}
+            {isCoreUser && (
             <button
               onClick={() => setShowAdminPanel(true)}
               className="px-3.5 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 cursor-pointer flex items-center gap-2 font-mono h-10"
@@ -893,6 +923,7 @@ export default function App() {
               <Shield className="w-4 h-4" />
               <span>Админ</span>
             </button>
+            )}
 
             {/* Persistent registrations manager */}
             {activeRegistrations.length > 0 && (
@@ -968,7 +999,8 @@ export default function App() {
                   Дни Рождения
                 </button>
 
-                {/* Admin button in mobile menu */}
+                {/* Вход в админку в мобильном меню — тоже только костяку. */}
+                {isCoreUser && (
                 <button
                   onClick={() => { setShowAdminPanel(true); setMobileMenuOpen(false); }}
                   className="w-full px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 cursor-pointer flex items-center gap-3 font-mono"
@@ -976,6 +1008,7 @@ export default function App() {
                   <Shield className="w-4 h-4" />
                   Админ-панель
                 </button>
+                )}
 
                 <button
                   onClick={() => { setShowUserStats(true); setMobileMenuOpen(false); }}

@@ -204,6 +204,16 @@ export default function EventDetailModal({
   const [showChecklist, setShowChecklist] = useState(false);
   /** Онлайн-событие: часть блоков (сборы, маршрут, чек-лист) для него бессмысленна. */
   const isOnline = event.notifications?._format === 'online';
+  /**
+   * Чек-лист для кемпинга уместен не везде. На «Вызове 30 км» или встрече в
+   * городе список «палатка, спальник, котелок» — мусор, который сбивает с толку
+   * («некоторые блоки просто не соответствуют мероприятию» — владелец, 30.08).
+   * Показываем его только там, где реально ночуют: многодневки и выезды на
+   * природу. Полный список всегда доступен участнику в профиле → «Снаряжение».
+   */
+  const isOvernight = !!event.dateEnd && event.dateEnd !== event.date;
+  const campingType = ['camping', 'hike', 'retreat', 'mixed'].includes(String(event.type || '').toLowerCase());
+  const needsCampingList = !isOnline && (isOvernight || campingType);
   /** Предупреждения из логистики: здоровье и условия на месте. */
   const logi: any = event.logistics || {};
   const medicalNote = String(logi.medical || '').trim();
@@ -750,7 +760,7 @@ export default function EventDetailModal({
 
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек
                 дома, брать с собой нечего — и чек-лист кемпинга тем более. */}
-            {!isOnline && (
+            {needsCampingList && (
             <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2.5">
               <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
                 <Check className="w-3.5 h-3.5" /> Что взять с собой
@@ -776,7 +786,7 @@ export default function EventDetailModal({
             </div>
             )}
 
-            {!isOnline && showChecklist && (
+            {needsCampingList && showChecklist && (
               <div className="bg-white/[0.03] border border-white/10 p-3 rounded-2xl">
                 <CampingChecklist defaultOpen />
               </div>

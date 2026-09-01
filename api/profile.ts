@@ -957,13 +957,49 @@ export default async function handler(req: any, res: any) {
       };
       // Реф-ссылка фиксирует пригласившего (атрибуция), но НЕ впускает сама.
       if (inviterId && !(existing as any)?.referred_by) memberData.referred_by = inviterId;
-      // «Откуда узнал» — в members НЕТ колонки source_hint (именно из-за неё
-      // КАЖДАЯ заявка падала на upsert 02–03.08). Кладём в prefs (jsonb).
-      if (sourceHint) {
+      /**
+       * Анкета онбординга. В `members` есть колонки только под пол и дату
+       * рождения — всё остальное (род деятельности, активности, транспорт,
+       * снаряжение, мотив, принятые правила) кладём в prefs (jsonb): новых
+       * колонок не заводим, миграция не нужна.
+       *
+       * Ключевое: `rules_accepted` пишется ВМЕСТЕ с заявкой. Раньше человека
+       * принимали в клуб, а правила у него оставались непринятыми — 23.08 так
+       * и случилось, и заметили это случайно. Теперь непринятых правил у
+       * принятого участника быть не может: без них заявка просто не создаётся.
+       */
+      {
         const { data: cur } = await supabase.from('members').select('prefs').eq('telegram_id', telegramId).maybeSingle();
         const prefs: any = (cur as any)?.prefs || {};
-        prefs.source_hint = String(sourceHint).slice(0, 300);
+        if (sourceHint) prefs.source_hint = String(sourceHint).slice(0, 300);
+        if (body.occupation) prefs.occupation = String(body.occupation).slice(0, 200);
+        if (Array.isArray(body.activities) && body.activities.length) {
+          prefs.activities = body.activities.slice(0, 30).map((a: any) => String(a).slice(0, 40));
+        }
+        if (body.transport) prefs.transport = String(body.transport).slice(0, 60);
+        if (Number(body.seats) > 0) prefs.transport_seats = Math.min(9, Number(body.seats));
+        if (Array.isArray(body.gear) && body.gear.length) {
+          prefs.gear = body.gear.slice(0, 30).map((g: any) => String(g).slice(0, 40));
+        }
+        if (body.why) prefs.join_reason = { text: String(body.why).slice(0, 1000), at: new Date().toISOString() };
+        if (body.rulesMap && typeof body.rulesMap === 'object') {
+          prefs.rules_accepted = {
+            version: String(body.rulesVersion || 'v3').slice(0, 16),
+            at: new Date().toISOString(),
+            map: body.rulesMap,
+          };
+          // Правила приняты осознанно и поимённо — это же и есть подтверждение
+          // ценностей, второй раз спрашивать человека не за что.
+          prefs.values_confirmed = { at: new Date().toISOString(), version: 'v1' };
+        }
+        if (body.usePhoto) prefs.use_tg_photo = true;
         memberData.prefs = prefs;
+      }
+      if (body.gender === 'male' || body.gender === 'female') memberData.gender = body.gender;
+      if (typeof body.birthday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.birthday)) {
+        const year = Number(body.birthday.slice(0, 4));
+        // Границы от опечаток: в базе уже лежат «2026 год рождения».
+        if (year >= 1930 && year <= new Date().getFullYear() - 14) memberData.birthday = body.birthday;
       }
 
       const { error } = await supabase.from('members').upsert(
