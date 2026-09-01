@@ -47,3 +47,9 @@ html, body {
     font-size: 16px !important;
   }
 }
+
+/* Эквалайзер в музыкальном плеере: полоски «пляшут», пока трек играет. */
+@keyframes eqBounce {
+  0%, 100% { height: 30%; }
+  50% { height: 100%; }
+}

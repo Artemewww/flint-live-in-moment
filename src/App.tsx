@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle,
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle, Music
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
 import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
@@ -19,6 +19,8 @@ import ProfileScreen from './components/ProfileScreen';
 import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
 import GateScreen from './components/GateScreen';
+import MusicPlayer from './components/MusicPlayer';
+import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
 
@@ -228,6 +230,7 @@ export default function App() {
   const [verifyingEvent, setVerifyingEvent] = useState<CommunityEvent | null>(null);
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
+  const [showMusicPlayer, setShowMusicPlayer] = useState<boolean>(false);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
@@ -238,6 +241,8 @@ export default function App() {
   }, []);
   /** С какой вкладки открыть профиль (deep-link ?checklist ведёт в «Снаряжение»). */
   const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'kb' | 'settings'>('overview');
+  /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
+  const musicPlaying = useMusicPlayer().playing;
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [isCoreUser, setIsCoreUser] = useState<boolean>(false);
@@ -837,6 +842,26 @@ export default function App() {
               меню: это вход в личный кабинет, самое частое действие после афиши,
               и на мобиле он не должен прятаться за бургером. */}
           <div className="md:hidden flex items-center gap-2">
+            {/* Кнопка-нота: внутренний плейлист сообщества (гимн + вайбы). */}
+            <button
+              onClick={() => setShowMusicPlayer(true)}
+              className={`w-10 h-10 rounded-full border transition-all cursor-pointer flex items-center justify-center relative ${
+                musicPlaying
+                  ? 'bg-brand text-black border-brand shadow-lg shadow-brand/30'
+                  : 'bg-brand/15 border-brand/30 hover:bg-brand/25 text-brand'
+              }`}
+              id="header-music-btn"
+              title="Музыка FLINT"
+              aria-label="Музыка FLINT"
+            >
+              <Music className="w-4.5 h-4.5" />
+              {musicPlaying && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                </span>
+              )}
+            </button>
             <button
               onClick={() => setShowUserStats(true)}
               className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative"
@@ -862,7 +887,27 @@ export default function App() {
 
           {/* Desktop nav (hidden on mobile) */}
           <div className="hidden md:flex items-center gap-4" id="nav-actions">
-            
+            {/* Кнопка-нота: внутренний плейлист сообщества (гимн + вайбы). */}
+            <button
+              onClick={() => setShowMusicPlayer(true)}
+              className={`w-10 h-10 shrink-0 rounded-full border transition-all cursor-pointer flex items-center justify-center relative ${
+                musicPlaying
+                  ? 'bg-brand text-black border-brand shadow-lg shadow-brand/30'
+                  : 'bg-brand/15 border-brand/30 hover:bg-brand/25 text-brand'
+              }`}
+              id="header-music-btn-desktop"
+              title="Музыка FLINT"
+              aria-label="Музыка FLINT"
+            >
+              <Music className="w-4.5 h-4.5" />
+              {musicPlaying && (
+                <span className="absolute -top-0.5 -right-0.5 flex h-2.5 w-2.5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
+                </span>
+              )}
+            </button>
+
             {/* Manifesto button */}
             <button
               onClick={() => setShowManifestoModal(true)}
@@ -1359,6 +1404,11 @@ export default function App() {
           birthdays={birthdays}
           onClose={() => setShowBirthdayCalendar(false)}
         />
+      )}
+
+      {/* MUSIC PLAYER MODAL — внутренний плейлист сообщества */}
+      {showMusicPlayer && (
+        <MusicPlayer onClose={() => setShowMusicPlayer(false)} />
       )}
 
       {/* FEEDBACK MODAL */}
