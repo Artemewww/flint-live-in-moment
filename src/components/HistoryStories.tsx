@@ -75,6 +75,7 @@ export default function HistoryStories({ onClose }: HistoryStoriesProps) {
               poster={HISTORY[active].poster}
               playsInline
               loop
+              preload="auto"
               muted={muted}
               controls
               autoPlay={false}
