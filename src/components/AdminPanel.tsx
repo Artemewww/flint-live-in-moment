@@ -432,6 +432,9 @@ function LogisticsEditor({ value, onChange, event }: { value: any; onChange: (v:
         <input type="number" value={v.fuelCost || ''} onChange={(e) => set('fuelCost', parseInt(e.target.value) || 0)} placeholder="Бензин Br/чел" className={inp} />
       </div>
       <input value={v.returnInfo || ''} onChange={(e) => set('returnInfo', e.target.value)} placeholder="Обратная дорога (напр. ~22:00 обратно к метро)" className={inp} />
+      {/* Прямая ссылка на маршрут (напр. Яндекс.Карты rtext=... для марш-бросков/выездов).
+          Появляется в карточке события кнопкой «📍 Маршрут» сразу под фото. */}
+      <input value={v.routeUrl || ''} onChange={(e) => set('routeUrl', e.target.value)} placeholder="Ссылка на маршрут (URL Яндекс.Карт / maps)" className={inp} />
       <textarea value={v.notes || ''} onChange={(e) => set('notes', e.target.value)} placeholder="Как добраться / доп. детали" rows={2} className={inp} />
 
       {/* Мед-показания — НЕ прячем за кнопку «Как готовиться»: человек с

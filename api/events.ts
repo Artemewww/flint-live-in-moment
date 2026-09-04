@@ -368,6 +368,32 @@ async function handleMedia(req: any, res: any) {
   }
 }
 
+/**
+ * JSON-список медиа события для встраивания в мини-приложение (История события).
+ * GET /api/events?action=media_list&id=<eventId>
+ * Возвращает { items: [{ id, media_type, src, votes }] }, где src — путь к прокси
+ * /api/events?action=media&fid=..., который отдаёт сам файл из Telegram.
+ */
+async function handleMediaList(req: any, res: any) {
+  const evId = String(req.query?.id || '');
+  if (!evId) return res.status(400).json({ error: 'Missing id' });
+  const { data: media, error } = await supabase
+    .from('event_media').select('id,file_id,media_type,votes')
+    .eq('event_id', evId)
+    .order('votes', { ascending: false }).order('created_at', { ascending: true })
+    .limit(200);
+  if (error) return res.status(500).json({ error: error.message });
+  const base = `/api/events?action=media&fid=`;
+  const items = (media || []).map((m: any) => ({
+    id: m.id,
+    media_type: m.media_type === 'video' ? 'video' : 'photo',
+    votes: m.votes || 0,
+    src: base + encodeURIComponent(m.file_id),
+  }));
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ items });
+}
+
 /** Галерея события: мобильная страница с голосованием (открывается как Mini App из бота). */
 async function handleGallery(req: any, res: any) {
   const evId = String(req.query?.id || '');
@@ -605,6 +631,7 @@ export default async function handler(req: any, res: any) {
     if (req.query?.action === 'image') return await handleImage(req, res);
     // Галерея события и прокси медиа (file_id неугадываем, голос — только участникам).
     if (req.query?.action === 'gallery') return await handleGallery(req, res);
+    if (req.query?.action === 'media_list') return await handleMediaList(req, res);
     if (req.query?.action === 'media') return await handleMedia(req, res);
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список

@@ -1437,7 +1437,7 @@ export default function App() {
 
       {/* HISTORY — видео прошедших событий сообщества */}
       {showHistory && (
-        <HistoryStories onClose={() => setShowHistory(false)} />
+        <HistoryStories events={events} onClose={() => setShowHistory(false)} />
       )}
 
       {/* FEEDBACK MODAL */}

@@ -10,6 +10,7 @@ import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 import CampingChecklist from './CampingChecklist';
+import LiveMedia from './LiveMedia';
 import { getEventGuide } from '../eventGuide';
 
 /**
@@ -354,6 +355,36 @@ export default function EventDetailModal({
               </div>
             </div>
           )}
+{/* Быстрые действия события: маршрут (если задан) и live-галерея «Фото и видео».
+              Показываем всегда, не только записавшимся, — маршбросок/выезд открывают
+              маршрут заранее, а live-ленту смотрят все. */}
+          <div className="px-4 sm:px-6 mt-1" id={`event-actions-${event.id}`}>
+            <div className="flex flex-wrap gap-2">
+              {event.logistics?.routeUrl && (
+                <a
+                  href={event.logistics.routeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 bg-brand text-black text-[11px] font-black font-mono uppercase tracking-wider rounded-xl px-3.5 py-2.5 transition-all hover:bg-brand-hover shadow-lg shadow-brand/20"
+                >
+                  📍 {event.logistics.routeLabel || 'Маршрут'}
+                </a>
+              )}
+              {/* Live-галерея события: существующая точка media_<id> в Mini App. */}
+              <a
+                href={`/api/events?action=gallery&id=${encodeURIComponent(event.id)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 text-[11px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-3.5 py-2.5 transition-all"
+              >
+                📸 Live-фото события
+              </a>
+            </div>
+          </div>
+
+          {/* Живая лента фото/видео события — каждый poll обновляется, как в сторис.
+              Фото шлют в бота (media_upload), здесь они сразу появляются и сохраняются в истории. */}
+          <LiveMedia eventId={event.id} />
 
           {/* Grid of Essential Parameters. На мобильном узкие отступы — больше места контенту. */}
           <div className="p-4 sm:p-6 space-y-6">

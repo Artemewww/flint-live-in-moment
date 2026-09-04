@@ -54,6 +54,12 @@ export interface CommunityEvent {
     fuelCost?: number;
     returnInfo?: string;
     notes?: string;
+    /** Прямая ссылка на маршрут (напр. Яндекс.Карты rtext=...) для выездов. */
+    routeUrl?: string;
+    /** Подпись кнопки маршрута (по умолчанию «📍 Маршрут»). */
+    routeLabel?: string;
+    /** id события в боте для live-галереи «Фото и видео» (media_<id>). */
+    liveMediaId?: string;
   };
   paymentDetails?: {
     erip?: string;
