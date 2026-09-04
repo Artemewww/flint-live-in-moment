@@ -11,6 +11,7 @@ import { haptic } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 import CampingChecklist from './CampingChecklist';
 import LiveMedia from './LiveMedia';
+import SnapModal from './SnapModal';
 import { getEventGuide } from '../eventGuide';
 
 /**
@@ -221,6 +222,8 @@ export default function EventDetailModal({
   /** Промо-ролик события: явное поле или авто-подбор по названию/локации. */
   const promo = getPromoVideo(event);
   const [promoActive, setPromoActive] = useState(false);
+  /** Открыта ли «всплывашка» «Снять фото/видео» из кнопок под баннером. */
+  const [showSnap, setShowSnap] = useState(false);
   const medicalNote = String(logi.medical || '').trim();
   const isDetox = !!logi.detox;
   const isNoSignal = !!logi.nosignal;
@@ -330,7 +333,29 @@ export default function EventDetailModal({
                 {event.title}
               </h2>
             </div>
+
+          {/* Кнопки «Снять фото»/«Снять видео» ПОВЕРХ баннера — чтобы можно было сразу
+              нажать прямо из шапки карточки, не листая вниз. Доступны всегда; сервер
+              сам отклонит загрузку, если событие не идёт или юзер не записан. */}
+          <div className="absolute top-4 left-4 z-30 flex flex-col gap-2 sm:flex-row">
+            <button
+              type="button"
+              onClick={() => setShowSnap(true)}
+              className="inline-flex items-center gap-1.5 bg-brand text-black text-[11px] font-black font-mono uppercase tracking-wider rounded-full px-3.5 py-2 shadow-lg shadow-black/40 hover:bg-brand-hover transition-all cursor-pointer"
+              title="Снять фото / видео"
+            >
+              📷 Фото
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSnap(true)}
+              className="inline-flex items-center gap-1.5 bg-black/70 text-white text-[11px] font-black font-mono uppercase tracking-wider rounded-full px-3.5 py-2 border border-white/15 shadow-lg shadow-black/40 hover:bg-black/90 hover:border-brand/40 transition-all cursor-pointer"
+              title="Снять фото / видео"
+            >
+              🎥 Видео
+            </button>
           </div>
+        </div>
 
           {/* Промо-ролик события: реклама перед решением о регистрации.
               Видео проигрывается по клику (автоплей в вебвью Telegram блокируется),
@@ -379,6 +404,14 @@ export default function EventDetailModal({
               >
                 📸 Live-фото события
               </a>
+              {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки. */}
+              <button
+                type="button"
+                onClick={() => setShowSnap(true)}
+                className="inline-flex items-center gap-1.5 text-[11px] font-black font-mono uppercase tracking-wider text-black bg-brand hover:bg-brand-hover rounded-xl px-3.5 py-2.5 transition-all shadow-lg shadow-brand/20"
+              >
+                📷 Снять фото / видео
+              </button>
             </div>
           </div>
 
@@ -1113,6 +1146,16 @@ export default function EventDetailModal({
             </>
           )}
         </div>
+
+        {/* Снять фото / видео прямо из карточки события (живые кнопки) */}
+        {showSnap && (
+          <SnapModal
+            eventId={event.id}
+            eventTitle={event.title}
+            onClose={() => setShowSnap(false)}
+            // Живая лента (LiveMedia) сама опрашивает сервер каждые ~12с — кадр появится автоматически.
+          />
+        )}
 
       </motion.div>
     </div>

@@ -250,22 +250,19 @@ export default function App() {
   /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
   const musicPlaying = useMusicPlayer().playing;
   /**
-   * Авто-«всплывашка» «Снять фото/видео»: как только у юзера есть событие,
-   * которое идёт СЕГОДНЯ (сегодня в [date..dateEnd]) и он в него записан —
-   * показываем две кнопки ровно в период события; после — не показываем.
-   * Не чаще раза за сессию (localStorage), чтобы не надоедать.
+   * Авто-«всплывашка» «Снять фото/видео»: если у юзера есть событие, которое
+   * идёт СЕГОДНЯ (в [date..dateEnd]) и он в него записан — показываем окно.
+   * Без постоянной блокировки: каждый раз, когда юзер (заново) открывает
+   * приложение во время события, окно вылетает снова. Закрыл — зайдёшь опять —
+   * появится ещё раз, пока событие длится.
    */
   useEffect(() => {
     if (registeredEventIds.length === 0 || events.length === 0) return;
-    try { if (localStorage.getItem('flint_snap_prompt')) return; } catch { /* ignore */ }
     const today = new Date().toISOString().slice(0, 10);
     const liveNow = events.find((ev) =>
       registeredEventIds.includes(ev.id) && (ev.date || today) <= today && (ev.dateEnd || ev.date) >= today
     );
-    if (liveNow) {
-      setPromptEvent(liveNow);
-      try { localStorage.setItem('flint_snap_prompt', '1'); } catch { /* ignore */ }
-    }
+    if (liveNow) setPromptEvent(liveNow);
   }, [events, registeredEventIds]);
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
