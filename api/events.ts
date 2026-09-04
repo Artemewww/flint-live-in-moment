@@ -867,6 +867,85 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      // Загрузка фото/видео ПРЯМО ИЗ мини-приложения (не через бота): участник
+      // в период события жмёт «📷 Фото / 🎥 Видео», файл (base64) уходит сюда,
+      // сервер шлёт его в Telegram (получает file_id) и пишет в event_media.
+      // Клиент уже сжал фото и наложил логотип; здесь — валидации + лимиты.
+      if (action === 'media_upload') {
+        const user = verifyInitData(body.initData, BOT_TOKEN);
+        if (!user) return res.status(401).json({ error: 'Unauthorized' });
+
+        const eventId = String(body.eventId || '');
+        const mime = String(body.mime || '');
+        const b64 = String(body.data || '');
+        if (!eventId || !b64) return res.status(400).json({ error: 'Missing eventId or data' });
+
+        // Только участник события может грузить (кто зарегистрировался и прошёл).
+        const { data: reg } = await supabase
+          .from('registrations').select('id,status')
+          .eq('event_id', eventId).eq('telegram_id', user.id).neq('status', 'cancelled').maybeSingle();
+        if (!reg) return res.status(403).json({ error: 'not_registered' });
+
+        // Период события: грузить можно только пока событие идёт / ещё не прошло.
+        const { data: ev } = await supabase
+          .from('events').select('date,date_end').eq('id', eventId).maybeSingle();
+        if (ev) {
+          const today = new Date().toISOString().slice(0, 10);
+          const start = String(ev.date || today);
+          const end = ev.date_end && String(ev.date_end) > start ? String(ev.date_end) : start;
+          if (today < start) return res.status(403).json({ error: 'not_started' });
+          if (today > end) return res.status(403).json({ error: 'finished' });
+        } else {
+          return res.status(404).json({ error: 'event_not_found' });
+        }
+
+        const isVideo = mime.startsWith('video/');
+        // Vercel free: лимит тела ~4.5 МБ; фото уже сжаты клиентом (~1-300КБ).
+        const maxBytes = isVideo ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
+        const bytes = Buffer.from(b64, 'base64');
+        if (bytes.length === 0) return res.status(400).json({ error: 'empty' });
+        if (bytes.length > maxBytes) {
+          if (isVideo) return res.status(413).json({ error: 'video_too_large' });
+          return res.status(413).json({ error: 'too_large' });
+        }
+
+        // Отправляем в Telegram, получаем file_id. Для бесшовного иммитации
+        // бота: caption с именем отправителя, чтобы модерации было по кому.
+        const cap = `${user.first_name || ''} · мини-апп`.trim();
+        const bodyForm = new FormData();
+        bodyForm.append('chat_id', String(user.id)); // шлём самому себе — file_id глобальный
+        bodyForm.append(
+          isVideo ? 'video' : 'photo',
+          new Blob([bytes], { type: mime }),
+          isVideo ? 'clip.mp4' : 'shot.jpg'
+        );
+        // topic_id нет; шлём напрямую человеку в ЛС.
+        bodyForm.append('caption', cap);
+        const up = await fetch(
+          `https://api.telegram.org/bot${BOT_TOKEN}/send${isVideo ? 'Video' : 'Photo'}`,
+          { method: 'POST', body: bodyForm }
+        ).then((r) => r.json());
+
+        const fileId = up?.result?.photo
+          ? up.result.photo[up.result.photo.length - 1].file_id
+          : (up?.result?.video || up?.result?.document)?.file_id;
+        const fileUnique = up?.result?.photo?.[up.result.photo.length - 1]?.file_unique_id
+          ?? (up?.result?.video || up?.result?.document)?.file_unique_id;
+        if (!fileId) return res.status(502).json({ error: 'tg_upload_failed' });
+
+        const { error } = await supabase.from('event_media').insert({
+          event_id: eventId,
+          telegram_id: user.id,
+          file_id: fileId,
+          file_unique_id: fileUnique || `mini-${Date.now()}-${user.id}`,
+          media_type: isVideo ? 'video' : 'photo',
+        });
+        if (error && !String(error.code).includes('23505')) {
+          return res.status(500).json({ error: error.message });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       if (action === 'vote') return await handleVote(body, res);
       if (action === 'interest') return await handleInterest(body, res);
       if (action === 'feedback') return await handleFeedback(body, res);

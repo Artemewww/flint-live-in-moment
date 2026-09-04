@@ -21,6 +21,7 @@ import AdminPanel from './components/AdminPanel';
 import GateScreen from './components/GateScreen';
 import MusicPlayer from './components/MusicPlayer';
 import HistoryStories from './components/HistoryStories';
+import SnapModal from './components/SnapModal';
 import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
@@ -234,6 +235,8 @@ export default function App() {
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
   const [showMusicPlayer, setShowMusicPlayer] = useState<boolean>(false);
   const [showHistory, setShowHistory] = useState<boolean>(false);
+  /** Событие, ради которого показана «всплывашка» «Снять фото/видео» (идёт сейчас). */
+  const [promptEvent, setPromptEvent] = useState<CommunityEvent | null>(null);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
@@ -246,6 +249,24 @@ export default function App() {
   const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'kb' | 'settings'>('overview');
   /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
   const musicPlaying = useMusicPlayer().playing;
+  /**
+   * Авто-«всплывашка» «Снять фото/видео»: как только у юзера есть событие,
+   * которое идёт СЕГОДНЯ (сегодня в [date..dateEnd]) и он в него записан —
+   * показываем две кнопки ровно в период события; после — не показываем.
+   * Не чаще раза за сессию (localStorage), чтобы не надоедать.
+   */
+  useEffect(() => {
+    if (registeredEventIds.length === 0 || events.length === 0) return;
+    try { if (localStorage.getItem('flint_snap_prompt')) return; } catch { /* ignore */ }
+    const today = new Date().toISOString().slice(0, 10);
+    const liveNow = events.find((ev) =>
+      registeredEventIds.includes(ev.id) && (ev.date || today) <= today && (ev.dateEnd || ev.date) >= today
+    );
+    if (liveNow) {
+      setPromptEvent(liveNow);
+      try { localStorage.setItem('flint_snap_prompt', '1'); } catch { /* ignore */ }
+    }
+  }, [events, registeredEventIds]);
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [isCoreUser, setIsCoreUser] = useState<boolean>(false);
@@ -1437,7 +1458,17 @@ export default function App() {
 
       {/* HISTORY — видео прошедших событий сообщества */}
       {showHistory && (
-        <HistoryStories events={events} onClose={() => setShowHistory(false)} />
+        <HistoryStories onClose={() => setShowHistory(false)} />
+      )}
+
+      {/* SNAP — «всплывашка» «Снять фото/видео» в период события */}
+      {promptEvent && (
+        <SnapModal
+          eventId={promptEvent.id}
+          eventTitle={promptEvent.title}
+          onClose={() => setPromptEvent(null)}
+          onUploaded={() => setEventsReloadTick((t) => t + 1)}
+        />
       )}
 
       {/* FEEDBACK MODAL */}
