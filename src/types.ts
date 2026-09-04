@@ -69,6 +69,8 @@ export interface CommunityEvent {
   image: string;
   /** Вертикальная афиша для Telegram (рассылки, "Позвать друга") */
   telegramImage?: string;
+  /** Промо-видео события (ориентир на рекламу перед регистрацией). */
+  promoVideo?: string;
   maxParticipants?: number;
   participantsCount: number;
   /**

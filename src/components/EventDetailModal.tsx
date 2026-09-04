@@ -4,6 +4,7 @@ import {
   X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
+import { getPromoVideo } from '../promoVideo';
 import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
@@ -216,6 +217,9 @@ export default function EventDetailModal({
   const needsCampingList = !isOnline && (isOvernight || campingType);
   /** Предупреждения из логистики: здоровье и условия на месте. */
   const logi: any = event.logistics || {};
+  /** Промо-ролик события: явное поле или авто-подбор по названию/локации. */
+  const promo = getPromoVideo(event);
+  const [promoActive, setPromoActive] = useState(false);
   const medicalNote = String(logi.medical || '').trim();
   const isDetox = !!logi.detox;
   const isNoSignal = !!logi.nosignal;
@@ -326,6 +330,30 @@ export default function EventDetailModal({
               </h2>
             </div>
           </div>
+
+          {/* Промо-ролик события: реклама перед решением о регистрации.
+              Видео проигрывается по клику (автоплей в вебвью Telegram блокируется),
+              авто-подбор для грибной Нарочи гарантирует показ без правки базы. */}
+          {promo && (
+            <div className="rounded-2xl overflow-hidden border border-white/10 bg-black mt-2" id={`detail-promo-${event.id}`}>
+              <video
+                ref={(v) => { if (v) v.controls = promoActive; }}
+                src={promo.src}
+                playsInline
+                poster={event.telegramImage || event.image}
+                muted
+                loop
+                onClick={(e) => { const v = (e.target as HTMLVideoElement); if (v.paused) { v.play(); setPromoActive(true); } else { v.pause(); setPromoActive(false); } }}
+                onPause={() => setPromoActive(false)}
+                onPlay={() => setPromoActive(true)}
+                onEnded={() => setPromoActive(false)}
+                className="w-full aspect-video object-cover cursor-pointer"
+              />
+              <div className="px-3 py-2 bg-[#121212]/90 flex items-center gap-2">
+                <span className={`text-brand text-[10px] font-mono uppercase tracking-widest ${promoActive ? 'opacity-90' : ''}`}>▶ {promo.label || 'Промо-ролик события'}</span>
+              </div>
+            </div>
+          )}
 
           {/* Grid of Essential Parameters. На мобильном узкие отступы — больше места контенту. */}
           <div className="p-4 sm:p-6 space-y-6">

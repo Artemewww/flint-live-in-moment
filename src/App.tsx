@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AnimatePresence } from 'motion/react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle,
-  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle, Music
+  BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle, Music, Clapperboard
 } from 'lucide-react';
 import { CommunityEvent, Registration } from './types';
 import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
@@ -20,6 +20,7 @@ import EventPoster from './components/EventPoster';
 import AdminPanel from './components/AdminPanel';
 import GateScreen from './components/GateScreen';
 import MusicPlayer from './components/MusicPlayer';
+import HistoryStories from './components/HistoryStories';
 import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
@@ -51,6 +52,7 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     participants: event.participants || [],
     myRide: event.myRide ?? event.my_ride ?? null,
     telegramImage: event.telegram_image || event.telegramImage || undefined,
+    promoVideo: event.promo_video || event.promoVideo || undefined,
     telegramBotUrl: event.telegram_bot_url || event.telegramBotUrl,
     priceType: (event.price_type || event.priceType) === 'paid' ? 'paid' : 'free',
     priceLabel: event.price_label || event.priceLabel,
@@ -231,6 +233,7 @@ export default function App() {
   const [verificationData, setVerificationData] = useState<import('./components/VerificationModal').VerificationData | null>(null);
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
   const [showMusicPlayer, setShowMusicPlayer] = useState<boolean>(false);
+  const [showHistory, setShowHistory] = useState<boolean>(false);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
@@ -862,6 +865,16 @@ export default function App() {
                 </span>
               )}
             </button>
+            {/* Кнопка «История»: видео прошедших событий сообщества. */}
+            <button
+              onClick={() => setShowHistory(true)}
+              className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center relative text-brand"
+              id="header-history-btn"
+              title="История событий"
+              aria-label="История событий"
+            >
+              <Clapperboard className="w-4.5 h-4.5" />
+            </button>
             <button
               onClick={() => setShowUserStats(true)}
               className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative"
@@ -906,6 +919,17 @@ export default function App() {
                   <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-brand"></span>
                 </span>
               )}
+            </button>
+
+            {/* Кнопка «История»: видео прошедших событий сообщества. */}
+            <button
+              onClick={() => setShowHistory(true)}
+              className="w-10 h-10 shrink-0 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center relative text-brand"
+              id="header-history-btn-desktop"
+              title="История событий"
+              aria-label="История событий"
+            >
+              <Clapperboard className="w-4.5 h-4.5" />
             </button>
 
             {/* Manifesto button */}
@@ -1409,6 +1433,11 @@ export default function App() {
       {/* MUSIC PLAYER MODAL — внутренний плейлист сообщества */}
       {showMusicPlayer && (
         <MusicPlayer onClose={() => setShowMusicPlayer(false)} />
+      )}
+
+      {/* HISTORY — видео прошедших событий сообщества */}
+      {showHistory && (
+        <HistoryStories onClose={() => setShowHistory(false)} />
       )}
 
       {/* FEEDBACK MODAL */}
