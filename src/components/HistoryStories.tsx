@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Play, Clapperboard } from 'lucide-react';
+import { X, Play, Calendar, MapPin, Images, Clapperboard, ChevronLeft, ChevronRight } from 'lucide-react';
 import { HISTORY } from '../history';
 
 interface HistoryStoriesProps {
@@ -8,22 +8,23 @@ interface HistoryStoriesProps {
 }
 
 /**
- * «История сообщества» — вертикальная лента видео в духе сторис/Reels.
- * Сверху — ряд превью-кружков (тайтлы), по клику открывается полный
- * вертикальный просмотр видео с возможностью листать стрелками.
+ * «История сообщества» — архив прошедших мероприятий открытками-обложками.
+ * Каждая карточка: обложка-постер с датой/местом, кнопка play и значок фото —
+ * по клику открывается полный просмотр видео (и галерея фото, если есть у события).
  */
 export default function HistoryStories({ onClose }: HistoryStoriesProps) {
-  // Индекс активной истории: null — режим «ленты», иначе полный просмотр.
+  // Индекс активного события: null — сетка, иначе полный просмотр.
   const [active, setActive] = useState<number | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [muted, setMuted] = useState(false);
+  const [view, setView] = useState<'video' | 'photos'>('video');
+  const [photoIdx, setPhotoIdx] = useState(0);
+
+  const item = active !== null ? HISTORY[active] : null;
 
   const go = (dir: 1 | -1) => {
     if (active === null) return;
-    setPlaying(false);
-    const next = (active + dir + HISTORY.length) % HISTORY.length;
-    setActive(next);
-    setMuted(false);
+    setActive((active + dir + HISTORY.length) % HISTORY.length);
+    setView('video');
+    setPhotoIdx(0);
   };
 
   return (
@@ -43,7 +44,7 @@ export default function HistoryStories({ onClose }: HistoryStoriesProps) {
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 30 }}
         transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="bg-[#121212] md:rounded-3xl w-full max-w-md shadow-2xl relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white overflow-hidden"
+        className="bg-[#121212] md:rounded-3xl w-full max-w-lg shadow-2xl relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white overflow-hidden"
       >
         {/* Close Button */}
         <button
@@ -54,70 +55,103 @@ export default function HistoryStories({ onClose }: HistoryStoriesProps) {
           <X className="w-5 h-5" />
         </button>
 
-        {/* ===== Фуллскрин-просмотр одной истории ===== */}
-        {active !== null && (
+        {/* ===== Полный просмотр события: видео ===== */}
+        {item && view === 'video' && (
           <div className="absolute inset-0 z-20 flex flex-col" id="history-viewer">
-            <div className="absolute top-4 left-4 z-30 flex items-center gap-2">
-              <span className="text-2xl">{HISTORY[active].emoji}</span>
+            <div className="absolute top-16 left-4 z-30 flex items-center gap-2 right-14">
+              <span className="text-2xl">{item.emoji}</span>
               <div>
-                <div className="text-white font-display font-black text-sm uppercase tracking-tight">{HISTORY[active].title}</div>
-                {HISTORY[active].caption && (
-                  <div className="text-white/50 text-[10px] font-mono">{HISTORY[active].caption}</div>
-                )}
+                <div className="text-white font-display font-black text-sm uppercase tracking-tight">{item.title}</div>
+                {item.caption && <div className="text-white/50 text-[10px] font-mono">{item.caption}</div>}
               </div>
             </div>
 
             {/* Видео */}
             <motion.video
-              key={HISTORY[active].id}
-              id="history-active-video"
-              src={HISTORY[active].src}
-              poster={HISTORY[active].poster}
+              key={`${item.id}-video`}
+              src={item.src}
+              poster={item.poster}
               playsInline
               loop
               preload="auto"
-              muted={muted}
               controls
-              autoPlay={false}
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              onPlay={() => setPlaying(true)}
-              onPause={() => setPlaying(false)}
-              onClick={(e) => {
-                const v = e.target as HTMLVideoElement;
-                if (v.paused) { void v.play(); } else { v.pause(); }
-              }}
-              className="absolute inset-0 w-full h-full object-contain bg-black cursor-pointer"
+              className="absolute inset-0 w-full h-full object-contain bg-black"
             />
 
-            {/* Затемнение для читаемости UI поверх видео */}
-            <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/70 to-transparent pointer-events-none" />
-
-            {/* Mute toggle */}
-            <button
-              onClick={() => {
-                const v = document.getElementById('history-active-video') as HTMLVideoElement | null;
-                if (v) { v.muted = !v.muted; setMuted(v.muted); }
-              }}
-              className="absolute bottom-6 left-4 z-30 p-2.5 rounded-full bg-black/60 border border-white/10 text-white text-lg cursor-pointer hover:bg-black/80"
-              aria-label={muted ? 'Включить звук' : 'Выключить звук'}
-            >
-              {muted ? '🔇' : '🔊'}
+            {/* Стрелки навигации по событиям */}
+            <button onClick={() => go(-1)} className="absolute bottom-6 right-16 z-30 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80" aria-label="Предыдущее событие">
+              <ChevronLeft className="w-5 h-5" />
+            </button>
+            <button onClick={() => go(1)} className="absolute bottom-6 right-4 z-30 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80" aria-label="Следующее событие">
+              <ChevronRight className="w-5 h-5" />
             </button>
 
-            {/* Стрелки навигации */}
-            <button onClick={() => go(-1)} className="absolute bottom-6 right-16 z-30 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80" aria-label="Предыдущая история">
-              ‹
-            </button>
-            <button onClick={() => go(1)} className="absolute bottom-6 right-4 z-30 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80" aria-label="Следующая история">
-              ›
-            </button>
+            {/* Переключение на фото, если есть */}
+            {item.hasPhotos && (
+              <button
+                onClick={() => setView('photos')}
+                className="absolute bottom-6 left-4 z-30 inline-flex items-center gap-1.5 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80"
+                aria-label="Смотреть фото"
+              >
+                <Images className="w-5 h-5" />
+              </button>
+            )}
           </div>
         )}
 
-        {/* ===== Лента-превью (режим по умолчанию) ===== */}
+        {/* ===== Полный просмотр события: фото ===== */}
+        {item && view === 'photos' && (
+          <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black" id="history-photos">
+            <div className="absolute top-16 left-4 z-30 flex items-center gap-2 right-14">
+              <span className="text-2xl">{item.emoji}</span>
+              <div className="text-white font-display font-black text-sm uppercase tracking-tight">{item.title} — фото</div>
+            </div>
+
+            {item.photos && item.photos.length > 0 ? (
+              <img
+                key={`${item.id}-photo-${photoIdx}`}
+                src={item.photos[photoIdx]}
+                alt={`${item.title} фото`}
+                className="w-full h-full object-contain"
+              />
+            ) : (
+              <p className="text-white/50 text-xs">Фото скоро появятся</p>
+            )}
+
+            <div className="absolute bottom-6 left-4 z-30 flex items-center gap-2">
+              <button
+                onClick={() => setPhotoIdx((photoIdx - 1 + (item.photos?.length || 1)) % (item.photos?.length || 1))}
+                className="p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80"
+                aria-label="Назад фото"
+              >
+                <ChevronLeft className="w-5 h-5" />
+              </button>
+              <span className="text-white/60 text-xs font-mono">
+                {item.photos?.length ? `${photoIdx + 1} / ${item.photos.length}` : ''}
+              </span>
+              <button
+                onClick={() => setPhotoIdx((photoIdx + 1) % (item.photos?.length || 1))}
+                className="p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80"
+                aria-label="Вперёд фото"
+              >
+                <ChevronRight className="w-5 h-5" />
+              </button>
+            </div>
+
+            <button
+              onClick={() => setView('video')}
+              className="absolute bottom-6 right-4 z-30 inline-flex items-center gap-1.5 p-2.5 rounded-full bg-black/60 border border-white/10 text-white cursor-pointer hover:bg-black/80"
+              aria-label="Смотреть видео"
+            >
+              <Play className="w-5 h-5" />
+            </button>
+          </div>
+        )}
+{/* ===== Сетка обложек-открыток ===== */}
         {active === null && (
-          <div className="overflow-y-auto w-full flex-grow scrollbar-none p-4 sm:p-6 space-y-6">
+          <div className="overflow-y-auto w-full flex-grow scrollbar-none p-4 sm:p-5 space-y-4">
             {/* Header */}
             <div className="space-y-2">
               <div className="flex items-center gap-2">
@@ -127,42 +161,69 @@ export default function HistoryStories({ onClose }: HistoryStoriesProps) {
                 </span>
               </div>
               <h2 className="font-display font-black text-2xl uppercase tracking-tight text-white">
-                События на видео
+                Наши мероприятия
               </h2>
               <p className="text-white/60 text-xs font-sans">
-                Наши прошедшие выезды и встречи — одним движением по плей.
+                Прошедшие события FLINT — выбери, что посмотреть.
               </p>
             </div>
 
-            {/* Ряд превью-историй */}
-            <div className="flex gap-3 overflow-x-auto scrollbar-none py-1" id="history-preview-row">
+            {/* Открытки */}
+            <div className="grid grid-cols-1 gap-4">
               {HISTORY.map((h, i) => (
                 <button
                   key={h.id}
-                  onClick={() => { setActive(i); setPlaying(false); setMuted(false); }}
-                  className="shrink-0 flex flex-col items-center gap-1.5 w-20"
-                  aria-label={h.title}
+                  onClick={() => { setActive(i); setView('video'); setPhotoIdx(0); }}
+                  className="relative w-full h-44 sm:h-52 overflow-hidden rounded-2xl text-left transition-transform cursor-pointer group shadow-lg shadow-black/40"
+                  aria-label={`Открыть ${h.title}`}
                 >
-                  <span className="w-16 h-16 rounded-full flex items-center justify-center text-2xl bg-brand/10 border-2 border-brand/40 hover:bg-brand/25 transition-all cursor-pointer">
-                    {h.emoji}
+                  <img
+                    src={h.poster || h.src}
+                    alt={h.title}
+                    className="absolute inset-0 w-full h-full object-cover brightness-[0.7] group-hover:brightness-[0.85] transition-all"
+                  />
+                  <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
+
+                  {/* Акцент-иконка темы */}
+                  <span className="absolute top-3 left-3 text-xl drop-shadow">{h.emoji}</span>
+
+                  {/* Кнопка play по центру */}
+                  <span className="absolute inset-0 flex items-center justify-center">
+                    <span className="w-16 h-16 flex items-center justify-center rounded-full bg-brand text-black shadow-xl shadow-brand/30 transition-transform group-hover:scale-110">
+                      <Play className="w-7 h-7 ml-0.5" />
+                    </span>
                   </span>
-                  <span className="text-white/70 text-[9px] font-mono uppercase tracking-widest text-center w-full leading-tight truncate">
-                    {h.title}
-                  </span>
+
+                  {/* Значок фото, если есть */}
+                  {h.hasPhotos && (
+                    <span className="absolute top-3 right-3 inline-flex items-center gap-1 rounded-full bg-black/60 px-2 py-1 text-[10px] font-mono text-white/80 border border-white/10">
+                      <Images className="w-3.5 h-3.5" /> фото
+                    </span>
+                  )}
+
+                  {/* Подпись: дата, место, описание */}
+                  <div className="absolute bottom-0 left-0 right-0 p-3">
+                    {h.date && (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-mono">
+                        <span className="inline-flex items-center gap-1 text-brand">
+                          <Calendar className="w-3 h-3" /> {h.date}
+                        </span>
+                        {h.place && (
+                          <span className="inline-flex items-center gap-1 text-white/60">
+                            <MapPin className="w-3 h-3" /> {h.place}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    <div className="font-display font-black text-lg uppercase tracking-tight text-white leading-tight mt-0.5">
+                      {h.title}
+                    </div>
+                    {h.caption && (
+                      <div className="text-white/70 text-[11px] font-sans mt-0.5 truncate">{h.caption}</div>
+                    )}
+                  </div>
                 </button>
               ))}
-            </div>
-
-            {/* Карточка-подсказка */}
-            <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-start gap-3">
-              <Play className="w-5 h-5 text-brand shrink-0" />
-              <div>
-                <p className="text-white text-xs font-bold">Как смотреть</p>
-                <p className="text-white/50 text-[10px] mt-0.5">
-                  Нажми на кружок выше — откроется полный просмотр.
-                  Видео идёт без звука, пока не нажмёшь play, чтобы не мешать.
-                </p>
-              </div>
             </div>
           </div>
         )}

@@ -198,6 +198,9 @@ export default function EventDetailModal({
   const rosterFemale = roster.filter((p) => p.gender === 'female').length;
   const phase = getEventPhase(event);
   const isLocked = phase === 'locked';
+  // Идёт ли событие прямо сейчас (период [date..dateEnd] включает сегодня) — «маячок в моменте».
+  const today = getToday();
+  const isLiveNow = (event.date || today) <= today && (event.dateEnd || event.date) >= today;
   const guide = getEventGuide(event);
 
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
@@ -355,6 +358,19 @@ export default function EventDetailModal({
               🎥 Видео
             </button>
           </div>
+
+          {/* Маячок «событие в моменте» — пульсирующий индикатор LIVE, пока событие идёт */}
+          {isLiveNow && (
+            <div className="absolute top-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 shadow-lg shadow-brand/30">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-60"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-black"></span>
+              </span>
+              <span className="text-[10px] font-black font-mono uppercase tracking-widest text-black">
+                LIVE · в моменте
+              </span>
+            </div>
+          )}
         </div>
 
           {/* Промо-ролик события: реклама перед решением о регистрации.
