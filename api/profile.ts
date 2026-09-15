@@ -1413,11 +1413,23 @@ export default async function handler(req: any, res: any) {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-      const { data: member } = await supabase
+      // Колонок attended_count/invited_count/level/achievements может не быть
+      // до применения миграции 2026-dietary-profile.sql — тогда отдаём минимум.
+      const fullMember = await supabase
         .from('members')
         .select('first_name,username,phone,status,points,attended_count,invited_count,level,achievements')
         .eq('telegram_id', user.id)
         .maybeSingle();
+
+      let member: any = fullMember.data;
+      if (fullMember.error) {
+        slog('warn', 'get_profile: расширенная схема members недоступна', fullMember.error.message);
+        member = (await supabase
+          .from('members')
+          .select('first_name,username,phone,status,points')
+          .eq('telegram_id', user.id)
+          .maybeSingle()).data;
+      }
 
       if (!member) return res.status(404).json({ error: 'Profile not found' });
 
@@ -1504,12 +1516,32 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ error: 'Missing fields' });
       }
 
-      // Начисляем баллы
-      const { data: member } = await supabase
-        .from('members')
-        .select('points, attended_count, invited_count, level, achievements')
-        .eq('telegram_id', Number(telegramId))
-        .maybeSingle();
+      // Начисляем баллы.
+      // Миграция 2026-dietary-profile.sql в этой базе применена не полностью,
+      // поэтому колонок attended_count / invited_count / level / achievements
+      // может не быть. Не роняем операцию: сначала пробуем полный набор,
+      // при ошибке схемы откатываемся к минимуму (только points).
+      let member: any = null;
+      let richSchema = true;
+      {
+        const full = await supabase
+          .from('members')
+          .select('points, attended_count, invited_count, level, achievements')
+          .eq('telegram_id', Number(telegramId))
+          .maybeSingle();
+        if (full.error) {
+          richSchema = false;
+          slog('warn', 'add_points: расширенная схема members недоступна, работаю в минимальном режиме', full.error.message);
+          const basic = await supabase
+            .from('members')
+            .select('points')
+            .eq('telegram_id', Number(telegramId))
+            .maybeSingle();
+          member = basic.data;
+        } else {
+          member = full.data;
+        }
+      }
 
       if (!member) {
         return res.status(404).json({ error: 'Member not found' });
@@ -1519,17 +1551,17 @@ export default async function handler(req: any, res: any) {
       const updates: any = { points: newPoints };
 
       // Обновляем счётчики
-      if (reason === 'attendance') {
+      if (richSchema && reason === 'attendance') {
         updates.attended_count = (member.attended_count || 0) + 1;
-      } else if (reason === 'invite') {
+      } else if (richSchema && reason === 'invite') {
         updates.invited_count = (member.invited_count || 0) + 1;
       }
 
-      // Проверяем достижения
-      const achievements = member.achievements || [];
-      const { data: allAchievements } = await supabase
-        .from('achievements')
-        .select('*');
+      // Проверяем достижения (только при полной схеме: нужен member.achievements)
+      const achievements = richSchema ? (member.achievements || []) : [];
+      const { data: allAchievements } = richSchema
+        ? await supabase.from('achievements').select('*')
+        : { data: [] as any[] };
 
       const newAchievements = [...achievements];
       for (const ach of allAchievements || []) {
@@ -1552,24 +1584,31 @@ export default async function handler(req: any, res: any) {
         }
       }
 
-      updates.achievements = JSON.stringify(newAchievements);
+      if (richSchema) {
+        updates.achievements = JSON.stringify(newAchievements);
 
-      // Обновляем уровень
-      if (newPoints >= 500) updates.level = 'legend';
-      else if (newPoints >= 200) updates.level = 'core';
-      else if (newPoints >= 50) updates.level = 'regular';
+        // Обновляем уровень
+        if (newPoints >= 500) updates.level = 'legend';
+        else if (newPoints >= 200) updates.level = 'core';
+        else if (newPoints >= 50) updates.level = 'regular';
+      }
 
       // Сохраняем
-      await supabase.from('members').update(updates).eq('telegram_id', Number(telegramId));
+      const { error: updateErr } = await supabase.from('members').update(updates).eq('telegram_id', Number(telegramId));
+      if (updateErr) {
+        slog('error', 'add_points: не удалось обновить баллы', updateErr.message);
+        return res.status(500).json({ error: 'Не удалось начислить баллы' });
+      }
 
-      // Логируем
-      await supabase.from('points_log').insert({
+      // Логируем (журнал необязателен — таблицы points_log может не быть до миграции)
+      const { error: logErr } = await supabase.from('points_log').insert({
         telegram_id: Number(telegramId),
         event_id: eventId || null,
         reason,
         points,
         description: description || '',
       });
+      if (logErr) slog('warn', 'add_points: points_log недоступен, пропускаю запись журнала', logErr.message);
 
       return res.status(200).json({
         ok: true,
@@ -1622,11 +1661,15 @@ export default async function handler(req: any, res: any) {
       // Средний чек
       const avgPayment = paid > 0 ? Math.round(totalRevenue / paid) : 0;
 
-      // Баллы и достижения
-      const { data: membersData } = await supabase
+      // Баллы и достижения (колонок level/achievements может не быть до миграции)
+      const full = await supabase
         .from('members')
         .select('points, level, achievements')
         .eq('status', 'approved');
+      const membersData = full.error
+        ? (await supabase.from('members').select('points').eq('status', 'approved')).data
+        : full.data;
+      if (full.error) slog('warn', 'metrics: схема members без level/achievements', full.error.message);
 
       const totalMembers = (membersData || []).length;
       const avgPoints = totalMembers > 0 ? Math.round((membersData || []).reduce((s: number, m: any) => s + (m.points || 0), 0) / totalMembers) : 0;

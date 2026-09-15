@@ -1,0 +1,151 @@
+import { createClient } from '@supabase/supabase-js';
+import * as crypto from 'crypto';
+
+const db = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SERVICE_ROLE_KEY || '');
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
+const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+
+function verifyInitData(raw: string): { id: number } | null {
+  try {
+    if (!raw || !BOT_TOKEN) return null;
+    const p = new URLSearchParams(raw); const hash = p.get('hash'); if (!hash) return null; p.delete('hash');
+    const data = [...p.entries()].map(([k, v]) => `${k}=${v}`).sort().join('\n');
+    const secret = crypto.createHmac('sha256', 'WebAppData').update(BOT_TOKEN).digest();
+    const expected = crypto.createHmac('sha256', secret).update(data).digest('hex');
+    const a = Buffer.from(expected), b = Buffer.from(hash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const u = JSON.parse(p.get('user') || '{}'); return u?.id ? { id: Number(u.id) } : null;
+  } catch { return null; }
+}
+function admin(req: any): boolean {
+  const token = String(req.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+  if (!ADMIN_SECRET) return false;
+  const validSession = (value: string): boolean => {
+    const [exp, mac] = String(value).split('.');
+    if (!exp || !mac || Number(exp) <= Date.now()) return false;
+    const expected = crypto.createHmac('sha256', ADMIN_SECRET).update(exp).digest('hex');
+    return mac.length === expected.length && crypto.timingSafeEqual(Buffer.from(mac), Buffer.from(expected));
+  };
+  if (token === ADMIN_SECRET || validSession(token)) return true;
+  const cookie = String(req.headers?.cookie || '').split(';').map((x: string) => x.trim()).find((x: string) => x.startsWith('flint_admin='));
+  if (cookie) {
+    const value = decodeURIComponent(cookie.slice('flint_admin='.length));
+    return validSession(value);
+  }
+  return false;
+}
+function escHtml(v: any): string { return clean(v, 2000).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+function clean(v: any, max = 5000): string { return String(v ?? '').trim().slice(0, max); }
+function shape(row: any, pledges: any[] = []) {
+  const confirmed = pledges.filter((p) => p.status === 'confirmed');
+  return { ...row, goalAmount: Number(row.goal_amount), deadline: row.deadline,
+    recipientName: row.recipient_name, paymentCard: row.payment_card, paymentNote: row.payment_note,
+    pointsPer100: Number(row.points_per_100), confirmedAmount: confirmed.reduce((s, p) => s + Number(p.amount), 0),
+    confirmedCount: confirmed.length, pledges: pledges.map((p) => ({ ...p, amount: Number(p.amount) })) };
+}
+
+export default async function handler(req: any, res: any) {
+  try {
+    const action = String(req.query?.action || 'public');
+    if (req.method === 'GET' && action === 'admin') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const { data, error } = await db.from('fundraisers').select('*').order('created_at', { ascending: false });
+      if (error) throw error;
+      const ids = (data || []).map((x: any) => x.id);
+      const { data: ps } = ids.length ? await db.from('fundraiser_pledges').select('*').in('fundraiser_id', ids).order('created_at', { ascending: false }) : { data: [] };
+      return res.json({ fundraisers: (data || []).map((x: any) => shape(x, (ps || []).filter((p: any) => p.fundraiser_id === x.id))) });
+    }
+    if (req.method === 'GET') {
+      const slug = clean(req.query?.slug || req.query?.id, 120);
+      const { data, error } = await db.from('fundraisers').select('*').eq('slug', slug).eq('status', 'published').maybeSingle();
+      if (error) throw error; if (!data) return res.status(404).json({ error: 'Not found' });
+      const { data: ps } = await db.from('fundraiser_pledges').select('amount,status').eq('fundraiser_id', data.id);
+      return res.json({ fundraiser: shape(data, ps || []) });
+    }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    if (action === 'pledge') {
+      const user = verifyInitData(body.initData); if (!user) return res.status(401).json({ error: 'Открой страницу из Telegram' });
+      const slug = clean(body.slug, 120); const amount = Number(body.amount);
+      if (!slug || !Number.isFinite(amount) || amount <= 0 || amount > 100000) return res.status(400).json({ error: 'Некорректная сумма' });
+      const { data: f } = await db.from('fundraisers').select('id,deadline,status').eq('slug', slug).maybeSingle();
+      if (!f || f.status !== 'published' || String(f.deadline) < new Date().toISOString().slice(0, 10)) return res.status(400).json({ error: 'Сбор завершён' });
+      const { data: existing } = await db.from('fundraiser_pledges').select('id,status').eq('fundraiser_id', f.id).eq('telegram_id', user.id).eq('status', 'pending').maybeSingle();
+      const query = existing
+        ? db.from('fundraiser_pledges').update({ amount, note: clean(body.note, 300) }).eq('id', existing.id)
+        : db.from('fundraiser_pledges').insert({ fundraiser_id: f.id, telegram_id: user.id, amount, note: clean(body.note, 300), status: 'pending' });
+      const { data, error } = await query.select().single();
+      if (error) throw error; return res.json({ ok: true, pledge: data });
+    }
+    if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+    if (action === 'save') {
+      const f = body.fundraiser || {}; const payload: any = { slug: clean(f.slug, 120).toLowerCase().replace(/[^a-z0-9-_]+/g, '-'), title: clean(f.title, 180), summary: clean(f.summary, 500), story: clean(f.story, 12000), goal_amount: Number(f.goalAmount) || 0, deadline: clean(f.deadline, 10), recipient_name: clean(f.recipientName, 180), payment_card: clean(f.paymentCard, 80), payment_note: clean(f.paymentNote, 500), points_per_100: Number(f.pointsPer100) || 1, status: ['draft','review','published','closed'].includes(f.status) ? f.status : 'draft' };
+      if (!payload.slug || !payload.title || !payload.deadline || payload.goal_amount <= 0) return res.status(400).json({ error: 'Заполни название, slug, цель и дедлайн' });
+      const { data, error } = await db.from('fundraisers').upsert(f.id ? { ...payload, id: f.id } : payload).select().single(); if (error) throw error;
+      return res.json({ ok: true, fundraiser: shape(data) });
+    }
+    if (action === 'pledge_status') {
+      const status = ['pending','confirmed','rejected'].includes(body.status) ? body.status : null; if (!status || !body.pledgeId) return res.status(400).json({ error: 'Некорректный статус' });
+      const { data: p } = await db.from('fundraiser_pledges').select('telegram_id,amount,fundraiser_id,status').eq('id', body.pledgeId).single(); if (!p) return res.status(404).json({ error: 'Вклад не найден' });
+      if (p.status === status) return res.json({ ok: true, unchanged: true });
+      const { error } = await db.from('fundraiser_pledges').update({ status, confirmed_at: status === 'confirmed' ? new Date().toISOString() : null }).eq('id', body.pledgeId); if (error) throw error;
+      let awarded = 0;
+      if (status === 'confirmed') {
+        const { data: f } = await db.from('fundraisers').select('points_per_100').eq('id', p.fundraiser_id).single();
+        const { data: m } = await db.from('members').select('points').eq('telegram_id', p.telegram_id).maybeSingle();
+        awarded = Math.max(1, Math.round(Number(p.amount) * Number(f?.points_per_100 || 1)));
+        if (m) {
+          const { error: pointsError } = await db.from('members').update({ points: Number(m.points || 0) + awarded }).eq('telegram_id', p.telegram_id);
+          if (pointsError) console.error('[fundraisers] points update failed:', pointsError.message);
+        }
+        // Журнал необязателен: таблица points_log может отсутствовать до применения миграции.
+        const { error: logError } = await db.from('points_log').insert({ telegram_id: p.telegram_id, event_id: null, reason: 'fundraiser', points: awarded, description: 'Подтверждённый вклад в командный сбор' });
+        if (logError) console.error('[fundraisers] points_log skipped:', logError.message);
+      } else if (p.status === 'confirmed') {
+        // Откат: вклад подтвердили, баллы начислили, потом решение отменили.
+        // Без этого участник оставлял бы баллы за отклонённый вклад.
+        const { data: f } = await db.from('fundraisers').select('points_per_100').eq('id', p.fundraiser_id).single();
+        const { data: m } = await db.from('members').select('points').eq('telegram_id', p.telegram_id).maybeSingle();
+        awarded = -Math.max(1, Math.round(Number(p.amount) * Number(f?.points_per_100 || 1)));
+        if (m) {
+          const next = Math.max(0, Number(m.points || 0) + awarded);
+          const { error: pointsError } = await db.from('members').update({ points: next }).eq('telegram_id', p.telegram_id);
+          if (pointsError) console.error('[fundraisers] points rollback failed:', pointsError.message);
+        }
+        const { error: logError } = await db.from('points_log').insert({ telegram_id: p.telegram_id, event_id: null, reason: 'fundraiser-rollback', points: awarded, description: 'Отменён подтверждённый вклад в сбор' });
+        if (logError) console.error('[fundraisers] points_log skipped:', logError.message);
+      }
+      return res.json({ ok: true, points: awarded });
+    }
+    if (action === 'broadcast') {
+      const { data: f } = await db.from('fundraisers').select('title,summary,slug,status').eq('id', body.id).eq('status', 'published').single(); if (!f) return res.status(404).json({ error: 'Разослать можно только опубликованный сбор' });
+      // Реальная рассылка идёт по всей базе, поэтому требуем явное подтверждение:
+      // без { confirm: true } эндпоинт только отдаёт предпросмотр-аудит.
+      const { data: members } = await db.from('members').select('telegram_id').eq('status', 'approved').eq('bot_active', true);
+      const ids = (members || []).map((m: any) => Number(m.telegram_id)).filter((id: number) => id > 0);
+      if (body.confirm !== true) {
+        return res.json({ ok: true, dryRun: true, wouldSend: ids.length, hint: 'Повторите с confirm:true, чтобы разослать' });
+      }
+      const site = `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
+      const text = `🔥 <b>${escHtml(f.title)}</b>\n\n${escHtml(f.summary)}\n\n<a href="${site}/?fund=${encodeURIComponent(f.slug)}">Открыть сбор и поддержать</a>`;
+
+      // Telegram держит ~30 сообщений/сек на бота: шлём пачками по 20, чтобы
+      // не собирать 429 и не терять часть участников при большой базе.
+      const sendOne = (chatId: number) => fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: false }) })
+        .then((r) => r.json()).then((j) => ({ chatId, ok: j?.ok === true, code: j?.error_code, desc: j?.description })).catch(() => ({ chatId, ok: false, code: 0, desc: 'network' }));
+
+      const results: any[] = [];
+      for (let i = 0; i < ids.length; i += 20) {
+        results.push(...await Promise.all(ids.slice(i, i + 20).map(sendOne)));
+        if (i + 20 < ids.length) await new Promise((r) => setTimeout(r, 1100));
+      }
+
+      const sent = results.filter((r) => r.ok).length;
+      // Кто заблокировал бота — помечаем, чтобы он не попадал в следующие рассылки.
+      const blocked = results.filter((r) => !r.ok && (r.code === 403 || /blocked|deactivated/i.test(String(r.desc || '')))).map((r) => r.chatId);
+      if (blocked.length) await db.from('members').update({ bot_active: false }).in('telegram_id', blocked);
+
+      return res.json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, failed: results.length - sent - blocked.length });
+    }
+    return res.status(400).json({ error: 'Unknown action' });
+  } catch (e: any) { console.error('[fundraisers]', e); return res.status(500).json({ error: 'Internal server error' }); }
+}

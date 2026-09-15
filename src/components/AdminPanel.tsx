@@ -8,6 +8,7 @@ import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
 import { EVENT_TEMPLATES, EventTemplate } from '../data/eventTemplates';
 import { generateProgram, generateThreshold } from '../eventGuide';
+import { FundraiserAdmin } from './FundraiserPage';
 
 const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api' : '';
 
@@ -1323,6 +1324,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [inputModal, setInputModal] = useState<InputModalSpec | null>(null);
   /** Аудитория клуба (все участники, не по событию). */
   const [showAudience, setShowAudience] = useState(false);
+  const [showFundraisers, setShowFundraisers] = useState(false);
   const [audience, setAudience] = useState<any>(null);
   /** Поиск по аудитории (имя / @ник). */
   const [audienceQuery, setAudienceQuery] = useState('');
@@ -2311,6 +2313,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               >
                 👥 Аудитория клуба →
               </button>
+              <button onClick={() => setShowFundraisers(true)} className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0">💛 Командные сборы →</button>
               <button
                 onClick={() => { setShowChats(true); setActiveThread(null); loadConversations(); }}
                 className="text-[11px] text-brand font-mono uppercase hover:underline cursor-pointer bg-transparent border-none p-0"
@@ -4031,6 +4034,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           </div>
         )}
       </AnimatePresence>
+      {showFundraisers && <FundraiserAdmin onClose={() => setShowFundraisers(false)} />}
 
       {/* Ключ Gemini: статус + замена без деплоя */}
       <AnimatePresence>

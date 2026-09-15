@@ -25,6 +25,7 @@ import SnapModal from './components/SnapModal';
 import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
+import { FundraiserPage } from './components/FundraiserPage';
 
 // Маппинг snake_case -> camelCase для данных из Supabase
 function mapEventToCamelCase(event: any): CommunityEvent {
@@ -266,6 +267,7 @@ export default function App() {
   }, [events, registeredEventIds]);
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
+  const [fundraiserSlug] = useState<string>(() => new URLSearchParams(window.location.search).get('fund') || '');
   const [isCoreUser, setIsCoreUser] = useState<boolean>(false);
   const [applySent, setApplySent] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -725,6 +727,8 @@ export default function App() {
       />
     );
   }
+
+  if (fundraiserSlug) return <FundraiserPage slug={fundraiserSlug} onClose={() => { window.history.replaceState({}, '', '/'); window.location.reload(); }} />;
 
   if (gateEnabled && !gatePassed) {
     return <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />;
