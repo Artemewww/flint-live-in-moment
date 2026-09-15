@@ -42,6 +42,7 @@ function shape(row: any, pledges: any[] = []) {
     recipientName: row.recipient_name, paymentCard: row.payment_card, paymentNote: row.payment_note,
     organizerName: row.organizer_name || '', costBreakdown: row.cost_breakdown || '',
     legalNote: row.legal_note || '', reportNote: row.report_note || '', reportUrl: row.report_url || '',
+    imageUrl: row.image_url || '', imageCaption: row.image_caption || '',
     pointsPer100: Number(row.points_per_100), confirmedAmount: confirmed.reduce((s, p) => s + Number(p.amount), 0),
     confirmedCount: confirmed.length, pledges: pledges.map((p) => ({ ...p, amount: Number(p.amount) })) };
 }
@@ -82,7 +83,8 @@ export default async function handler(req: any, res: any) {
     if (action === 'save') {
       const f = body.fundraiser || {}; const payload: any = { slug: clean(f.slug, 120).toLowerCase().replace(/[^a-z0-9-_]+/g, '-'), title: clean(f.title, 180), summary: clean(f.summary, 500), story: clean(f.story, 12000), goal_amount: Number(f.goalAmount) || 0, deadline: clean(f.deadline, 10), recipient_name: clean(f.recipientName, 180), payment_card: clean(f.paymentCard, 80), payment_note: clean(f.paymentNote, 500), points_per_100: Number(f.pointsPer100) || 1, status: ['draft','review','published','closed'].includes(f.status) ? f.status : 'draft',
         organizer_name: clean(f.organizerName, 180), cost_breakdown: clean(f.costBreakdown, 4000),
-        legal_note: clean(f.legalNote, 4000), report_note: clean(f.reportNote, 4000), report_url: clean(f.reportUrl, 400) };
+        legal_note: clean(f.legalNote, 4000), report_note: clean(f.reportNote, 4000), report_url: clean(f.reportUrl, 400),
+        image_url: clean(f.imageUrl, 500), image_caption: clean(f.imageCaption, 500) };
       if (!payload.slug || !payload.title || !payload.deadline || payload.goal_amount <= 0) return res.status(400).json({ error: 'Заполни название, slug, цель и дедлайн' });
       const { data, error } = await db.from('fundraisers').upsert(f.id ? { ...payload, id: f.id } : payload).select().single();
       if (error) {
