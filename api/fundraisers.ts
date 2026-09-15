@@ -100,9 +100,10 @@ export default async function handler(req: any, res: any) {
       if (!payload.slug || !payload.title || !payload.deadline || payload.goal_amount <= 0) return res.status(400).json({ error: 'Заполни название, slug, цель и дедлайн' });
       const { data, error } = await db.from('fundraisers').upsert(f.id ? { ...payload, id: f.id } : payload).select().single();
       if (error) {
-        // Схема может быть без новых полей (миграция 2026-09-15-fundraisers-legal.sql
-        // ещё не применена) — сохраняем основные данные, а не роняем весь сбор.
-        const { cost_breakdown, legal_note, report_note, report_url, organizer_name, ...core } = payload;
+        // Схема может быть без новых полей (миграции 2026-09-15-fundraisers-legal.sql
+        // и 2026-09-15-fundraisers-image.sql ещё не применены) — сохраняем основные
+        // данные, а не роняем весь сбор.
+        const { cost_breakdown, legal_note, report_note, report_url, organizer_name, image_url, image_caption, ...core } = payload;
         if (!/column|schema cache/i.test(String(error.message))) throw error;
         console.warn('[fundraisers] новые поля недоступны, сохраняем базовый набор:', error.message);
         const retry = await db.from('fundraisers').upsert(f.id ? { ...core, id: f.id } : core).select().single();
@@ -185,6 +186,37 @@ export default async function handler(req: any, res: any) {
       if (blocked.length) await db.from('members').update({ bot_active: false }).in('telegram_id', blocked);
 
       return res.json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, failed: results.length - sent - blocked.length });
+    }
+    if (action === 'upload_image') {
+      // Картинка сбора: фронт присылает dataURL (большие файлы уже сжаты на клиенте),
+      // сервер кладёт файл в публичный бакет event-images — как обложки событий в admin/events.ts.
+      const dataUrl = String(body.dataUrl || '');
+      const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+      if (!m) return res.status(400).json({ error: 'Ожидалась картинка PNG/JPEG/WebP' });
+      const bin = Buffer.from(m[2], 'base64');
+      if (bin.length < 1024) return res.status(400).json({ error: 'Файл пустой или повреждён' });
+      // Лимит Vercel на тело запроса ~4.5 МБ — клиент сжимает заранее, здесь только страховка.
+      if (bin.length > 4_000_000) return res.status(400).json({ error: 'Файл больше 4 МБ — выбери поменьше' });
+      const slug = clean(body.slug, 120).toLowerCase().replace(/[^a-z0-9-_]+/g, '-') || 'fundraiser';
+      const ext = m[1] === 'image/png' ? 'png' : /jpe?g/.test(m[1]) ? 'jpg' : 'webp';
+      const path = `fundraisers/${slug}-${Date.now().toString(36)}.${ext}`;
+      const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
+        method: 'POST',
+        headers: {
+          apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+          Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
+          'Content-Type': m[1],
+          'x-upsert': 'true',
+        },
+        body: bin,
+      });
+      if (!up.ok) {
+        const t = await up.text().catch(() => '');
+        console.error('[fundraisers] storage upload failed:', t.slice(0, 200));
+        return res.status(500).json({ error: 'Не удалось сохранить картинку в хранилище' });
+      }
+      const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}`;
+      return res.json({ ok: true, url, bytes: bin.length });
     }
     return res.status(400).json({ error: 'Unknown action' });
   } catch (e: any) { console.error('[fundraisers]', e); return res.status(500).json({ error: 'Internal server error' }); }
