@@ -26,6 +26,7 @@ import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
 import { FundraiserPage } from './components/FundraiserPage';
+import FundraiserBanner from './components/FundraiserBanner';
 
 // Маппинг snake_case -> camelCase для данных из Supabase
 function mapEventToCamelCase(event: any): CommunityEvent {
@@ -1157,6 +1158,7 @@ export default function App() {
           <EventsFailed onRetry={() => setEventsReloadTick((t) => t + 1)} />
         ) : (
           <>
+            <FundraiserBanner onOpen={(slug) => { window.history.pushState({}, '', `/?fund=${encodeURIComponent(slug)}`); window.location.reload(); }} />
             {/* Compact Calendar Grid with no headers */}
             <section id="calendar-widget-block" className="pt-2">
               <CalendarGrid

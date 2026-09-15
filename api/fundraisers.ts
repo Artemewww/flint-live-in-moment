@@ -58,9 +58,21 @@ export default async function handler(req: any, res: any) {
       const { data: ps } = ids.length ? await db.from('fundraiser_pledges').select('*').in('fundraiser_id', ids).order('created_at', { ascending: false }) : { data: [] };
       return res.json({ fundraisers: (data || []).map((x: any) => shape(x, (ps || []).filter((p: any) => p.fundraiser_id === x.id))) });
     }
+    if (req.method === 'GET' && action === 'audience') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const { data, error } = await db.from('members').select('telegram_id,name,username,status,is_core,role,bot_active').order('name', { ascending: true });
+      if (error) throw error;
+      return res.json({ members: (data || []).filter((m: any) => Number(m.telegram_id) > 0 && m.bot_active !== false).map((m: any) => ({
+        id: Number(m.telegram_id), name: m.name || m.username || `Участник ${m.telegram_id}`,
+        username: m.username || '', status: m.status || '', isCore: m.is_core === true || ['owner', 'organizer'].includes(m.role),
+      })) });
+    }
     if (req.method === 'GET') {
       const slug = clean(req.query?.slug || req.query?.id, 120);
-      const { data, error } = await db.from('fundraisers').select('*').eq('slug', slug).eq('status', 'published').maybeSingle();
+      const query = db.from('fundraisers').select('*').eq('status', 'published');
+      const { data, error } = slug
+        ? await query.eq('slug', slug).maybeSingle()
+        : await query.order('created_at', { ascending: false }).limit(1).maybeSingle();
       if (error) throw error; if (!data) return res.status(404).json({ error: 'Not found' });
       const { data: ps } = await db.from('fundraiser_pledges').select('amount,status').eq('fundraiser_id', data.id);
       return res.json({ fundraiser: shape(data, ps || []) });
@@ -138,17 +150,20 @@ export default async function handler(req: any, res: any) {
       // (is_core / role owner-organizer), а не все approved: сбор — внутренняя
       // история костяка, и уведомлять о нём весь клуб не нужно.
       // Явное { audience: 'all' } рассылает всем одобрённым, как в admin/broadcast.
-      const toAll = body.audience === 'all';
+      const audience = ['none', 'core', 'all', 'selected'].includes(body.audience) ? body.audience : 'core';
+      if (audience === 'none') return res.json({ ok: true, sent: 0, total: 0, skipped: true });
+      const toAll = audience === 'all';
+      const selectedIds = new Set((Array.isArray(body.memberIds) ? body.memberIds : []).map(Number).filter((id: number) => id > 0));
       const { data: pool } = await db
         .from('members')
         .select('telegram_id,status,is_core,role,bot_active')
         .eq('bot_active', true);
       const ids = (pool || [])
         .filter((m: any) => Number(m.telegram_id) > 0)
-        .filter((m: any) => (toAll ? m.status === 'approved' : (m.is_core === true || m.role === 'owner' || m.role === 'organizer')))
+        .filter((m: any) => audience === 'selected' ? selectedIds.has(Number(m.telegram_id)) : (toAll ? m.status === 'approved' : (m.is_core === true || m.role === 'owner' || m.role === 'organizer')))
         .map((m: any) => Number(m.telegram_id));
       if (body.confirm !== true) {
-        return res.json({ ok: true, dryRun: true, audience: toAll ? 'all' : 'core', wouldSend: ids.length, hint: 'Повторите с confirm:true, чтобы разослать' });
+        return res.json({ ok: true, dryRun: true, audience, wouldSend: ids.length, hint: 'Повторите с confirm:true, чтобы разослать' });
       }
       const site = `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
       const text = `🔥 <b>${escHtml(f.title)}</b>\n\n${escHtml(f.summary)}\n\n<a href="${site}/?fund=${encodeURIComponent(f.slug)}">Открыть сбор и поддержать</a>`;

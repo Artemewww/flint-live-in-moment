@@ -148,7 +148,8 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
     return short.slice(0, 16) + '…';
   };
 
-  const EventCard = ({ evt, onClick }: { evt: CommunityEvent; onClick: () => void }) => (
+  function EventCard({ evt, onClick }: { evt: CommunityEvent; onClick: () => void }) {
+    return (
     <button
       onClick={onClick}
       className="w-full text-left bg-[#121212] hover:bg-brand/5 border border-white/5 hover:border-brand/30 rounded-xl p-3 transition-all flex items-center gap-3 cursor-pointer group"
@@ -190,6 +191,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
       <ChevronRight className="w-4 h-4 text-white/20 group-hover:text-brand transition-colors shrink-0" />
     </button>
   );
+  }
 
   return (
     <div className="space-y-3 font-sans">
@@ -347,7 +349,7 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
 
           <div className="space-y-2">
             {selectedDayEvents.map((evt) => (
-              <EventCard key={evt.id} evt={evt} onClick={() => openFromDayPopup(evt)} />
+              <React.Fragment key={evt.id}><EventCard evt={evt} onClick={() => openFromDayPopup(evt)} /></React.Fragment>
             ))}
           </div>
         </div>
@@ -537,11 +539,11 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
                           </div>
                           <div className="space-y-2">
                             {selectedDayInWeek.events.map((evt) => (
-                              <EventCard key={evt.id} evt={evt} onClick={() => {
+                              <React.Fragment key={evt.id}><EventCard evt={evt} onClick={() => {
                                 onOpenDetail(evt);
                                 setShowYearModal(false);
                                 setYearModalSelectedDay(null);
-                              }} />
+                              }} /></React.Fragment>
                             ))}
                           </div>
                         </div>
