@@ -23,6 +23,12 @@ export const PLAYLIST: PlaylistTrack[] = [
     subtitle: 'FLINT Anthem',
     src: '/assets/music/leto-proshlo-gazuem.mp3',
   },
+  {
+    id: 'komanda-flint',
+    title: 'Команда FLINT',
+    subtitle: 'Гимн команды',
+    src: '/assets/music/komanda-flint.mp3',
+  },
 ];
 
 type Listener = () => void;
