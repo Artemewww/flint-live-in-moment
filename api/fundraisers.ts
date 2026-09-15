@@ -118,12 +118,21 @@ export default async function handler(req: any, res: any) {
     }
     if (action === 'broadcast') {
       const { data: f } = await db.from('fundraisers').select('title,summary,slug,status').eq('id', body.id).eq('status', 'published').single(); if (!f) return res.status(404).json({ error: 'Разослать можно только опубликованный сбор' });
-      // Реальная рассылка идёт по всей базе, поэтому требуем явное подтверждение:
-      // без { confirm: true } эндпоинт только отдаёт предпросмотр-аудит.
-      const { data: members } = await db.from('members').select('telegram_id').eq('status', 'approved').eq('bot_active', true);
-      const ids = (members || []).map((m: any) => Number(m.telegram_id)).filter((id: number) => id > 0);
+      // Реальная рассылка идёт по базе, поэтому по умолчанию — ТОЛЬКО костяк
+      // (is_core / role owner-organizer), а не все approved: сбор — внутренняя
+      // история костяка, и уведомлять о нём весь клуб не нужно.
+      // Явное { audience: 'all' } рассылает всем одобрённым, как в admin/broadcast.
+      const toAll = body.audience === 'all';
+      const { data: pool } = await db
+        .from('members')
+        .select('telegram_id,status,is_core,role,bot_active')
+        .eq('bot_active', true);
+      const ids = (pool || [])
+        .filter((m: any) => Number(m.telegram_id) > 0)
+        .filter((m: any) => (toAll ? m.status === 'approved' : (m.is_core === true || m.role === 'owner' || m.role === 'organizer')))
+        .map((m: any) => Number(m.telegram_id));
       if (body.confirm !== true) {
-        return res.json({ ok: true, dryRun: true, wouldSend: ids.length, hint: 'Повторите с confirm:true, чтобы разослать' });
+        return res.json({ ok: true, dryRun: true, audience: toAll ? 'all' : 'core', wouldSend: ids.length, hint: 'Повторите с confirm:true, чтобы разослать' });
       }
       const site = `https://${req.headers['x-forwarded-host'] || req.headers.host}`;
       const text = `🔥 <b>${escHtml(f.title)}</b>\n\n${escHtml(f.summary)}\n\n<a href="${site}/?fund=${encodeURIComponent(f.slug)}">Открыть сбор и поддержать</a>`;
