@@ -95,6 +95,56 @@
         * { animation-duration: 0.001s !important; }
         .hero-anim { opacity: 1; transform: none; animation: none; }
       }
+      /* ===================== WOW-элементы (ui-layout style) ===================== */
+      /* 1. Фото: grayscale → цвет (серая жизнь → живая) + hover-зум */
+      .photo-live { filter: grayscale(1) contrast(1.06) brightness(0.88); transition: filter 0.7s cubic-bezier(.2,.7,.2,1), transform 0.7s cubic-bezier(.2,.7,.2,1); }
+      .photo-zoom { overflow: hidden; }
+      .photo-zoom:hover .photo-live { filter: grayscale(0) contrast(1) brightness(1); transform: scale(1.05); }
+
+      /* 2. Spotlight: свечение за курсором на карточках */
+      .spotlight { position: relative; }
+      .spotlight::before {
+        content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+        background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 50%), rgba(230,253,58,0.10), transparent 65%);
+        opacity: 0; transition: opacity 0.35s ease;
+      }
+      .spotlight:hover::before { opacity: 1; }
+
+      /* 3. Shimmer на CTA-кнопке */
+      .shimmer-btn { position: relative; overflow: hidden; }
+      .shimmer-btn::after {
+        content: ''; position: absolute; top: 0; bottom: 0; left: -60%; width: 45%;
+        background: linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent);
+        transform: skewX(-20deg); animation: shimmer 3.6s ease-in-out infinite;
+      }
+      @keyframes shimmer { 0%, 55% { left: -60%; } 100% { left: 130%; } }
+
+      /* 4. Marquee: бесконечная лента отзывов */
+      .marquee { overflow: hidden; -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent); }
+      .marquee-track { display: flex; width: max-content; animation: marquee 46s linear infinite; }
+      .marquee:hover .marquee-track { animation-play-state: paused; }
+      @keyframes marquee { to { transform: translateX(-50%); } }
+
+      /* 5. Sticky-этапы: фото слева меняется по мере скролла этапов */
+      .stage-media { position: sticky; top: 96px; }
+      .stage-photo { opacity: 0; transition: opacity 0.65s cubic-bezier(.2,.7,.2,1); position: absolute; inset: 0; }
+      .stage-photo.active { opacity: 1; }
+
+      /* 6. Счётчики */
+      .counter-num { font-variant-numeric: tabular-nums; }
+
+      /* 7. Гормональные карточки с фото-фоном */
+      .hormone-card { position: relative; overflow: hidden; min-height: 250px; display: flex; align-items: flex-end; }
+      .hormone-card img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      .hormone-card .hormone-content { position: relative; z-index: 1; }
+
+      @media (prefers-reduced-motion: reduce) {
+        .marquee-track { animation: none; }
+        .shimmer-btn::after { animation: none; display: none; }
+        .photo-live { filter: none; transition: none; }
+      }
+      /* ===================== /WOW-элементы ===================== */
+
     </style>
   </head>
   <body class="font-sans text-ink">
@@ -185,7 +235,7 @@
 
           <div class="mt-11 flex flex-col sm:flex-row items-center justify-center gap-3 hero-anim" style="animation-delay:1.2s">
             <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer"
-               class="px-9 py-4 rounded-full bg-brand text-black font-mono text-xs font-black uppercase tracking-widest hover:bg-brand-hover hover:shadow-[0_10px_40px_-8px_rgba(230,253,58,0.5)] transition-all">
+               class="px-9 py-4 rounded-full bg-brand text-black font-mono text-xs font-black uppercase tracking-widest hover:bg-brand-hover hover:shadow-[0_10px_40px_-8px_rgba(230,253,58,0.5)] transition-all shimmer-btn">
               Вступить в клуб
             </a>
             <a href="#answer"
@@ -376,25 +426,69 @@
             </div>
           </div>
 <div class="mt-14 grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="glass p-7 card-hover reveal">
-              <div class="label">Профессии</div>
-              <h3 class="mt-3 font-display font-bold text-lg">Достигшие в своём деле</h3>
-              <p class="mt-3 text-sm text-white/55 leading-relaxed">Программисты, дизайнеры, руководители, предприниматели, врачи, инженеры. Люди, привыкшие отвечать за результат — и отвечающие за себя в круге.</p>
+            <div class="spotlight photo-zoom rounded-2xl overflow-hidden border border-white/10 bg-surface reveal card-hover">
+              <div class="relative h-40">
+                <img src="assets/melovye/scr-01.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" aria-hidden="true"></div>
+              </div>
+              <div class="p-7">
+                <div class="label">Профессии</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Достигшие в своём деле</h3>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Программисты, дизайнеры, руководители, предприниматели, врачи, инженеры. Люди, привыкшие отвечать за результат — и отвечающие за себя в круге.</p>
+              </div>
             </div>
-            <div class="glass p-7 card-hover reveal">
-              <div class="label">Поколения</div>
-              <h3 class="mt-3 font-display font-bold text-lg">Молодые и опытные</h3>
-              <p class="mt-3 text-sm text-white/55 leading-relaxed">Молодёжь в поиске опоры и живого примера и те, кто уже построил карьеру. Разница в опыте делает круг сильнее, а не заметнее.</p>
+            <div class="spotlight photo-zoom rounded-2xl overflow-hidden border border-white/10 bg-surface reveal card-hover">
+              <div class="relative h-40">
+                <img src="assets/melovye/scr-02.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" aria-hidden="true"></div>
+              </div>
+              <div class="p-7">
+                <div class="label">Поколения</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Молодые и опытные</h3>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Молодёжь в поиске опоры и живого примера и те, кто уже построил карьеру. Разница в опыте делает круг сильнее, а не заметнее.</p>
+              </div>
             </div>
-            <div class="glass p-7 card-hover reveal">
-              <div class="label">Семейные</div>
-              <h3 class="mt-3 font-display font-bold text-lg">Те, кто строит семью</h3>
-              <p class="mt-3 text-sm text-white/55 leading-relaxed">Делятся опытом этапов: отношения, дети, дом, баланс. Для молодых это годы экономии на собственных ошибках.</p>
+            <div class="spotlight photo-zoom rounded-2xl overflow-hidden border border-white/10 bg-surface reveal card-hover">
+              <div class="relative h-40">
+                <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" aria-hidden="true"></div>
+              </div>
+              <div class="p-7">
+                <div class="label">Семейные</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Те, кто строит семью</h3>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Делятся опытом этапов: отношения, дети, дом, баланс. Для молодых это годы экономии на собственных ошибках.</p>
+              </div>
             </div>
-            <div class="glass p-7 card-hover reveal">
-              <div class="label">Культура круга</div>
-              <h3 class="mt-3 font-display font-bold text-lg">Заслуги — за порогом</h3>
-              <p class="mt-3 text-sm text-white/55 leading-relaxed">Никто не превозносится за должность, капитал или регалии. В круге все равны — потому здесь можно быть собой, а не ролью.</p>
+            <div class="spotlight photo-zoom rounded-2xl overflow-hidden border border-white/10 bg-surface reveal card-hover">
+              <div class="relative h-40">
+                <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <div class="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" aria-hidden="true"></div>
+              </div>
+              <div class="p-7">
+                <div class="label">Культура круга</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Заслуги — за порогом</h3>
+                <p class="mt-3 text-sm text-white/55 leading-relaxed">Никто не превозносится за должность, капитал или регалии. В круге все равны — потому здесь можно быть собой, а не ролью.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- Счётчики клуба: оживают при появлении в кадре -->
+          <div class="mt-4 grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="glass p-6 md:p-7 text-center spotlight reveal">
+              <div class="counter-num title-xl text-4xl md:text-5xl text-brand" data-counter="42" data-suffix="">0</div>
+              <p class="mt-2 text-xs md:text-sm text-white/55 font-mono uppercase tracking-wider">живых событий</p>
+            </div>
+            <div class="glass p-6 md:p-7 text-center spotlight reveal">
+              <div class="counter-num title-xl text-4xl md:text-5xl text-brand" data-counter="120" data-suffix="+">0</div>
+              <p class="mt-2 text-xs md:text-sm text-white/55 font-mono uppercase tracking-wider">участников круга</p>
+            </div>
+            <div class="glass p-6 md:p-7 text-center spotlight reveal">
+              <div class="counter-num title-xl text-4xl md:text-5xl text-brand" data-counter="300" data-suffix="+">0</div>
+              <p class="mt-2 text-xs md:text-sm text-white/55 font-mono uppercase tracking-wider">км пройдено вместе</p>
+            </div>
+            <div class="glass p-6 md:p-7 text-center spotlight reveal">
+              <div class="counter-num title-xl text-4xl md:text-5xl text-brand" data-counter="0" data-suffix="">0</div>
+              <p class="mt-2 text-xs md:text-sm text-white/55 font-mono uppercase tracking-wider">выпито за событиями</p>
             </div>
           </div>
 
@@ -456,41 +550,63 @@
             всё это происходит в живой обстановке, а не на странице.
           </p>
 
-          <!-- Сетка пройдённых событий -->
-          <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Браслав, семейный закат" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Браслав · семейный закат</figcaption>
+          <!-- Bento-сетка: живые эмоции событий -->
+          <div class="mt-12 grid grid-cols-2 lg:grid-cols-4 gap-4 auto-rows-[150px] md:auto-rows-[180px] lg:auto-rows-[200px]">
+            <figure class="spotlight photo-zoom relative col-span-2 row-span-2 rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Браслав, семейный закат" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-5 bg-gradient-to-t from-black/90 via-black/45 to-transparent">
+                <span class="label">Браслав</span>
+                <p class="mt-1.5 font-display font-bold text-base md:text-lg text-white leading-snug">Семьи вместе — тепло, которого не бывает на экране</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Поход по Ислочи" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Поход · Ислочь</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Поход по Ислочи" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Поход · Ислочь</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Разговор без телефонов — по дороге и у костра</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="Гиревой заход" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Гиревой заход</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="Гиревой заход" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Гиревой заход</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Драйв: тело наконец-то просыпается</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="Мужской лагерь Ислочь" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Мужской лагерь · Ислочь</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="Мужской лагерь Ислочь" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Мужской лагерь</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Братство: опора без понтов и без выпивки</p>
+              </figcaption>
             </figure>
-          </div>
-          <div class="mt-4 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Нано-баня FLINT" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Нано-баня FLINT</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="Выступление в круге" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Ораторский круг</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Своё слово — вслух, и круг слушает</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="Выступление" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Выступление · круг</figcaption>
+            <figure class="spotlight photo-zoom relative col-span-2 rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Нано-баня FLINT" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Нано-баня FLINT</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Жар, пар и лёгкость — выходишь другим человеком</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/existential_cinema_1780473811493.jpg" alt="Философское кино" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Философское кино</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/existential_cinema_1780473811493.jpg" alt="Философское кино" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Философское кино</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Посмотрели — и говорили о главном</p>
+              </figcaption>
             </figure>
-            <figure class="rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
-              <img src="assets/events_web/reading_smysly_1780473826786.jpg" alt="Чтения и смыслы" class="w-full aspect-[4/3] object-cover" />
-              <figcaption class="px-4 py-3 text-[11px] text-white/50 font-mono">Чтения · смыслы</figcaption>
+            <figure class="spotlight photo-zoom relative rounded-2xl overflow-hidden border border-white/10 bg-surface reveal">
+              <img src="assets/events_web/reading_smysly_1780473826786.jpg" alt="Чтения и смыслы" class="photo-live w-full h-full object-cover" loading="lazy" />
+              <figcaption class="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/85 to-transparent">
+                <span class="label">Чтения · смыслы</span>
+                <p class="mt-1 text-[13px] text-white/85 leading-snug">Тишина, в которой задевает каждое слово</p>
+              </figcaption>
             </figure>
           </div>
 
@@ -574,7 +690,84 @@
             силы воли — среда ведёт сама.
           </p>
 
-          <div class="mt-12 grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- Sticky-scroll: фото эмоции этапа меняются при скролле (desktop) -->
+          <div class="mt-12 hidden lg:grid grid-cols-12 gap-10 items-start" id="stagesScroll">
+            <div class="col-span-5">
+              <div class="stage-media">
+                <div class="relative aspect-[4/5] rounded-3xl overflow-hidden border border-white/10 bg-surface">
+                  <img data-stage-photo="0" src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="Этап 0 — первое впечатление" class="stage-photo active w-full h-full object-cover" loading="lazy" />
+                  <img data-stage-photo="1" src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Этап 1 — поддержка бади" class="stage-photo w-full h-full object-cover" loading="lazy" />
+                  <img data-stage-photo="2" src="assets/events_web/reading_smysly_1780473826786.jpg" alt="Этап 2 — обучение в круге" class="stage-photo w-full h-full object-cover" loading="lazy" />
+                  <img data-stage-photo="3" src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="Этап 3 — энергия и вызовы" class="stage-photo w-full h-full object-cover" loading="lazy" />
+                  <img data-stage-photo="4" src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Этап 4 — порядок и ясность" class="stage-photo w-full h-full object-cover" loading="lazy" />
+                  <img data-stage-photo="5" src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Этап 5 — смысл и единство" class="stage-photo w-full h-full object-cover" loading="lazy" />
+                  <div class="absolute inset-0 bg-gradient-to-t from-black/85 via-transparent to-black/25" aria-hidden="true"></div>
+                  <div class="absolute inset-x-0 bottom-0 p-6">
+                    <div id="stageCaption" class="transition-opacity duration-300">
+                      <span class="label">Этап 0</span>
+                      <p class="mt-1.5 font-display font-bold text-xl text-white leading-snug">Впечатление</p>
+                    </div>
+                  </div>
+                  <div class="absolute top-5 right-5 px-3 py-1.5 rounded-full bg-black/55 backdrop-blur border border-white/15 font-display font-black text-lg" aria-hidden="true">
+                    <span id="stageCounter">0</span><span class="text-white/40">/5</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-span-7 space-y-4">
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover" data-stage="0">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 0 · Знакомство</div>
+                  <span class="font-display font-black text-4xl text-white/[0.08] select-none" aria-hidden="true">0</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Впечатление</h3>
+                <p class="mt-3 text-sm md:text-base text-white/55 leading-relaxed">Первое событие — без обязательств. Живые люди, костёр, разговор без телефонов: то, чего переписка не даёт годами. Тебя замечают и запоминают имя — с этого одиночество начинает отступать.</p>
+              </article>
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover" data-stage="1">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 1 · Поддержка</div>
+                  <span class="font-display font-black text-4xl text-white/[0.08] select-none" aria-hidden="true">1</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Гость</h3>
+                <p class="mt-3 text-sm md:text-base text-white/55 leading-relaxed">У гостя всегда есть напарник: бади знакомит с людьми и держит в поле зрения от сбора до разъезда. Новичок не остаётся один — это правило клуба, а не случайность.</p>
+              </article>
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover" data-stage="2">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 2 · Обучение</div>
+                  <span class="font-display font-black text-4xl text-white/[0.08] select-none" aria-hidden="true">2</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Участник</h3>
+                <p class="mt-3 text-sm md:text-base text-white/55 leading-relaxed">Гость становится участником: кодекс — по одному правилу на экран, первые роли на событии. Учится тому, чего не даёт город: слушать, говорить честно, отвечать за часть общего дела.</p>
+              </article>
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover" data-stage="3">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 3 · Применение</div>
+                  <span class="font-display font-black text-4xl text-white/[0.08] select-none" aria-hidden="true">3</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Энергия</h3>
+                <p class="mt-3 text-sm md:text-base text-white/55 leading-relaxed">Участник применяет себя: вызовы, спорт, походы, выступления, роль помощника. Энергия, которую съедал экран, возвращается через тело и живое дело. Прокрастинации нет места в ритме клуба.</p>
+              </article>
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover" data-stage="4">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 4 · Порядок</div>
+                  <span class="font-display font-black text-4xl text-white/[0.08] select-none" aria-hidden="true">4</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Дела</h3>
+                <p class="mt-3 text-sm md:text-base text-white/55 leading-relaxed">Ритм круга переносится в жизнь: режим, договорённости, прозрачные деньги, порядок в делах. Держит не сила воли, а среда — нужное поведение становится нормой само.</p>
+              </article>
+              <article class="stage-item glass p-7 md:p-8 spotlight card-hover border-brand/30 bg-brand/[0.04]" data-stage="5">
+                <div class="flex items-start justify-between gap-4">
+                  <div class="label">Этап 5 · Польза</div>
+                  <span class="font-display font-black text-4xl text-brand/20 select-none" aria-hidden="true">5</span>
+                </div>
+                <h3 class="mt-3 font-display font-black uppercase text-2xl tracking-tight">Предназначение</h3>
+                <p class="mt-3 text-sm md:text-base text-white/60 leading-relaxed">Фокус смещается с себя на круг: наставничество, свои проекты, передача опыта. Опыт одного становится опорой для всех — смысл здесь находят и реализуют, а не ищут.</p>
+              </article>
+            </div>
+          </div>
+
+          <!-- Мобильная версия этапов: компактные карточки -->
+          <div class="mt-12 lg:hidden grid sm:grid-cols-2 gap-4">
             <div class="glass p-7 card-hover reveal relative">
               <span class="absolute top-4 right-6 font-display font-black text-5xl text-white/[0.07] select-none" aria-hidden="true">0</span>
               <div class="label">Этап 0 · Знакомство</div>
@@ -635,6 +828,73 @@
       </section>
       <!-- ======================= /ЭТАПЫ ИНТЕГРАЦИИ ======================= -->
 
+<!-- ======================= ЛЕНТА ЖИВЫХ ЭМОЦИЙ (marquee) ======================= -->
+      <section class="relative py-14 overflow-hidden border-y border-white/[0.06] bg-surface/20">
+        <div class="max-w-6xl mx-auto px-5 mb-8 flex items-center justify-between gap-4">
+          <div class="label reveal">Живые эмоции клуба</div>
+          <span class="hidden sm:block text-xs text-white/40 font-mono uppercase tracking-wider reveal">наведите — лента остановится</span>
+        </div>
+        <div class="marquee reveal" aria-label="Лента моментов жизни клуба">
+          <div class="marquee-track">
+            <!-- Набор 1 -->
+            <div class="flex gap-4 pr-4">
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="Поход — усталость и счастье" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Шли 18 км — и ни разу не захотелось в телефон»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="Гиревой заход — драйв" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Гиря, лес, пацаны — энергией заряжаюсь тут»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="Браслав — семейный закат" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Впервые за год просто смотрели на закат. Вживую»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="Ораторский круг — своё слово" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Сказал своё слово — и круг дослушал до конца»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="Нано-баня — лёгкость" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Пар, холод, смех — живее, чем любой сериал»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="Мужской лагерь — братство" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Тут можно быть собой: без статусов и без выпивки»</figcaption>
+              </figure>
+            </div>
+            <!-- Набор 2: дубль для бесшовной ленты -->
+            <div class="flex gap-4 pr-4" aria-hidden="true">
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Шли 18 км — и ни разу не захотелось в телефон»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Гиря, лес, пацаны — энергией заряжаюсь тут»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/braslav_family_sunset_1780473908072.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Впервые за год просто смотрели на закат. Вживую»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/orator_podium_1780473860957.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Сказал своё слово — и круг дослушал до конца»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Пар, холод, смех — живее, чем любой сериал»</figcaption>
+              </figure>
+              <figure class="photo-zoom relative w-72 h-44 shrink-0 rounded-2xl overflow-hidden border border-white/10">
+                <img src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="" class="photo-live w-full h-full object-cover" loading="lazy" />
+                <figcaption class="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/85 to-transparent text-[11px] font-mono text-white/80">«Тут можно быть собой: без статусов и без выпивки»</figcaption>
+              </figure>
+            </div>
+          </div>
+        </div>
+      </section>
+      <!-- ======================= /ЛЕНТА ЖИВЫХ ЭМОЦИЙ ======================= -->
+
 <!-- ======================= ГОРМОНЫ СЧАСТЬЯ ======================= -->
       <section id="hormones" class="relative py-32 px-5 scroll-mt-20 bg-surface/40 border-y border-white/[0.06] overflow-hidden">
         <div class="relative z-[1] max-w-6xl mx-auto">
@@ -648,25 +908,41 @@
           </p>
 
           <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div class="glass p-7 reveal">
-              <div class="text-3xl">⚡</div>
-              <h3 class="mt-4 font-display font-bold text-lg">Дофамин — радость цели</h3>
-              <p class="mt-2 text-sm text-white/55 leading-relaxed">Вызовы, спорт, походы, маленькие победы на маршруте дают ясный, честный отклик. Цель — реальная, и её видно своими глазами.</p>
+            <div class="hormone-card spotlight photo-zoom rounded-2xl border border-white/10 reveal">
+              <img src="assets/events_web/kettlebell_walk_1780473796598.jpg" alt="" aria-hidden="true" class="photo-live" loading="lazy" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/15" aria-hidden="true"></div>
+              <div class="hormone-content p-6 w-full">
+                <div class="text-3xl">⚡</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Дофамин — радость цели</h3>
+                <p class="mt-2 text-sm text-white/70 leading-relaxed">Вызовы, спорт, походы, маленькие победы на маршруте дают ясный, честный отклик. Цель — реальная, и её видно своими глазами.</p>
+              </div>
             </div>
-            <div class="glass p-7 reveal">
-              <div class="text-3xl">☀️</div>
-              <h3 class="mt-4 font-display font-bold text-lg">Серотонин — стабильность и ритм</h3>
-              <p class="mt-2 text-sm text-white/55 leading-relaxed">Регулярные встречи, солнце, природа и порядок без хаоса. Ритм клуба становится опорой, а не поводом тревожиться.</p>
+            <div class="hormone-card spotlight photo-zoom rounded-2xl border border-white/10 reveal">
+              <img src="assets/events_web/forest_hike_isloch_1780473844806.jpg" alt="" aria-hidden="true" class="photo-live" loading="lazy" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/15" aria-hidden="true"></div>
+              <div class="hormone-content p-6 w-full">
+                <div class="text-3xl">☀️</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Серотонин — стабильность и ритм</h3>
+                <p class="mt-2 text-sm text-white/70 leading-relaxed">Регулярные встречи, солнце, природа и порядок без хаоса. Ритм клуба становится опорой, а не поводом тревожиться.</p>
+              </div>
             </div>
-            <div class="glass p-7 reveal">
-              <div class="text-3xl">🔥</div>
-              <h3 class="mt-4 font-display font-bold text-lg">Окситоцин — близость и доверие</h3>
-              <p class="mt-2 text-sm text-white/55 leading-relaxed">Общее дело, круг у костра, взаимная поддержка и открытый разговор. Там, где честно и тепло, — там доверие и привязанность.</p>
+            <div class="hormone-card spotlight photo-zoom rounded-2xl border border-white/10 reveal">
+              <img src="assets/events_web/male_isloch_camp_1780473892239.jpg" alt="" aria-hidden="true" class="photo-live" loading="lazy" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/15" aria-hidden="true"></div>
+              <div class="hormone-content p-6 w-full">
+                <div class="text-3xl">🔥</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Окситоцин — близость и доверие</h3>
+                <p class="mt-2 text-sm text-white/70 leading-relaxed">Общее дело, круг у костра, взаимная поддержка и открытый разговор. Там, где честно и тепло, — там доверие и привязанность.</p>
+              </div>
             </div>
-            <div class="glass p-7 reveal">
-              <div class="text-3xl">🏃</div>
-              <h3 class="mt-4 font-display font-bold text-lg">Эндорфины — лёгкость и устойчивость</h3>
-              <p class="mt-2 text-sm text-white/55 leading-relaxed">Баня, спорт до усталости, смех и преодоление себя. Выход из зоны комфорта даёт ясность и прилив сил без веществ.</p>
+            <div class="hormone-card spotlight photo-zoom rounded-2xl border border-white/10 reveal">
+              <img src="assets/events_web/nano_banya_flint_1780473778276.jpg" alt="" aria-hidden="true" class="photo-live" loading="lazy" />
+              <div class="absolute inset-0 bg-gradient-to-t from-black/90 via-black/50 to-black/15" aria-hidden="true"></div>
+              <div class="hormone-content p-6 w-full">
+                <div class="text-3xl">🏃</div>
+                <h3 class="mt-3 font-display font-bold text-lg">Эндорфины — лёгкость и устойчивость</h3>
+                <p class="mt-2 text-sm text-white/70 leading-relaxed">Баня, спорт до усталости, смех и преодоление себя. Выход из зоны комфорта даёт ясность и прилив сил без веществ.</p>
+              </div>
             </div>
           </div>
         </div>
@@ -1074,7 +1350,7 @@
           </p>
           <div class="mt-11 flex flex-col sm:flex-row items-center justify-center gap-3 reveal">
             <a href="https://t.me/campsflint_bot" target="_blank" rel="noopener noreferrer"
-               class="px-11 py-4 rounded-full bg-brand text-black font-mono text-sm font-black uppercase tracking-widest hover:bg-brand-hover hover:shadow-[0_14px_50px_-10px_rgba(230,253,58,0.6)] transition-all">
+               class="px-11 py-4 rounded-full bg-brand text-black font-mono text-sm font-black uppercase tracking-widest hover:bg-brand-hover hover:shadow-[0_14px_50px_-10px_rgba(230,253,58,0.6)] transition-all shimmer-btn">
               Вступить в клуб
             </a>
             <a href="performance.html#apply"
@@ -1159,6 +1435,72 @@
           els.forEach(function (el) { io.observe(el); });
         } else {
           els.forEach(function (el) { el.classList.add('in'); });
+        }
+
+        // ===================== WOW: spotlight за курсором =====================
+        if (window.matchMedia('(hover:hover)').matches) {
+          document.querySelectorAll('.spotlight').forEach(function (card) {
+            card.addEventListener('mousemove', function (e) {
+              var r = card.getBoundingClientRect();
+              card.style.setProperty('--mx', (e.clientX - r.left) + 'px');
+              card.style.setProperty('--my', (e.clientY - r.top) + 'px');
+            });
+          });
+        }
+
+        // ===================== WOW: sticky-этапы (фото меняются при скролле) =====================
+        var stageItems = document.querySelectorAll('.stage-item');
+        var stagePhotos = document.querySelectorAll('.stage-photo');
+        var stageCounter = document.getElementById('stageCounter');
+        var stageCaption = document.getElementById('stageCaption');
+        if (stageItems.length && 'IntersectionObserver' in window) {
+          var so = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) {
+              if (!en.isIntersecting) return;
+              var n = en.target.getAttribute('data-stage');
+              stagePhotos.forEach(function (img) {
+                img.classList.toggle('active', img.getAttribute('data-stage-photo') === n);
+              });
+              if (stageCounter) stageCounter.textContent = n;
+              if (stageCaption) {
+                stageCaption.style.opacity = '0';
+                setTimeout(function () {
+                  var lbl = stageCaption.querySelector('.label');
+                  var ttl = stageCaption.querySelector('p');
+                  var src = en.target.querySelector('.label');
+                  var h3 = en.target.querySelector('h3');
+                  if (lbl && src) lbl.textContent = src.textContent;
+                  if (ttl && h3) ttl.textContent = h3.textContent;
+                  stageCaption.style.opacity = '1';
+                }, 180);
+              }
+            });
+          }, { rootMargin: '-40% 0px -40% 0px' });
+          stageItems.forEach(function (el) { so.observe(el); });
+        }
+
+        // ===================== WOW: оживающие счётчики =====================
+        var counters = document.querySelectorAll('[data-counter]');
+        if (counters.length && 'IntersectionObserver' in window) {
+          var co = new IntersectionObserver(function (entries) {
+            entries.forEach(function (en) {
+              if (!en.isIntersecting) return;
+              var el = en.target;
+              co.unobserve(el);
+              var target = parseInt(el.getAttribute('data-counter'), 10) || 0;
+              var suffix = el.getAttribute('data-suffix') || '';
+              var t0 = null, dur = 1600;
+              function step(ts) {
+                if (!t0) t0 = ts;
+                var p = Math.min((ts - t0) / dur, 1);
+                var eased = 1 - Math.pow(1 - p, 3);
+                el.textContent = Math.round(target * eased) + suffix;
+                if (p < 1) requestAnimationFrame(step);
+              }
+              requestAnimationFrame(step);
+            });
+          }, { threshold: 0.5 });
+          counters.forEach(function (el) { co.observe(el); });
         }
 
       });
