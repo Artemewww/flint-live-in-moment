@@ -12,7 +12,7 @@
  * шёл с 28.08.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Car, Tent, Users, MapPin, Clock, Phone, RefreshCw, Plus, X, Check } from 'lucide-react';
+import { Car, Tent, Users, MapPin, Clock, Phone, RefreshCw, Plus, X, Check, Pencil } from 'lucide-react';
 import { getLogistics, logiAction, type LogiState, type LogiRide } from '../api';
 import { haptic } from '../telegram';
 
@@ -168,15 +168,33 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
 
         <div className="flex flex-wrap gap-2 pt-0.5">
           {r.isMine ? (
-            <button
-              type="button"
-              disabled={busy === `c${r.id}`}
-              onClick={() => run(`c${r.id}`, 'logi_cancel', { rideId: r.id })}
-              className="text-[10px] font-black font-mono uppercase tracking-wider text-red-300 border border-red-400/30 hover:bg-red-400/10 rounded-xl px-3 py-2 transition-all disabled:opacity-40"
-            >
-              <X className="w-3 h-3 inline mr-1" />
-              {busy === `c${r.id}` ? '…' : isTent ? 'Убрать палатку' : 'Отменить поездку'}
-            </button>
+            <>
+              {/* Планы меняются на ходу: выехал из другого района, сдвинул время,
+                  освободилось ещё место. Раньше это правилось только диалогом с
+                  ботом, и чаще не правилось вовсе — в списке висело старое. */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowOffer(r.kind);
+                  setSeats(String(r.seatsTotal));
+                  setFromPoint(r.fromPoint);
+                  setDepartText(r.departText);
+                }}
+                className="text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-3 py-2 transition-all"
+              >
+                <Pencil className="w-3 h-3 inline mr-1" />
+                Изменить
+              </button>
+              <button
+                type="button"
+                disabled={busy === `c${r.id}`}
+                onClick={() => run(`c${r.id}`, 'logi_cancel', { rideId: r.id })}
+                className="text-[10px] font-black font-mono uppercase tracking-wider text-red-300 border border-red-400/30 hover:bg-red-400/10 rounded-xl px-3 py-2 transition-all disabled:opacity-40"
+              >
+                <X className="w-3 h-3 inline mr-1" />
+                {busy === `c${r.id}` ? '…' : isTent ? 'Убрать палатку' : 'Отменить поездку'}
+              </button>
+            </>
           ) : r.iAmIn ? (
             <button
               type="button"
@@ -284,7 +302,9 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
       {showOffer ? (
         <div className="border-t border-white/10 pt-3 space-y-2">
           <span className="text-white/40 uppercase text-[9px] tracking-wider block">
-            {showOffer === 'tent' ? 'Своя палатка' : 'Еду на машине'}
+            {(showOffer === 'tent' ? state.tents : state.cars).some((r) => r.isMine)
+              ? (showOffer === 'tent' ? 'Моя палатка — правка' : 'Моя машина — правка')
+              : (showOffer === 'tent' ? 'Своя палатка' : 'Еду на машине')}
           </span>
           <div className="flex gap-2">
             <input
@@ -329,7 +349,8 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
           </div>
           <p className="text-white/40 text-[10px] leading-snug">
             Мест — сколько можешь взять <b>кроме себя</b>. Ноль тоже имеет смысл: так видно, что ты
-            в колонне, даже если брать некого.
+            в колонне, даже если брать некого. Сохранение правит твою запись, а не заводит вторую:
+            {showOffer === 'tent' ? ' одна палатка' : ' одна машина'} на человека.
           </p>
         </div>
       ) : (
