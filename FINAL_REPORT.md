@@ -155,8 +155,8 @@ GitHub: https://github.com/Artemewww/flint-live-in-moment
 2. Добавьте переменные окружения:
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
-   - `ADMIN_TOKEN=flint-admin-2026`
-   - `TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A`
+   - `ADMIN_TOKEN=<секрет из Vercel>`
+   - `TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>`
 3. Деплой произойдет автоматически
 
 ### Шаг 3: Запуск Telegram бота (5 минут)

@@ -142,6 +142,8 @@ function mapEventToCamelCase(event: any) {
     participants: event.participants || [],
     // Моя машина на этом событии: водитель, попутчики, точка выезда.
     myRide: event.my_ride || null,
+    // Мой бади (или двое — в нечётной связке): за кого я отвечаю на событии.
+    myBuddies: event.my_buddies || [],
     telegramBotUrl: event.telegram_bot_url,
     priceType: event.price_type,
     priceLabel: event.price_label,
@@ -790,11 +792,47 @@ export default async function handler(req: any, res: any) {
         }
       }
 
+      /**
+       * «За кого я отвечаю» — бади. Правило человек принял на входе в клуб, и
+       * до сих пор оно жило только текстом: напарника было негде посмотреть.
+       * Отдаём ТОЛЬКО свою связку — чужие пары на карточке не нужны, их видно
+       * в боте («🤝 Бади»). Связки собирает api/register.ts и крон.
+       */
+      const myBuddies = new Map<string, Array<{ name: string; username: string }>>();
+      if (viewerId && myEventIds.length) {
+        const { data: mineRows } = await supabase
+          .from('event_buddies').select('event_id,pair_id')
+          .in('event_id', myEventIds).eq('telegram_id', viewerId);
+        const pairIds = (mineRows || []).map((r: any) => String(r.pair_id));
+        if (pairIds.length) {
+          const { data: mateRows } = await supabase
+            .from('event_buddies').select('event_id,pair_id,telegram_id')
+            .in('event_id', myEventIds).in('pair_id', pairIds).neq('telegram_id', viewerId);
+          const mateIds = Array.from(new Set((mateRows || []).map((r: any) => Number(r.telegram_id))));
+          const byId = new Map<number, { name: string; username: string }>();
+          if (mateIds.length) {
+            const { data: mm } = await supabase
+              .from('members').select('telegram_id, first_name, username').in('telegram_id', mateIds);
+            for (const m of mm || []) {
+              byId.set(Number((m as any).telegram_id), {
+                name: String((m as any).first_name || 'Участник'),
+                username: String((m as any).username || ''),
+              });
+            }
+          }
+          for (const r of (mateRows || []) as any[]) {
+            const info = byId.get(Number(r.telegram_id)) || { name: 'Участник', username: '' };
+            myBuddies.set(String(r.event_id), [...(myBuddies.get(String(r.event_id)) || []), info]);
+          }
+        }
+      }
+
       const withCounts = visible.map((e: any) => ({
         ...e,
         participants_count: counts.get(e.id) || 0,
         participants: roster.get(e.id) || [],
         my_ride: myRides.get(e.id) || null,
+        my_buddies: myBuddies.get(e.id) || [],
       }));
 
       return res.status(200).json({ events: withCounts.map(mapEventToCamelCase) });

@@ -22,6 +22,12 @@ export interface EventParticipant {
   guests?: number;
 }
 
+/** Мой бади на событии: напарник, который держит меня в поле зрения. */
+export interface EventBuddy {
+  name: string;
+  username?: string;
+}
+
 /** Моя машина на событии: кто везёт, с кем еду, откуда стартуем. */
 export interface MyRide {
   role: 'driver' | 'passenger';
@@ -87,6 +93,8 @@ export interface CommunityEvent {
   participants?: EventParticipant[];
   /** Моя машина на этом событии (только для того, кто её смотрит). */
   myRide?: MyRide | null;
+  /** Мой бади на этом событии — обычно один, в нечётной связке двое. */
+  myBuddies?: EventBuddy[];
   telegramBotUrl?: string;
   priceType: 'free' | 'paid';
   priceLabel: string;

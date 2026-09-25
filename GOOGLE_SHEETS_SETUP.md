@@ -15,7 +15,7 @@
 ```
 GOOGLE_SHEET_ID=your_sheet_id_here
 GOOGLE_SERVICE_ACCOUNT_CREDENTIALS={"type":"service_account",...}
-ADMIN_TOKEN=flint-admin-2026
+ADMIN_TOKEN=<секрет, в git не хранить>
 ```
 
 ## 3. Service Account

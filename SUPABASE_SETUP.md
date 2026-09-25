@@ -32,8 +32,8 @@
 ```
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-ADMIN_TOKEN=flint-admin-2026
-TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
+ADMIN_TOKEN=<секрет, в git не хранить>
+TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>
 ```
 
 4. Нажмите "Save"
@@ -42,7 +42,7 @@ TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
 ## Шаг 5: Импорт шаблонов мероприятий
 
 1. После деплоя откройте: https://flint-live-in-moment.vercel.app/admin.html
-2. Введите пароль: `flint-admin-2026`
+2. Введите пароль — значение `ADMIN_TOKEN` из Vercel → Environment Variables
 3. Нажмите "Импорт шаблонов"
 4. Шаблоны загрузятся в базу данных
 

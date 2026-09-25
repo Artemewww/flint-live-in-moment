@@ -35,7 +35,7 @@ cd src && npm install && cd ..
 # Создать .env в корне проекта
 cat > .env << 'EOF'
 SUPABASE_URL=https://lnaouwhywnppwnhijots.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxuYW91d2h5d25wcHduaGlqb3RzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzUwMzY1NCwiZXhwIjoyMDk5MDc5NjU0fQ.1fxhmyQTMJ5kZEkkV8N-q-SUtHHQ0dZ3KYsnoUH0wes
+SUPABASE_SERVICE_ROLE_KEY=<SUPABASE_SERVICE_ROLE_KEY — Supabase Dashboard → Settings → API>
 TELEGRAM_BOT_TOKEN=<получить у @BotFather>
 ADMIN_TOKEN=<придумать секретный токен>
 VERCEL_URL=https://flint-live-in-moment.vercel.app
@@ -302,7 +302,7 @@ clean();
 - Экспорт события в календарь (ics уже есть в вебе — `buildIcsDataUri` в EventDetailModal, добавить в бота).
 - AI-рекомендации событий по интересам; наглядное голосование за программу.
 - Спойлеры для длинных текстов бота, кастомные эмодзи.
-- Хардкод-токен админки во фронте (`AdminPanel.tsx`, `flint-admin-2026`) — известная дыра, вынести на сервер.
+- Хардкод-токен админки во фронте (`AdminPanel.tsx`, хардкод `ADMIN_TOKEN`) — известная дыра, вынести на сервер.
 
 ### Доступы
 Все ключи — в `.env` в корне проекта (не в git). Supabase project: `lnaouwhywnppwnhijots`. Бот: @campsflint_bot. Vercel: artemewww/flint-live-in-moment. Костяк в БД: telegram_id 377551019.
