@@ -13,6 +13,7 @@ import CampingChecklist from './CampingChecklist';
 import LiveMedia from './LiveMedia';
 import SnapModal from './SnapModal';
 import { getEventGuide } from '../eventGuide';
+import { LogisticsPanel } from './LogisticsPanel';
 
 /**
  * Настоящий ли это чат события.
@@ -755,11 +756,17 @@ export default function EventDetailModal({
                     rel="noopener noreferrer"
                     className="text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-3 py-2 transition-all"
                   >
-                    🚗 Кто едет, попутки и брони — в боте
+                    🤖 Открыть в боте
                   </a>
                 </div>
               </div>
             )}
+
+            {/* Логистика прямо здесь: машины, места, палатки, попутки.
+                Раньше карточка отправляла за этим в бота — там каждая машина
+                отдельным сообщением, и число свободных мест устаревало сразу
+                после отправки. Теперь состояние живое, а бот только зовёт. */}
+            <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />
 
             {/* Кто уже едет: состав, а не только цифра */}
             {roster.length > 0 && (

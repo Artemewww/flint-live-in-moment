@@ -207,3 +207,82 @@ export async function getPrefillData(): Promise<{
     return { ok: false, error: (err as Error).message };
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ЛОГИСТИКА СОБЫТИЯ: машины, палатки, брони, попутки.
+// Жила только в боте — лентой сообщений, где состояние устаревало сразу после
+// отправки. Теперь то же самое рисуется в приложении и обновляется на месте,
+// а бот остаётся каналом уведомлений.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Место в машине или палатке — как его видит конкретный участник. */
+export interface LogiRide {
+  id: number;
+  kind: 'car' | 'tent';
+  driverId: number;
+  driverName: string;
+  /** Контакты приходят только своим попутчикам и самому водителю. */
+  driverUsername: string;
+  driverPhone: string;
+  seatsTotal: number;
+  seatsTaken: number;
+  free: number;
+  fromPoint: string;
+  departText: string;
+  fuelCost: number;
+  isMine: boolean;
+  iAmIn: boolean;
+  passengers: Array<{ name: string; isMe: boolean }>;
+}
+
+export interface LogiState {
+  ok: boolean;
+  error?: string;
+  registered: boolean;
+  event: { id: string; title: string; assemblyPoint: string; departureTime: string };
+  cars: LogiRide[];
+  tents: LogiRide[];
+  seekers: Array<{ name: string; fromArea: string; isMe: boolean }>;
+  meSeeking: boolean;
+}
+
+const EMPTY_LOGI: LogiState = {
+  ok: false, registered: false,
+  event: { id: '', title: '', assemblyPoint: '', departureTime: '' },
+  cars: [], tents: [], seekers: [], meSeeking: false,
+};
+
+/** Снимок логистики события. Приложение перечитывает его после каждого действия. */
+export async function getLogistics(eventId: string): Promise<LogiState> {
+  try {
+    const res = await fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'logi_state', eventId, initData: getInitData() }),
+    });
+    if (!res.ok) return { ...EMPTY_LOGI, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return data?.ok ? (data as LogiState) : { ...EMPTY_LOGI, error: data?.error || 'Не вышло загрузить' };
+  } catch (err) {
+    return { ...EMPTY_LOGI, error: (err as Error).message };
+  }
+}
+
+/** Действие над логистикой: бронь, отмена, заявка машины, поиск попутки. */
+export async function logiAction(
+  action: 'logi_book' | 'logi_unbook' | 'logi_offer' | 'logi_cancel' | 'logi_seek' | 'logi_wait',
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch('/api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, ...payload, initData: getInitData() }),
+    });
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
+    const data = await res.json();
+    return { ok: Boolean(data?.ok), error: data?.error };
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+}
