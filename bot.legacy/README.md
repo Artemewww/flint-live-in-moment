@@ -37,7 +37,7 @@ cp .env.example .env
 - `BOT_TOKEN` - токен бота от @BotFather
 - `SUPABASE_URL` - URL вашего Supabase проекта
 - `SUPABASE_SERVICE_ROLE_KEY` - service_role ключ из Supabase
-- `ADMIN_TOKEN` - токен для админки (flint-admin-2026)
+- `ADMIN_TOKEN` - токен для админки (секрет из env)
 - `ADMIN_CHAT_ID` - ваш Telegram ID для админских уведомлений
 - `WEB_APP_URL` - URL вашего Vercel проекта
 

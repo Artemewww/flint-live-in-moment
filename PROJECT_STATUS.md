@@ -52,7 +52,7 @@
 3. **Добавить переменные окружения в Vercel**:
    - SUPABASE_URL
    - SUPABASE_SERVICE_ROLE_KEY
-   - ADMIN_TOKEN (уже есть: flint-admin-2026)
+   - ADMIN_TOKEN (секрет, задаётся в Vercel)
    - TELEGRAM_BOT_TOKEN (уже есть)
 4. **Передеплоить на Vercel** (автоматически после push)
 
@@ -72,7 +72,7 @@
 ### Вариант 1: Через админку (рекомендуется)
 1. Открыть https://flint-live-in-moment.vercel.app
 2. Нажать скрытую кнопку "Админ" (opacity 10%)
-3. Ввести пароль: `flint-admin-2026`
+3. Ввести пароль — значение `ADMIN_TOKEN` из Vercel → Environment Variables
 4. Создать/редактировать мероприятия
 
 ### Вариант 2: Через Supabase
@@ -115,8 +115,8 @@ flint-live-in-moment/
 ```
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-ADMIN_TOKEN=flint-admin-2026
-TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
+ADMIN_TOKEN=<секрет, в git не хранить>
+TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>
 ```
 
 ## Следующие шаги

@@ -22,8 +22,8 @@
    ```
    SUPABASE_URL=https://your-project.supabase.co
    SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-   ADMIN_TOKEN=flint-admin-2026
-   TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
+   ADMIN_TOKEN=<секрет, в git не хранить>
+   TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>
    ```
 3. Деплой произойдет автоматически
 
@@ -168,17 +168,17 @@ flint-live-in-moment/
 ```
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-ADMIN_TOKEN=flint-admin-2026
-TELEGRAM_BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
+ADMIN_TOKEN=<секрет, в git не хранить>
+TELEGRAM_BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>
 CRON_SECRET=your-random-secret-here
 ```
 
 ### Bot (.env)
 ```
-BOT_TOKEN=7861573345:AAEoWtYZa_6rWJszayOQ-9pRjf1p5X2lM9A
+BOT_TOKEN=<TELEGRAM_BOT_TOKEN — у @BotFather, в git не хранить>
 SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-ADMIN_TOKEN=flint-admin-2026
+ADMIN_TOKEN=<секрет, в git не хранить>
 ADMIN_CHAT_ID=123456789
 WEB_APP_URL=https://flint-live-in-moment.vercel.app
 ```
@@ -189,7 +189,7 @@ WEB_APP_URL=https://flint-live-in-moment.vercel.app
 - [ ] Сайт открывается: https://flint-live-in-moment.vercel.app
 - [ ] События загружаются из Supabase
 - [ ] Регистрация работает
-- [ ] Админка открывается (пароль: flint-admin-2026)
+- [ ] Админка открывается (пароль — `ADMIN_TOKEN` из Vercel)
 - [ ] Создание мероприятий работает
 
 ### Bot
