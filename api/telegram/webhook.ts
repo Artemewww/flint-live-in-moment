@@ -6672,9 +6672,13 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', { chat_id: chatId, text: 'Привязывать чат к событию может только костяк клуба.' });
             return res.status(200).json({ ok: true });
           }
+          // Статус события может оставаться open после его проведения. Для
+          // привязки групп показываем только актуальные события: прошедшие
+          // не должны вытеснять ближайшие из первых шести строк.
+          const today = new Date().toISOString().slice(0, 10);
           const { data: evs } = await supabase
             .from('events').select('id,title,date')
-            .eq('status', 'open').order('date', { ascending: true }).limit(6);
+            .eq('status', 'open').gte('date', today).order('date', { ascending: true }).limit(6);
           if (!evs || !evs.length) {
             await tg('sendMessage', { chat_id: chatId, text: 'Нет открытых событий для привязки.' });
             return res.status(200).json({ ok: true });
