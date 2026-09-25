@@ -492,7 +492,9 @@ export default function EventDetailModal({
                 плитки, которые должны читаться одним взглядом, а не занимать
                 четыре экрана столбиком. Отступы и кегль поджаты под узкий
                 экран. */}
-            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs [&>div]:p-3 sm:[&>div]:p-4">
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-start
+                            [&>div]:p-3 sm:[&>div]:p-4 [&>div]:min-w-0 [&>div]:overflow-hidden
+                            [&>div>div]:min-w-0 [&>div>div]:break-words [&>div]:gap-2 sm:[&>div]:gap-3">
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Calendar className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
@@ -591,27 +593,18 @@ export default function EventDetailModal({
                       <p className="text-white/50 text-[10px]">Запись открыта · {maxSpots} мест · присоединяйся к первым</p>
                     </div>
                   ) : (
-                    <div className="text-white font-bold flex justify-between items-center w-full">
-                      <span>Забронировано {totalRegistered} из {maxSpots}</span>
+                    <div className="text-white font-bold flex justify-between items-center gap-1 w-full min-w-0">
+                      <span className="truncate">{totalRegistered} из {maxSpots}</span>
                       <span className={`font-mono text-[10px] ${percentFull >= 80 ? 'text-red-400' : percentFull >= 50 ? 'text-amber-400' : 'text-brand'}`}>
                         {percentFull}%
                       </span>
                     </div>
                   )}
 
-                  {/* Прогресс-бар [██████░░░░] */}
-                  {totalRegistered >= 3 && (
-                    <div className="font-mono text-[11px] tracking-tight select-none flex items-center gap-1">
-                      <span className="text-white/40">[</span>
-                      {Array.from({ length: 10 }, (_, i) => (
-                        <span key={i} className={i < Math.round(percentFull / 10) ? (percentFull >= 80 ? 'text-red-400' : percentFull >= 50 ? 'text-amber-400' : 'text-brand') : 'text-white/20'}>
-                          {i < Math.round(percentFull / 10) ? '█' : '░'}
-                        </span>
-                      ))}
-                      <span className="text-white/40">]</span>
-                      <span className="text-white/50 ml-1">{totalRegistered}/{maxSpots}</span>
-                    </div>
-                  )}
+                  {/* ASCII-полоса [██████░░░░] убрана: десять блоков со скобками
+                      не влезают в половину ширины телефона и разрывали плитку —
+                      «состояние мест» вылезало за карточку. Тонкий бар ниже
+                      показывает ровно то же, цифры остались текстом. */}
 
                   {/* Тонкий визуальный бар */}
                   <div className="w-full bg-white/10 h-1 rounded-full overflow-hidden">
@@ -888,7 +881,10 @@ export default function EventDetailModal({
                 Раньше карточка отправляла за этим в бота — там каждая машина
                 отдельным сообщением, и число свободных мест устаревало сразу
                 после отправки. Теперь состояние живое, а бот только зовёт. */}
-            <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />
+            {/* Логистика — инструмент того, кто уже едет: машины, брони, попутки.
+                Незаписавшемуся она не нужна и только отвлекает от решения,
+                идёт он или нет. */}
+            {isRegistered && <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />}
 
             {/* Правила круга: короткое напоминание вместо восьми экранов кодекса.
                 На место убранного «Дома Личности» встаёт то, что на выезде
@@ -1210,12 +1206,15 @@ export default function EventDetailModal({
                   }
                 `}
               >
+                {/* «Вступить в живой круг» читалось как вступление в КЛУБ, а не
+                    запись на конкретный выезд — человек не понимал, на что
+                    жмёт. Призыв должен называть ровно одно действие. */}
                 {spotsFull ? (
                   <span>Все места заняты</span>
                 ) : (
                   <>
-                    Вступить в живой круг
-                    <span>({spotsRemaining} мест)</span>
+                    Записаться
+                    <span className="font-normal opacity-70">· {spotsRemaining} мест</span>
                   </>
                 )}
               </button>
