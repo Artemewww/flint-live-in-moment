@@ -241,6 +241,29 @@ export default function EventDetailModal({
   };
 
   // Six vectors of development reference
+  /**
+   * Сколько кадров уже в галерее. Плитка звала «Live-фото» и вела в галерею,
+   * которая могла быть пустой: человек открывал, видел ничего и больше не
+   * возвращался. Теперь число видно ДО перехода — и оно же зовёт добавить
+   * первым, когда пусто.
+   */
+  const [mediaCount, setMediaCount] = useState<{ photo: number; video: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch(`/api/events?action=media_list&id=${encodeURIComponent(event.id)}`)
+      .then((r) => r.json())
+      .then((d) => {
+        if (!alive) return;
+        const items = (d && d.items) || [];
+        setMediaCount({
+          photo: items.filter((i: any) => i.media_type !== 'video').length,
+          video: items.filter((i: any) => i.media_type === 'video').length,
+        });
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [event.id]);
+
   // Prevent scroll behind modal
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -397,7 +420,17 @@ export default function EventDetailModal({
                 className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
               >
                 <span className="text-base leading-none">📸</span>
-                Live-фото
+                Галерея
+                <span className="text-[9px] font-normal text-white/50 normal-case tracking-normal">
+                  {!mediaCount
+                    ? '…'
+                    : mediaCount.photo + mediaCount.video === 0
+                      ? 'пока пусто'
+                      : [
+                          mediaCount.photo ? `${mediaCount.photo} фото` : '',
+                          mediaCount.video ? `${mediaCount.video} видео` : '',
+                        ].filter(Boolean).join(' · ')}
+                </span>
               </a>
               {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки. */}
               <button
@@ -406,7 +439,10 @@ export default function EventDetailModal({
                 className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-black bg-brand hover:bg-brand-hover rounded-xl px-2 py-3 transition-all shadow-lg shadow-brand/20 text-center leading-tight"
               >
                 <span className="text-base leading-none">📷</span>
-                Снять
+                Добавить
+                <span className="text-[9px] font-normal text-black/60 normal-case tracking-normal">
+                  снять или из галереи
+                </span>
               </button>
               {/* Чат события и бот — переехали сюда из нижней панели: там они
                   занимали постоянную полосу экрана, хотя нужны разово. */}

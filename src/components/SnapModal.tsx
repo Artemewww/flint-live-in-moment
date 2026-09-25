@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { motion } from 'motion/react';
-import { X, Camera, Clapperboard, Loader } from 'lucide-react';
+import { X, Camera, Clapperboard, Loader, ImagePlus } from 'lucide-react';
 import { compressPhoto, readVideo, ShotTooLargeError } from '../capture';
 import { getInitData } from '../telegram';
 
@@ -19,6 +19,9 @@ interface SnapModalProps {
 export default function SnapModal({ eventTitle, eventId, onClose, onUploaded }: SnapModalProps) {
   const photoInput = useRef<HTMLInputElement>(null);
   const videoInput = useRef<HTMLInputElement>(null);
+  // Отдельные инпуты без capture — телефон откроет медиатеку, а не камеру.
+  const photoPick = useRef<HTMLInputElement>(null);
+  const videoPick = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
@@ -79,23 +82,42 @@ return (
             </p>
           </div>
 
-          {/* Две кнопки */}
+          {/* Снять сейчас — или достать уже снятое из галереи телефона.
+              Раньше инпуты стояли с capture="environment", и телефон открывал
+              ТОЛЬКО камеру: кадр, снятый пять минут назад, отправить было
+              нечем. На выезде снимают на ходу, а выкладывают на привале. */}
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={() => photoInput.current?.click()}
               disabled={busy}
-              className="flex-1 h-28 rounded-2xl bg-brand/15 border-2 border-brand/40 hover:bg-brand/25 transition-all cursor-pointer flex flex-col items-center justify-center gap-2"
+              className="flex-1 h-24 rounded-2xl bg-brand/15 border-2 border-brand/40 hover:bg-brand/25 transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
             >
-              <Camera className="w-9 h-9 text-brand" />
-              <span className="text-sm font-black text-white">📷 Фото</span>
+              <Camera className="w-8 h-8 text-brand" />
+              <span className="text-sm font-black text-white">📷 Снять фото</span>
             </button>
             <button
               onClick={() => videoInput.current?.click()}
               disabled={busy}
-              className="flex-1 h-28 rounded-2xl bg-white/5 border-2 border-white/15 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center justify-center gap-2"
+              className="flex-1 h-24 rounded-2xl bg-white/5 border-2 border-white/15 hover:bg-white/10 transition-all cursor-pointer flex flex-col items-center justify-center gap-1.5"
             >
-              <Clapperboard className="w-9 h-9 text-white/80" />
-              <span className="text-sm font-black text-white">🎥 Видео</span>
+              <Clapperboard className="w-8 h-8 text-white/80" />
+              <span className="text-sm font-black text-white">🎥 Снять видео</span>
+            </button>
+            <button
+              onClick={() => photoPick.current?.click()}
+              disabled={busy}
+              className="flex-1 h-16 rounded-2xl bg-white/5 border border-white/15 hover:bg-white/10 transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <ImagePlus className="w-5 h-5 text-white/70" />
+              <span className="text-[11px] font-black text-white/80 uppercase font-mono tracking-wider">Фото из галереи</span>
+            </button>
+            <button
+              onClick={() => videoPick.current?.click()}
+              disabled={busy}
+              className="flex-1 h-16 rounded-2xl bg-white/5 border border-white/15 hover:bg-white/10 transition-all cursor-pointer flex items-center justify-center gap-2"
+            >
+              <ImagePlus className="w-5 h-5 text-white/70" />
+              <span className="text-[11px] font-black text-white/80 uppercase font-mono tracking-wider">Видео из галереи</span>
             </button>
           </div>
 
@@ -112,10 +134,16 @@ return (
         </div>
       </motion.div>
 
-      {/* Скрытые инпуты: вызывают камеру на телефоне */}
+      {/* Скрытые инпуты. С capture="environment" телефон открывает камеру,
+          без него — обычный выбор файла, то есть медиатеку. Нужны оба входа:
+          снять сейчас и выложить снятое раньше. */}
       <input ref={photoInput} type="file" accept="image/*" capture="environment" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f, false); e.target.value = ''; }} />
       <input ref={videoInput} type="file" accept="video/*" capture="environment" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f, true); e.target.value = ''; }} />
+      <input ref={photoPick} type="file" accept="image/*" className="hidden"
+        onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f, false); e.target.value = ''; }} />
+      <input ref={videoPick} type="file" accept="video/*" className="hidden"
         onChange={(e) => { const f = e.target.files?.[0]; if (f) send(f, true); e.target.value = ''; }} />
     </div>
   );

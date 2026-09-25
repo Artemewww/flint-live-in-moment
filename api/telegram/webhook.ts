@@ -1514,6 +1514,18 @@ function featureOn(ev: any, key: 'food' | 'rides' | 'tents'): boolean {
   const v = ev?.notifications?.[`feat_${key}`];
   if (typeof v === 'boolean') return v;
   if (key === 'food') return ['active', 'male', 'mixed'].includes(ev?.type);
+  /**
+   * Однодневка — значит никто не ночует, и палатки предлагать незачем: на
+   * спортивном старте вроде «Бизон Рейс» вопрос «своя палатка?» выглядит
+   * издевательством. Правило применяем, ТОЛЬКО если дата окончания реально
+   * пришла в объекте: у части запросов date_end не выбран, и отсутствие поля
+   * нельзя путать с «ночёвки нет» — иначе у многодневки пропали бы палатки.
+   * Организатор перебивает это явным флагом feat_tents в карточке события.
+   */
+  if (key === 'tents' && ev && typeof ev === 'object' && 'date_end' in ev) {
+    const end = (ev as any).date_end;
+    if (!end || end === (ev as any).date) return false;
+  }
   return ev?.type !== 'intellectual';
 }
 function foodNeeded(ev: any) { return featureOn(ev, 'food'); }
