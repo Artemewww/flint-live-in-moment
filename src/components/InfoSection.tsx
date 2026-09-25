@@ -9,6 +9,8 @@ interface InfoSectionProps {
   events: CommunityEvent[];
   registeredEventIds: string[];
   onRegisterClick: (event: CommunityEvent) => void;
+  /** Пол смотрящего из профиля: без него пишем без рода, а не «записан(а)». */
+  viewerGender?: 'male' | 'female' | null;
   onOpenManifesto: () => void;
   onOpenDetails: (event: CommunityEvent) => void;
 }
@@ -16,7 +18,8 @@ interface InfoSectionProps {
 export default function InfoSection({ 
   events, 
   registeredEventIds,
-  onRegisterClick, 
+  onRegisterClick,
+  viewerGender = null,
   onOpenManifesto,
   onOpenDetails
 }: InfoSectionProps) {
@@ -172,23 +175,26 @@ export default function InfoSection({
           </div>
 
           {/* Action trigger row */}
-          <div className="flex flex-col sm:flex-row gap-3 pt-2 items-stretch sm:items-center">
+          <div className="flex flex-row gap-2 pt-2 items-stretch">
             {isRegistered ? (
               <button
                 onClick={() => onOpenDetails(featuredEvent)}
-                className="flex-1 bg-white/10 border border-brand/40 text-brand font-black uppercase text-xs sm:text-sm tracking-widest py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 group cursor-pointer active:scale-98"
+                className="flex-1 bg-white/10 border border-brand/40 text-brand font-black uppercase text-[11px] tracking-widest py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer active:scale-98"
                 id="hero-friendly-cta-btn"
               >
-                Ты записан(а) — открыть событие
+                {/* «Ты записан(а)» со скобкой читается как бланк из МФЦ. Пол
+                    берём из профиля, а если его в базе нет — формулировка без
+                    рода: «Ты едешь» подходит всем и не врёт. */}
+                {viewerGender === 'female' ? 'Ты записана' : viewerGender === 'male' ? 'Ты записан' : 'Ты едешь'}
                 <CheckCircle2 className="w-4 h-4 text-brand" />
               </button>
             ) : (
               <button
                 onClick={() => onRegisterClick(featuredEvent)}
-                className="flex-1 bg-brand hover:bg-brand-hover text-black font-black uppercase text-xs sm:text-sm tracking-widest py-3.5 px-6 rounded-2xl transition-all flex items-center justify-center gap-2 group cursor-pointer shadow-lg shadow-brand/10 border-none active:scale-98"
+                className="flex-1 bg-brand hover:bg-brand-hover text-black font-black uppercase text-[11px] tracking-widest py-2.5 px-4 rounded-xl transition-all flex items-center justify-center gap-2 group cursor-pointer shadow-lg shadow-brand/10 border-none active:scale-98"
                 id="hero-friendly-cta-btn"
               >
-                Занять свое место в кругу
+                Записаться
                 <Compass className="w-4 h-4 text-black group-hover:rotate-45 transition-transform duration-300" />
               </button>
             )}
@@ -196,20 +202,18 @@ export default function InfoSection({
             <button 
               type="button"
               onClick={() => onOpenDetails(featuredEvent)} 
-              className="flex-1 border border-white/25 hover:border-brand/50 bg-black/60 backdrop-blur-md text-white hover:text-brand px-6 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
+              className="flex-1 border border-white/25 hover:border-brand/50 bg-black/60 backdrop-blur-md text-white hover:text-brand px-4 py-2.5 rounded-xl text-[11px] font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
             >
-              Узнать подробнее
+              Подробнее
               <Info className="w-4 h-4 text-brand shrink-0" />
             </button>
 
-            <button 
-              type="button"
-              onClick={onOpenManifesto} 
-              className="border border-white/25 hover:border-brand/50 bg-black/60 backdrop-blur-md text-white hover:text-brand px-5 py-3.5 rounded-2xl text-xs font-bold uppercase tracking-widest font-mono transition-all cursor-pointer flex items-center justify-center gap-2"
-            >
-              Кодекс сообщества
-              <Heart className="w-3.5 h-3.5 text-rose-500 fill-rose-500" />
-            </button>
+            {/* Кнопка «Кодекс сообщества» убрана с главной: кодекс человек
+                принимает при вступлении и подтверждает по версиям, а на
+                афише он забирал треть строки действий у того, ради чего сюда
+                и приходят — записаться на ближайшее событие. Сам кодекс
+                никуда не делся: он в профиле и напоминанием в карточке
+                события. */}
           </div>
         </div>
       </div>

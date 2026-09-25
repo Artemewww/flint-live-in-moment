@@ -479,6 +479,73 @@ export default function EventDetailModal({
                   Чат события
                 </a>
               )}
+              {/* Навигация по самой странице: событие длинное, и до программы,
+                  подготовки или голосования люди просто не доскроливали.
+                  Плитка показывается, только если за ней реально что-то есть —
+                  ведущая в пустоту хуже отсутствующей. */}
+              {Boolean((event.logistics as any)?.prep || event.locationDetails) && (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('sect-prep')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">🎒</span>
+                  Как готовиться
+                </button>
+              )}
+              {needsCampingList && (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('sect-gear')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">🧰</span>
+                  Что взять
+                </button>
+              )}
+              {Boolean(event.programVoting?.enabled) && (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('sect-vote')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">🗳</span>
+                  Голосование
+                </button>
+              )}
+              {isRegistered && (event.myBuddies?.length || 0) > 0 && (
+                <button
+                  type="button"
+                  onClick={() => document.getElementById('sect-my')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">🤝</span>
+                  Мой бади
+                </button>
+              )}
+              {/* Снаряжение и задачи живут в кабинете, а нужны ровно здесь.
+                  Открываем вкладку событием, без перезагрузки приложения. */}
+              {isRegistered && (
+                <button
+                  type="button"
+                  onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('openProfileTab', { detail: { tab: 'overview' } })); }}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">📋</span>
+                  Задачи
+                </button>
+              )}
+              {isRegistered && (
+                <button
+                  type="button"
+                  onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('openProfileTab', { detail: { tab: 'gear' } })); }}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">🎽</span>
+                  Снаряжение
+                </button>
+              )}
+
               {/* Плитка «Бот» убрана: человек УЖЕ в приложении, и отправлять
                   его обратно в бота незачем — всё, ради чего он туда ходил,
                   теперь здесь. Бот остаётся каналом уведомлений. */}
@@ -636,6 +703,7 @@ export default function EventDetailModal({
               </div>
             </div>
 
+            <div id="sect-my" className="scroll-mt-4" />
             {/* Твоё участие: где и во сколько выезд — записавшимся.
                 Дословная жалоба: «Я уже вроде записалась. Как мне теперь
                 найти, с кем я, где и во сколько выезд?». Точка сбора и время
@@ -963,6 +1031,7 @@ export default function EventDetailModal({
               </p>
             </div>
 
+            <div id="sect-gear" className="scroll-mt-4" />
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек
                 дома, брать с собой нечего — и чек-лист кемпинга тем более. */}
             {needsCampingList && (
@@ -1037,6 +1106,7 @@ export default function EventDetailModal({
               </div>
             </div>
 
+            <div id="sect-prep" className="scroll-mt-4" />
             {/* Detailed Rules & Preparation — только зарегистрированным (гейтинг локации) */}
             {isRegistered && event.locationDetails && (
               <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-2">
@@ -1047,6 +1117,7 @@ export default function EventDetailModal({
               </div>
             )}
 
+            <div id="sect-vote" className="scroll-mt-4" />
             {/* Program Voting */}
             <ProgramVoting
               event={event}

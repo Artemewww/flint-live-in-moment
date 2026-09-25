@@ -269,6 +269,8 @@ export default function App() {
   const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [fundraiserSlug] = useState<string>(() => new URLSearchParams(window.location.search).get('fund') || '');
+  /** Пол смотрящего: интерфейс пишет «записан»/«записана», а не скобку. */
+  const [viewerGender, setViewerGender] = useState<'male' | 'female' | null>(null);
   const [isCoreUser, setIsCoreUser] = useState<boolean>(false);
   const [applySent, setApplySent] = useState<boolean>(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -451,6 +453,7 @@ export default function App() {
         // шапке у всех («всегда виден»), и обычный участник видел вход в
         // панель, которая ему не принадлежит.
         setIsCoreUser(!!p && !!p.isCore);
+        setViewerGender((p && p.gender) || null);
         // Костяк не блокируется; для остальных статус 'blocked' закрывает афишу.
         setBanned(!!p && p.status === 'blocked' && !p.isCore);
       })
@@ -591,6 +594,23 @@ export default function App() {
     window.addEventListener('openPoster', handleOpenPoster);
     return () => window.removeEventListener('openPoster', handleOpenPoster);
   }, [events]);
+
+  /**
+   * Открыть вкладку кабинета из карточки события, не перезагружая страницу.
+   * Снаряжение и задачи живут в кабинете, а нужны человеку ровно тогда, когда
+   * он смотрит событие. Раньше туда вела только ссылка `?open=…` из бота —
+   * то есть выход из приложения и вход обратно.
+   */
+  useEffect(() => {
+    const handler = (e: any) => {
+      const tab = e?.detail?.tab;
+      if (!tab) return;
+      setProfileTab(tab);
+      setShowUserStats(true);
+    };
+    window.addEventListener('openProfileTab', handler);
+    return () => window.removeEventListener('openProfileTab', handler);
+  }, []);
 
   // Save registration state to localStorage on update
   const saveToLocalStorage = (ids: string[], regs: Registration[]) => {
@@ -1205,6 +1225,7 @@ export default function App() {
                 events={events}
                 registeredEventIds={registeredEventIds}
                 onRegisterClick={(evt) => setRegisteringEvent(evt)}
+                viewerGender={viewerGender}
                 onOpenManifesto={() => setShowManifestoModal(true)}
                 onOpenDetails={(evt) => setActiveDetailEvent(evt)}
               />
