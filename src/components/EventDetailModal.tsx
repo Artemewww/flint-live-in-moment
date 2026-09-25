@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
-} from 'lucide-react';
+, UserPlus} from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
@@ -293,6 +293,28 @@ export default function EventDetailModal({
         className="bg-[#121212] md:rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white"
         id="detail-card-panel"
       >
+        {/* Пригласить друга — иконкой рядом с крестиком.
+            Отдельная плитка «Позвать» занимала целую клетку бенто-сетки, а в
+            блоке «Твоё участие» жила ВТОРАЯ кнопка с тем же действием. Одно
+            действие — один элемент, и тот в углу, где ему и место. */}
+        <button
+          type="button"
+          onClick={() => {
+            const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'campsflint_bot'}?start=ev_${event.id}`;
+            const text = `Еду на «${event.title}» с FLINT. Присоединяйся!`;
+            const tgApp = (window as any).Telegram?.WebApp;
+            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
+            haptic('success');
+            if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
+            else if (navigator.share) navigator.share({ text: `${text} ${link}` }).catch(() => {});
+            else { navigator.clipboard?.writeText(link); alert('Ссылка на событие скопирована'); }
+          }}
+          className="absolute top-4 right-[4.25rem] z-30 p-2.5 rounded-full bg-black/60 border border-white/10 hover:border-brand/40 text-white/70 hover:text-[#E6FD3A] hover:scale-105 transition-all outline-none cursor-pointer"
+          title="Пригласить друга"
+        >
+          <UserPlus className="w-5 h-5" />
+        </button>
+
         {/* Floating Close Button */}
         <button
           onClick={onClose}
@@ -457,23 +479,6 @@ export default function EventDetailModal({
                   Чат события
                 </a>
               )}
-              {isRegistered && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'campsflint_bot'}?start=ev_${event.id}`;
-                    const tgApp = (window as any).Telegram?.WebApp;
-                    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Еду на «${event.title}» с FLINT. Присоединяйся!`)}`;
-                    if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
-                    else if (navigator.share) navigator.share({ text: `Еду на «${event.title}» с FLINT. ${link}` }).catch(() => {});
-                    else { navigator.clipboard?.writeText(link); alert('Ссылка скопирована'); }
-                  }}
-                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
-                >
-                  <span className="text-base leading-none">📤</span>
-                  Позвать
-                </button>
-              )}
               {/* Плитка «Бот» убрана: человек УЖЕ в приложении, и отправлять
                   его обратно в бота незачем — всё, ради чего он туда ходил,
                   теперь здесь. Бот остаётся каналом уведомлений. */}
@@ -492,10 +497,17 @@ export default function EventDetailModal({
                 плитки, которые должны читаться одним взглядом, а не занимать
                 четыре экрана столбиком. Отступы и кегль поджаты под узкий
                 экран. */}
-            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-start
+            {/* Бенто: слева высокая плитка с датой, справа стопкой локация и
+                состояние мест — они про одно решение («еду ли я»), и разносить
+                их по разным углам было нелогично. Взнос и организатор — во всю
+                ширину внизу: одна строка текста не должна занимать половину
+                сетки и оставлять дыру рядом.
+                grid-flow-dense досыпает узкие плитки в свободные клетки справа
+                от даты, поэтому порядок в разметке менять не пришлось. */}
+            <div className="grid grid-cols-2 grid-flow-row-dense gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-start
                             [&>div]:p-3 sm:[&>div]:p-4 [&>div]:min-w-0 [&>div]:overflow-hidden
                             [&>div>div]:min-w-0 [&>div>div]:break-words [&>div]:gap-2 sm:[&>div]:gap-3">
-              <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
+              <div className="row-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Calendar className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">ДАТА И ВРЕМЯ проведения</span>
@@ -520,7 +532,7 @@ export default function EventDetailModal({
               {/* Кто ведёт событие — участник должен знать это до записи,
                   а не выяснять в переписке. */}
               {event.organizerName && (
-                <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
+                <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                   <Users className="w-5 h-5 text-brand shrink-0" />
                   <div className="space-y-1 text-left">
                     <span className="text-white/40 uppercase text-[9px] tracking-wider block font-bold">Организатор события</span>
@@ -573,7 +585,7 @@ export default function EventDetailModal({
                 </div>
               )}
 
-              <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
+              <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Tag className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider block">УСЛОВИЯ УЧАСТИЯ</span>
@@ -635,25 +647,10 @@ export default function EventDetailModal({
                   <Check className="w-4 h-4" /> Твоё участие
                 </span>
 
-                {/* Позвать своих — прямо там, где человек только что записался.
-                    Раньше приглашение жило только в афише-постере внизу карточки,
-                    и его никто не находил. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'flint_live_bot'}?start=ev_${event.id}`;
-                    const text = `Еду на «${event.title}» с FLINT. Присоединяйся: ${link}`;
-                    const tgApp = (window as any).Telegram?.WebApp;
-                    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Еду на «${event.title}» с FLINT. Присоединяйся!`)}`;
-                    if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
-                    else if (navigator.share) navigator.share({ text }).catch(() => {});
-                    else { navigator.clipboard?.writeText(text); alert('Ссылка на событие скопирована'); }
-                  }}
-                  className="w-full bg-white/5 border border-white/10 text-white py-3 rounded-xl text-[11px] font-bold uppercase tracking-widest hover:bg-white/10 transition-colors cursor-pointer font-mono flex items-center justify-center gap-2"
-                >
-                  <Share2 className="w-4 h-4" />
-                  Позвать своих на событие
-                </button>
+                {/* Кнопка «Позвать своих» убрана: то же действие уже живёт
+                    иконкой у крестика наверху. Две кнопки под одно действие на
+                    одной странице — это не забота, а сомнение в том, что
+                    первая работает. */}
 
                 {event.logistics?.assemblyPoint ? (
                   <div className="flex flex-wrap items-start justify-between gap-3">
