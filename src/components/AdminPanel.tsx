@@ -1330,7 +1330,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audienceQuery, setAudienceQuery] = useState('');
   /** Фильтр аудитории по категории. `botoff` — кто остановил бота: им не дойдёт
    *  ни одна рассылка, и это нужно видеть отдельно, а не гадать после отправки. */
-  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules'>('all');
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules' | 'nodata'>('all');
   /** Сортировка аудитории. `newest`/`oldest` — по дате входа в клуб («сколько дней с нами»). */
   // По умолчанию — СНАЧАЛА НОВЫЕ. Дефолт «по баллам» прятал только что
   // принятого человека в середину списка из 68: у новичка 0 баллов, как и у
@@ -1691,6 +1691,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       // Кто не принял кодекс: правила принимаются при записи, а до записи
       // доходят не все — таких надо видеть и дожимать адресно.
       if (audienceFilter === 'norules' && m.rulesAccepted) return false;
+      // «Без анкеты» — нет пола ИЛИ даты рождения. Телефон не считаем
+      // обязательным: его человек вправе не давать, а пол и возраст нужны
+      // для состава выездов и событий 18+.
+      if (audienceFilter === 'nodata' && m.gender && m.birthday) return false;
       if (q && !((m.firstName || '').toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q))) return false;
       return true;
     });
@@ -2106,6 +2110,33 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
    * отметка ставится только когда человек сам нажмёт «Принимаю» в боте.
    */
   const [rulesSending, setRulesSending] = useState(false);
+  /**
+   * Дожать анкету: пол, дата рождения, телефон.
+   * Половина базы записана без этих данных — регистрация их не требовала.
+   * Без пола нельзя собрать выезд по составу, без даты рождения — ни
+   * поздравить, ни подтвердить возраст на событии 18+.
+   */
+  const [profileSending, setProfileSending] = useState(false);
+  const askProfileOf = async (ids: number[]) => {
+    if (!ids.length || profileSending) return;
+    setProfileSending(true);
+    try {
+      const res = await adminFetch('/api/admin/registrations?action=ask_profile', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramIds: ids }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      setActionMsg({
+        ok: !!j.ok,
+        text: j.ok
+          ? `Анкета отправлена ${j.sent} из ${j.total}${j.failed ? ` · ${j.failed} не дошло (бот остановлен)` : ''}`
+          : (j.error || 'Не удалось отправить'),
+      });
+    } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+    finally { setProfileSending(false); }
+  };
+
   const sendRulesToFiltered = async () => {
     const ids = visibleAudience().map((m: any) => Number(m.telegramId)).filter((n: number) => n > 0);
     if (!ids.length || rulesSending) return;
@@ -4392,7 +4423,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
                   />
                   <div className="flex flex-wrap gap-2">
-                    {([['all', 'Все'], ['core', 'Костяк'], ['norules', '📜 Без правил'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
+                    {([['all', 'Все'], ['core', 'Костяк'], ['norules', '📜 Без правил'], ['nodata', '📇 Без анкеты'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"
@@ -4406,6 +4437,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   {/* Дожать кодекс: список тех, кто не принял, и отправка им
                       правил кнопкой. Повторять можно сколько угодно — пока
                       человек не нажмёт «Принимаю» в боте. */}
+                  {audienceFilter === 'nodata' && (
+                    <div className="bg-sky-500/10 border border-sky-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] text-sky-200">
+                        Без пола или даты рождения: <b>{visibleAudience().length}</b>. Клуб не знает, кого зовёт на выезды.
+                      </span>
+                      <button
+                        onClick={() => askProfileOf(visibleAudience().map((m: any) => Number(m.telegramId)).filter((n: number) => n > 0))}
+                        disabled={profileSending || visibleAudience().length === 0}
+                        className="text-[10px] px-3 py-1.5 rounded-lg bg-brand text-black font-black uppercase cursor-pointer border-none disabled:opacity-40"
+                      >
+                        {profileSending ? 'Отправляю…' : `📇 Спросить анкету (${visibleAudience().length})`}
+                      </button>
+                    </div>
+                  )}
                   {audienceFilter === 'norules' && (
                     <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[11px] text-amber-200">
@@ -4454,6 +4499,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             <span className="font-bold text-sm">{m.firstName || 'Без имени'}</span>
                             {m.username && <span className="text-[10px] text-white/50 font-mono">@{m.username}</span>}
                             {m.isCore && <span className="text-[9px] bg-brand/20 text-brand px-1.5 py-0.5 rounded font-mono">костяк</span>}
+                            {/* Чего не хватает в анкете — видно сразу в строке,
+                                а не «зайди в профиль и посмотри». Пол и дата
+                                рождения нужны клубу; телефон — по желанию
+                                человека, поэтому он отдельной, тихой меткой. */}
+                            {!m.gender && <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-mono">нет пола</span>}
+                            {!m.birthday && <span className="text-[9px] bg-sky-500/20 text-sky-300 px-1.5 py-0.5 rounded font-mono">нет д.р.</span>}
+                            {!m.phone && <span className="text-[9px] bg-white/10 text-white/40 px-1.5 py-0.5 rounded font-mono">нет тел.</span>}
+                            {(!m.gender || !m.birthday || !m.phone) && (
+                              <button
+                                type="button"
+                                onClick={() => askProfileOf([Number(m.telegramId)])}
+                                disabled={profileSending}
+                                className="text-[9px] bg-sky-500/15 text-sky-200 hover:bg-sky-500/25 px-1.5 py-0.5 rounded font-mono cursor-pointer border-none disabled:opacity-40"
+                                title="Отправить человеку анкету в бот"
+                              >
+                                📇 спросить
+                              </button>
+                            )}
                             {(() => {
                               // Новичок недели — чтобы принятый вчера человек
                               // был виден сразу, а не искался поиском по имени.
@@ -4981,7 +5044,15 @@ function EditEventModal({ event, onClose, onSave }: {
       const j = await res.json();
       if (j.ok && j.url) {
         setFormData((prev: any) => ({ ...prev, image: j.url }));
-        setCoverNote({ ok: true, text: `Обложка готова (${Math.round((j.bytes || 0) / 1024)} КБ) — она уже подставлена в поле выше.` });
+        setCoverNote({
+          ok: true,
+          // Чем нарисовано — важно: у бесплатного генератора качество ниже, и
+          // организатор должен понимать, почему кадр проще ожидаемого, а не
+          // гадать, «что с ИИ не так».
+          text: j.source === 'free'
+            ? `Обложка готова (${Math.round((j.bytes || 0) / 1024)} КБ), нарисована бесплатным генератором — у ключа Gemini не оплачены картинки. Качество ниже; если кадр не нравится, нажми ещё раз или вставь своё фото.`
+            : `Обложка готова (${Math.round((j.bytes || 0) / 1024)} КБ) — она уже подставлена в поле выше.`,
+        });
       } else {
         setCoverNote({ ok: false, text: j.error || 'Не получилось сгенерировать обложку' });
       }

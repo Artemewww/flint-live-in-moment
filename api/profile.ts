@@ -362,7 +362,7 @@ export default async function handler(req: any, res: any) {
 
       const { data: me } = await supabase
         .from('members')
-        .select('telegram_id,username,first_name,status,is_core,role,points')
+        .select('telegram_id,username,first_name,status,is_core,role,points,gender,birthday,phone')
         .eq('telegram_id', user.id)
         .maybeSingle();
 
@@ -381,6 +381,12 @@ export default async function handler(req: any, res: any) {
           isCore: !!me?.is_core,
           role: me?.role || 'member',
           points: me?.points || 0,
+          // Пол и дата рождения нужны интерфейсу: без пола приходится писать
+          // «записан(а)» скобкой, а без даты рождения не посчитать возраст —
+          // а он у клуба обязателен, событиям 18+ иначе не с чем сверяться.
+          gender: (me as any)?.gender || null,
+          birthday: (me as any)?.birthday || null,
+          hasPhone: Boolean((me as any)?.phone),
           refCode,
           refLink: refCode ? `https://t.me/${BOT_USERNAME}?start=ref_${refCode}` : null,
           referralsCount: count || 0,

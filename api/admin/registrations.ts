@@ -304,6 +304,60 @@ export default async function handler(req: any, res: any) {
    * членов до записи так и не дошли — правил они не видели. Организатору нужно
    * уметь послать их адресно и повторять, пока человек не нажмёт «Принимаю».
    */
+  /**
+   * ДОЖАТЬ АНКЕТУ УЧАСТНИКА: пол, дата рождения, телефон.
+   *
+   * В базе десятки людей без этих данных — регистрация их никогда не
+   * требовала. Из-за этого клуб не знает, кто к нему ездит: нельзя отличить
+   * мужской выезд от смешанного, нельзя поздравить с днём рождения, нельзя
+   * подтвердить совершеннолетие на событии 18+ и некуда позвонить, если
+   * человек не вышел на связь на маршруте.
+   *
+   * Спрашиваем по одному вопросу за раз (обработчик pfill в вебхуке): анкета
+   * на три экрана в мессенджере не заполняется, её закрывают.
+   */
+  if (req.method === 'POST' && req.query?.action === 'ask_profile') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const ids = (Array.isArray(body.telegramIds) ? body.telegramIds : [])
+        .map((v: unknown) => Number(v))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+      if (!ids.length) return res.status(400).json({ error: 'Не выбран ни один участник' });
+      const BOT = process.env.TELEGRAM_BOT_TOKEN || '';
+      if (!BOT) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
+
+      const text =
+        '📇 <b>Пара вопросов о тебе</b>\n\n' +
+        'Клуб до сих пор не знает о тебе базовых вещей, и из-за этого:\n' +
+        '• нельзя позвать тебя на выезд, где состав по полу;\n' +
+        '• некому поздравить тебя с днём рождения;\n' +
+        '• на событиях 18+ нечем подтвердить возраст;\n' +
+        '• если ты не вышел на связь на маршруте — некуда позвонить.\n\n' +
+        'Это три коротких вопроса, меньше минуты. ' +
+        'Данные видит только костяк клуба и использует их ровно для этого — ' +
+        'ни рекламы, ни передачи третьим лицам. Передумаешь — скажи, и мы их удалим.';
+
+      let sent = 0;
+      const failed: number[] = [];
+      for (const id of ids) {
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: id, parse_mode: 'HTML', text, disable_web_page_preview: true,
+              reply_markup: { inline_keyboard: [[{ text: '📇 Ответить (минута)', callback_data: 'pfill' }]] },
+            }),
+          });
+          const j = await r.json();
+          if (j?.ok) sent++; else failed.push(id);
+        } catch { failed.push(id); }
+      }
+      return res.status(200).json({ ok: sent > 0, sent, total: ids.length, failed: failed.length });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   if (req.method === 'POST' && req.query?.action === 'send_rules') {
     try {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
