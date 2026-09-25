@@ -869,6 +869,273 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, events: result });
     }
 
+    /**
+     * ═══ ЛОГИСТИКА В MINI APP ═══
+     * Машины, палатки, брони и попутки жили ТОЛЬКО в боте: кнопка в карточке
+     * события вела «🚗 Кто едет, попутки и брони — в боте», и дальше человек
+     * листал ленту сообщений, где каждая машина — отдельное сообщение, а
+     * состояние устаревало сразу после отправки. Владелец: «через бота это
+     * очень неудобно». Теперь то же самое живёт в приложении и обновляется
+     * на месте, а бот остаётся каналом уведомлений — как и задумано с 28.08.
+     *
+     * Все действия идут под подписанной initData: чужим именем место не занять.
+     */
+    if (typeof action === 'string' && action.startsWith('logi_')) {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+
+      /** Уведомление в бот — best-effort: логистика не должна падать из-за Telegram. */
+      const notify = async (chatId: number | string, text: string, markup?: unknown) => {
+        if (!BOT_TOKEN || !chatId) return;
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: markup }),
+          });
+        } catch { /* no-op */ }
+      };
+      /** Активна ли у человека заявка на событие: бронировать может только едущий. */
+      const isRegistered = async (evId: string): Promise<boolean> => {
+        const { data } = await supabase.from('registrations').select('id')
+          .eq('event_id', evId).eq('telegram_id', user.id).neq('status', 'cancelled').maybeSingle();
+        return Boolean(data);
+      };
+      const rideById = async (rideId: number) => {
+        const { data } = await supabase.from('rides').select('*').eq('id', rideId).maybeSingle();
+        return data as any;
+      };
+
+      // ── Состояние: один запрос, из которого приложение рисует весь экран ──
+      if (action === 'logi_state') {
+        const evId = String(body.eventId || '');
+        if (!evId) return res.status(200).json({ ok: false, error: 'no-event' });
+
+        const [{ data: ev }, { data: allRides }, { data: reqs }, registered] = await Promise.all([
+          supabase.from('events').select('id,title,logistics,time').eq('id', evId).maybeSingle(),
+          supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at'),
+          supabase.from('ride_requests').select('passenger_id,passenger_name,from_area').eq('event_id', evId).eq('active', true),
+          isRegistered(evId),
+        ]);
+
+        const rideIds = (allRides || []).map((r: any) => r.id);
+        const { data: books } = rideIds.length
+          ? await supabase.from('ride_bookings').select('ride_id,passenger_id,passenger_name').in('ride_id', rideIds)
+          : { data: [] as any[] };
+
+        // Ник и телефон водителя — только тем, кто реально едет в этой машине.
+        // Контакты остальных в приложение не отдаём: доступ к человеку даёт
+        // общая поездка, а не просмотр списка.
+        const myRideIds = new Set((books || []).filter((b: any) => Number(b.passenger_id) === user.id).map((b: any) => b.ride_id));
+        const driverIds = Array.from(new Set((allRides || []).map((r: any) => Number(r.driver_id)).filter((n) => n > 0)));
+        const drv = new Map<number, any>();
+        if (driverIds.length) {
+          const { data: dm } = await supabase.from('members').select('telegram_id,username,phone').in('telegram_id', driverIds);
+          for (const m of dm || []) drv.set(Number((m as any).telegram_id), m);
+        }
+
+        const shape = (r: any) => {
+          const seatsTotal = Number(r.seats_total) || 0;
+          const seatsTaken = Number(r.seats_taken) || 0;
+          const iAmIn = myRideIds.has(r.id);
+          const isMine = Number(r.driver_id) === user.id;
+          const d = drv.get(Number(r.driver_id));
+          return {
+            id: r.id,
+            kind: r.kind === 'tent' ? 'tent' : 'car',
+            driverId: Number(r.driver_id),
+            driverName: r.driver_name || 'Водитель',
+            // Контакты — только своим попутчикам и самому водителю.
+            driverUsername: (iAmIn || isMine) ? (d?.username || '') : '',
+            driverPhone: (iAmIn || isMine) ? (d?.phone || '') : '',
+            seatsTotal, seatsTaken,
+            free: Math.max(0, seatsTotal - seatsTaken),
+            fromPoint: r.from_point || '',
+            departText: r.depart_text || '',
+            fuelCost: Number(r.fuel_cost) || 0,
+            isMine, iAmIn,
+            passengers: (books || []).filter((b: any) => b.ride_id === r.id)
+              .map((b: any) => ({ name: b.passenger_name || 'Участник', isMe: Number(b.passenger_id) === user.id })),
+          };
+        };
+
+        const shaped = (allRides || []).map(shape);
+        return res.status(200).json({
+          ok: true,
+          registered,
+          event: {
+            id: evId,
+            title: (ev as any)?.title || '',
+            assemblyPoint: ((ev as any)?.logistics || {}).assemblyPoint || '',
+            departureTime: ((ev as any)?.logistics || {}).departureTime || (ev as any)?.time || '',
+          },
+          cars: shaped.filter((r: any) => r.kind === 'car'),
+          tents: shaped.filter((r: any) => r.kind === 'tent'),
+          seekers: (reqs || []).map((r: any) => ({
+            name: r.passenger_name || 'Участник',
+            fromArea: r.from_area || '',
+            isMe: Number(r.passenger_id) === user.id,
+          })),
+          meSeeking: (reqs || []).some((r: any) => Number(r.passenger_id) === user.id),
+        });
+      }
+
+      // ── Занять место ──────────────────────────────────────────────────────
+      if (action === 'logi_book') {
+        const ride = await rideById(Number(body.rideId));
+        if (!ride || !ride.active) return res.status(200).json({ ok: false, error: 'Поездка недоступна' });
+        if (!(await isRegistered(ride.event_id))) {
+          return res.status(200).json({ ok: false, error: 'Сначала запишись на событие' });
+        }
+        const name = user.first_name || user.username || 'Пассажир';
+        // Захват места атомарный (RPC): иначе двое одновременно сядут на одно.
+        const { data: outcome, error } = await supabase.rpc('book_ride_seat', {
+          p_ride_id: ride.id, p_passenger: user.id, p_name: name,
+        });
+        if (error || outcome !== 'ok') {
+          const why = outcome === 'dup' ? 'Ты уже в этой машине'
+            : outcome === 'full' ? 'Мест уже нет'
+            : outcome === 'gone' ? 'Поездка отменена'
+            : 'Не получилось забронировать';
+          return res.status(200).json({ ok: false, error: why });
+        }
+        // Сел в машину → снимаем его «нужна попутка», чтобы не висел в списке ищущих.
+        await supabase.from('ride_requests').update({ active: false })
+          .eq('event_id', ride.event_id).eq('passenger_id', user.id);
+
+        const { data: paxInfo } = await supabase.from('members').select('phone').eq('telegram_id', user.id).maybeSingle();
+        await notify(ride.driver_id,
+          `🧍 <b>К тебе в машину сел ${escHtml(name)}</b>${user.username ? ` @${escHtml(user.username)}` : ''}\n` +
+          ((paxInfo as any)?.phone ? `📞 <code>${escHtml(String((paxInfo as any).phone))}</code>\n` : '') +
+          `\nЗабронировал место через приложение.`);
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Освободить своё место ────────────────────────────────────────────
+      if (action === 'logi_unbook') {
+        const ride = await rideById(Number(body.rideId));
+        if (!ride) return res.status(200).json({ ok: false, error: 'Поездка не найдена' });
+        const { data: outcome } = await supabase.rpc('cancel_ride_seat', { p_ride_id: ride.id, p_passenger: user.id });
+        if (outcome !== 'ok') return res.status(200).json({ ok: false, error: 'Ты не занимал место в этой машине' });
+        await notify(ride.driver_id,
+          `🚗 <b>${escHtml(user.first_name || 'Участник')}</b> освободил место в твоей машине. Место снова свободно.`);
+        // Место освободилось — зовём первого из очереди «нужна попутка».
+        const { data: queue } = await supabase.from('ride_requests')
+          .select('passenger_id,passenger_name').eq('event_id', ride.event_id).eq('active', true)
+          .order('created_at', { ascending: true }).limit(1);
+        for (const q of queue || []) {
+          await notify((q as any).passenger_id,
+            `🚗 <b>Освободилось место</b> у ${escHtml(ride.driver_name || 'водителя')} (${escHtml(ride.from_point || 'точка по договорённости')}).\n\nОткрой приложение — займи, пока свободно.`);
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Заявить свою машину или палатку ──────────────────────────────────
+      if (action === 'logi_offer') {
+        const evId = String(body.eventId || '');
+        if (!evId) return res.status(200).json({ ok: false, error: 'no-event' });
+        if (!(await isRegistered(evId))) {
+          return res.status(200).json({ ok: false, error: 'Сначала запишись на событие' });
+        }
+        const kind = body.kind === 'tent' ? 'tent' : 'car';
+        /**
+         * Мест не может быть 8980 — а именно столько уехало в базу, когда в
+         * поле свободных мест оказалось не то число. Режем по здравому смыслу.
+         */
+        const seats = Math.max(0, Math.min(8, Math.trunc(Number(body.seats) || 0)));
+        const { data: ev } = await supabase.from('events').select('logistics').eq('id', evId).maybeSingle();
+        const fromPoint = String(body.fromPoint || '').slice(0, 120).trim()
+          || String(((ev as any)?.logistics || {}).assemblyPoint || '').trim()
+          || 'по договорённости';
+        const departText = String(body.departText || '').slice(0, 60).trim() || 'по договорённости';
+
+        // Одна активная машина и одна палатка на человека: повтор = правка,
+        // иначе в списке плодятся дубли одной и той же машины.
+        const { data: existing } = await supabase.from('rides').select('id,kind')
+          .eq('event_id', evId).eq('driver_id', user.id).eq('active', true);
+        const same = (existing || []).find((r: any) => (r.kind === 'tent') === (kind === 'tent'));
+        const row: Record<string, unknown> = {
+          event_id: evId, driver_id: user.id,
+          driver_name: user.first_name || user.username || (kind === 'tent' ? 'Хозяин палатки' : 'Водитель'),
+          from_point: fromPoint, depart_text: departText, seats_total: seats, kind, active: true,
+        };
+        if (same) await supabase.from('rides').update(row).eq('id', (same as any).id);
+        else await supabase.from('rides').insert(row);
+
+        // Ищущим попутку — сразу в бот: ради этого они и оставляли заявку.
+        if (kind === 'car' && seats > 0) {
+          const { data: seekers } = await supabase.from('ride_requests')
+            .select('passenger_id').eq('event_id', evId).eq('active', true);
+          for (const s of seekers || []) {
+            if (Number((s as any).passenger_id) === user.id) continue;
+            await notify((s as any).passenger_id,
+              `🚗 <b>Появилась машина</b>: ${escHtml(String(row.driver_name))} из «${escHtml(fromPoint)}» (${escHtml(departText)}), мест: <b>${seats}</b>.\n\nОткрой приложение — займи место.`);
+          }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Отменить свою поездку ────────────────────────────────────────────
+      if (action === 'logi_cancel') {
+        const ride = await rideById(Number(body.rideId));
+        if (!ride) return res.status(200).json({ ok: false, error: 'Поездка не найдена' });
+        if (Number(ride.driver_id) !== user.id) {
+          return res.status(200).json({ ok: false, error: 'Отменить поездку может только её водитель' });
+        }
+        await supabase.from('rides').update({ active: false }).eq('id', ride.id);
+        // Пассажиров предупреждаем поимённо: иначе человек узнает об отмене на
+        // точке сбора, когда машина не приедет.
+        const { data: pax } = await supabase.from('ride_bookings').select('passenger_id').eq('ride_id', ride.id);
+        for (const p of pax || []) {
+          await notify((p as any).passenger_id,
+            `⚠️ <b>${escHtml(ride.driver_name || 'Водитель')} отменил поездку</b>, на которую ты записался.\n\nОткрой приложение — поищи другую машину или оставь заявку «нужна попутка».`);
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Нужна попутка ────────────────────────────────────────────────────
+      if (action === 'logi_seek') {
+        const evId = String(body.eventId || '');
+        if (!evId) return res.status(200).json({ ok: false, error: 'no-event' });
+        if (!(await isRegistered(evId))) {
+          return res.status(200).json({ ok: false, error: 'Сначала запишись на событие' });
+        }
+        // Повторное нажатие снимает заявку: кнопка в приложении одна и та же.
+        if (body.off === true) {
+          await supabase.from('ride_requests').update({ active: false })
+            .eq('event_id', evId).eq('passenger_id', user.id);
+          return res.status(200).json({ ok: true });
+        }
+        await supabase.from('ride_requests').upsert({
+          event_id: evId, passenger_id: user.id,
+          passenger_name: user.first_name || user.username || 'Пассажир',
+          from_area: String(body.fromArea || '').slice(0, 120) || null,
+          active: true,
+        }, { onConflict: 'event_id,passenger_id' });
+
+        const { data: rides } = await supabase.from('rides')
+          .select('driver_id,seats_total,seats_taken,kind').eq('event_id', evId).eq('active', true);
+        const free = (rides || []).filter((r: any) => r.kind !== 'tent' && Number(r.seats_total || 0) > Number(r.seats_taken || 0));
+        for (const d of Array.from(new Set(free.map((r: any) => Number(r.driver_id))))) {
+          if (d === user.id) continue;
+          await notify(d, `🚶 <b>${escHtml(user.first_name || 'Участник')}</b> ищет попутку${body.fromArea ? `, забрать: ${escHtml(String(body.fromArea).slice(0, 80))}` : ''}.\n\nУ тебя есть свободные места — подхватишь?`);
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // ── Встать в очередь на машину, где мест нет ─────────────────────────
+      if (action === 'logi_wait') {
+        const ride = await rideById(Number(body.rideId));
+        if (!ride || !ride.active) return res.status(200).json({ ok: false, error: 'Поездка недоступна' });
+        await supabase.from('ride_requests').upsert({
+          event_id: ride.event_id, passenger_id: user.id,
+          passenger_name: user.first_name || user.username || 'Пассажир', active: true,
+        }, { onConflict: 'event_id,passenger_id' });
+        return res.status(200).json({ ok: true });
+      }
+
+      return res.status(200).json({ ok: false, error: 'unknown-logi-action' });
+    }
+
     // === APPLY (заявка на вступление — ТОЛЬКО через Telegram) ===
     if (action === 'apply') {
       const { firstName, lastName, phone, sourceHint } = body;
