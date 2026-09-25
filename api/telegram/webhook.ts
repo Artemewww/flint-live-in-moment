@@ -6025,6 +6025,42 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * АНКЕТА УЧАСТНИКА — старт.
+       * Половина базы записана без пола, даты рождения и телефона: анкета
+       * регистрации их никогда не требовала. Спрашиваем по одному вопросу,
+       * каждый ответ пишем сразу.
+       */
+      if (data === 'pfill') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '1/3 · <b>Пол</b>\n\nНужен для выездов, где состав по полу (мужской круг, женский круг) и для расселения по палаткам.',
+          reply_markup: kb([[
+            { text: '👨 Мужской', callback_data: 'pfsex_male' },
+            { text: '👩 Женский', callback_data: 'pfsex_female' },
+          ]]),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      if (data.startsWith('pfsex_')) {
+        const gender = data.slice('pfsex_'.length) === 'female' ? 'female' : 'male';
+        // Колонки gender может не быть, если миграция 2026-member-gender.sql
+        // не накатана — тогда честно говорим, а не молчим с видом успеха.
+        const { error: gErr } = await supabase.from('members').update({ gender }).eq('telegram_id', tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: gErr ? 'Не сохранилось' : 'Записал' });
+        if (gErr) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Не смог сохранить — сообщи костяку, у них не применена миграция базы.' });
+          return res.status(200).json({ ok: true });
+        }
+        await setSession(tgId, 'profile_bday', {});
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: '2/3 · <b>Дата рождения</b>\n\nНапиши цифрами, например <b>12.05.1990</b>.\n\nНужна для двух вещей: поздравить тебя от круга и подтвердить возраст на событиях 18+.',
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('logi_')) {
         const evId = data.slice('logi_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -6921,6 +6957,17 @@ export default async function handler(req: any, res: any) {
         });
         return res.status(200).json({ ok: true });
       }
+      // Последний шаг анкеты участника: телефон кнопкой.
+      if (sess?.state === 'profile_phone') {
+        await supabase.from('members').update({ phone: msg.contact.phone_number }).eq('telegram_id', msg.from.id);
+        await clearSession(msg.from.id);
+        await tg('sendMessage', {
+          chat_id: msg.chat.id, parse_mode: 'HTML',
+          text: '✅ Спасибо, всё записал. Теперь клуб знает, кого зовёт на выезды — и не забудет поздравить тебя с днём рождения.',
+          reply_markup: { remove_keyboard: true },
+        });
+        return res.status(200).json({ ok: true });
+      }
       // Контакт вне сценария — просто сохраняем телефон.
       await supabase.from('members').update({ phone: msg.contact.phone_number }).eq('telegram_id', msg.from.id);
       await tg('sendMessage', { chat_id: msg.chat.id, text: '✅ Телефон сохранён.', reply_markup: mainMenu() });
@@ -7692,6 +7739,51 @@ export default async function handler(req: any, res: any) {
           await clearSession(msg.from.id);
           await setSession(msg.from.id, 'exp_add', { evId, payment: { method: 'card', details } });
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `💳 Запомнил реквизиты: <b>${esc(details)}</b>\n\n💸 Что купил(а) и на какую сумму? Напиши одной строкой: название и сумма в BYN.\n<i>Например: «Мясо 45.50» или «Угли и розжиг 18»</i>` });
+          return res.status(200).json({ ok: true });
+        }
+        /**
+         * АНКЕТА УЧАСТНИКА: дата рождения и телефон.
+         * По одному вопросу за раз — анкета на три экрана в мессенджере не
+         * заполняется, её закрывают. Каждый ответ пишется сразу, поэтому
+         * бросивший на полпути всё равно оставляет то, что успел сказать.
+         */
+        if (sess && sess.state === 'profile_bday') {
+          // Принимаем и «12.05.1990», и «12 мая 1990», и «1990-05-12».
+          const s = String(text).trim();
+          let iso = '';
+          const dmy = s.match(/(\d{1,2})[.\/\s-](\d{1,2})[.\/\s-](\d{4})/);
+          const ymd = s.match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+          if (ymd) iso = `${ymd[1]}-${ymd[2].padStart(2, '0')}-${ymd[3].padStart(2, '0')}`;
+          else if (dmy) iso = `${dmy[3]}-${dmy[2].padStart(2, '0')}-${dmy[1].padStart(2, '0')}`;
+          const year = iso ? Number(iso.slice(0, 4)) : 0;
+          const nowYear = new Date().getFullYear();
+          if (!iso || year < 1925 || year > nowYear) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🤔 Не разобрал дату. Напиши цифрами, например <b>12.05.1990</b>.' });
+            return res.status(200).json({ ok: true });
+          }
+          await supabase.from('members').update({ birthday: iso }).eq('telegram_id', msg.from.id);
+          await setSession(msg.from.id, 'profile_phone', {});
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '📞 <b>Последний вопрос — телефон.</b>\n\nОн нужен ровно на один случай: ты не вышел на связь на маршруте, и организатору надо дозвониться. Больше никуда он не идёт.\n\nНажми кнопку ниже или напиши номер. Не хочешь — напиши «пропустить».',
+            reply_markup: { keyboard: [[{ text: '📞 Отправить мой номер', request_contact: true }], [{ text: 'Пропустить' }]], resize_keyboard: true, one_time_keyboard: true },
+          });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'profile_phone') {
+          const skip = /^(пропустить|скип|потом|нет)$/i.test(String(text).trim());
+          const digits = String(text).replace(/[^\d+]/g, '');
+          if (!skip && digits.length >= 9) {
+            await supabase.from('members').update({ phone: digits.slice(0, 20) }).eq('telegram_id', msg.from.id);
+          }
+          await clearSession(msg.from.id);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: skip || digits.length < 9
+              ? '👌 Понял, без телефона. Спасибо — остальное записал.\n\nПередумаешь — просто напиши номер сюда.'
+              : '✅ Спасибо, всё записал. Теперь клуб знает, кого зовёт на выезды — и не забудет поздравить тебя с днём рождения.',
+            reply_markup: { remove_keyboard: true },
+          });
           return res.status(200).json({ ok: true });
         }
         if (sess && sess.state === 'ride_point') {
