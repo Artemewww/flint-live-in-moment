@@ -33,6 +33,8 @@ function slog(level: 'info' | 'warn' | 'error', msg: string, err?: any) {
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
+// Чат костяка: сюда уходят события состава — заявки и отмены.
+const ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570';
 
 // Свежесть initData: без проверки auth_date перехваченная строка годна вечно
 // (replay — можно бесконечно выдавать себя за участника). Окно 24ч: mini-app
@@ -951,6 +953,9 @@ export default async function handler(req: any, res: any) {
             free: Math.max(0, seatsTotal - seatsTaken),
             fromPoint: r.from_point || '',
             departText: r.depart_text || '',
+            // Марка, цвет и номер — чтобы попутчик нашёл машину на точке, а не
+            // высматривал незнакомого человека. Живёт в свободной колонке note.
+            carInfo: r.note || '',
             fuelCost: Number(r.fuel_cost) || 0,
             isMine, iAmIn,
             passengers: (books || []).filter((b: any) => b.ride_id === r.id)
@@ -1047,6 +1052,7 @@ export default async function handler(req: any, res: any) {
           || String(((ev as any)?.logistics || {}).assemblyPoint || '').trim()
           || 'по договорённости';
         const departText = String(body.departText || '').slice(0, 60).trim() || 'по договорённости';
+        const carInfo = String(body.carInfo || '').slice(0, 80).trim();
 
         // Одна активная машина и одна палатка на человека: повтор = правка,
         // иначе в списке плодятся дубли одной и той же машины.
@@ -1057,6 +1063,7 @@ export default async function handler(req: any, res: any) {
           event_id: evId, driver_id: user.id,
           driver_name: user.first_name || user.username || (kind === 'tent' ? 'Хозяин палатки' : 'Водитель'),
           from_point: fromPoint, depart_text: departText, seats_total: seats, kind, active: true,
+          note: carInfo || null,
         };
         if (same) await supabase.from('rides').update(row).eq('id', (same as any).id);
         else await supabase.from('rides').insert(row);
@@ -1134,6 +1141,71 @@ export default async function handler(req: any, res: any) {
       }
 
       return res.status(200).json({ ok: false, error: 'unknown-logi-action' });
+    }
+
+    /**
+     * ОТМЕНА УЧАСТИЯ ИЗ ПРИЛОЖЕНИЯ.
+     * Экран «мои участия» слал отмену на /api/my — эндпоинт удалили ещё в
+     * июле, объединив в этот файл. Запрос уходил в 404, ошибку глотал catch,
+     * и человек видел «участие отменено», а в базе оставался записанным:
+     * занимал место, числился в составе и получал напоминания о выезде.
+     */
+    if (action === 'cancel_registration') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+      const evId = String(body.eventId || '');
+      if (!evId) return res.status(200).json({ ok: false, error: 'no-event' });
+
+      const { data: reg } = await supabase
+        .from('registrations').select('id,name')
+        .eq('event_id', evId).eq('telegram_id', user.id).neq('status', 'cancelled').maybeSingle();
+      if (!reg) return res.status(200).json({ ok: true, alreadyCancelled: true });
+
+      await supabase.from('registrations')
+        .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+        .eq('id', (reg as any).id);
+
+      // Ушёл с события — освобождаем и место в чужой машине: иначе водитель
+      // везёт пустое кресло мимо тех, кто искал попутку.
+      try {
+        const { data: evRides } = await supabase
+          .from('rides').select('id,driver_id').eq('event_id', evId).eq('active', true);
+        for (const r of (evRides || []) as any[]) {
+          const { data: outcome } = await supabase.rpc('cancel_ride_seat', { p_ride_id: r.id, p_passenger: user.id });
+          if (outcome === 'ok' && BOT_TOKEN && r.driver_id) {
+            try {
+              await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  chat_id: r.driver_id, parse_mode: 'HTML',
+                  text: `🚗 <b>${escHtml(user.first_name || 'Участник')}</b> снялся с события — место в твоей машине снова свободно.`,
+                }),
+              });
+            } catch { /* no-op */ }
+          }
+        }
+      } catch { /* освобождение места не должно ронять саму отмену */ }
+
+      // Своя машина тоже уезжает вместе с ним.
+      await supabase.from('rides').update({ active: false })
+        .eq('event_id', evId).eq('driver_id', user.id).eq('active', true);
+      await supabase.from('ride_requests').update({ active: false })
+        .eq('event_id', evId).eq('passenger_id', user.id);
+
+      // Костяку — сразу: состав меняется за день до выезда, и это их работа.
+      if (BOT_TOKEN && ADMIN_CHAT_ID) {
+        const { data: ev } = await supabase.from('events').select('title').eq('id', evId).maybeSingle();
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: ADMIN_CHAT_ID, parse_mode: 'HTML',
+              text: `🔴 <b>Снялся с события</b>\n${escHtml((ev as any)?.title || evId)}\n${escHtml((reg as any).name || user.first_name || '')} (id ${user.id})`,
+            }),
+          });
+        } catch { /* no-op */ }
+      }
+      return res.status(200).json({ ok: true });
     }
 
     // === APPLY (заявка на вступление — ТОЛЬКО через Telegram) ===

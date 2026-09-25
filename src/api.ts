@@ -229,6 +229,8 @@ export interface LogiRide {
   free: number;
   fromPoint: string;
   departText: string;
+  /** Марка, цвет, номер — чтобы попутчик нашёл машину на точке сбора. */
+  carInfo: string;
   fuelCost: number;
   isMine: boolean;
   iAmIn: boolean;
