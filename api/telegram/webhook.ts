@@ -7087,8 +7087,13 @@ export default async function handler(req: any, res: any) {
          * есть — пусть отвечает сам, но строго по данным события и не чаще
          * раза в полторы минуты, чтобы не тараторить в живой беседе.
          */
-        const looksLikeQuestion = text.includes('?')
-          || /^(а\s+)?(кто|что|где|когда|во\s+сколько|как|сколько|какой|какая|какие|можно|нужно|надо|брать\s+ли)/i.test(text);
+        // Вопросы о транспорте часто формулируют не как «где/когда», а как
+        // «у кого есть места?» или «есть ли кто-нибудь на машине». Без
+        // отдельного признака такие сообщения проходили мимо и бот молчал,
+        // хотя ниже уже была готовая логика расчёта свободных мест.
+        const rideQuestion = /(у\s+кого\s+(есть|будут?)\s+мест|есть\s+ли\s+(свободн[а-яё]*\s+)?мест|свободн[а-яё]*\s+мест\s+(в|на)\s+машин|мест[оа]?\s+в\s+машин|кто[- ]нибудь\s+едет\s+(на\s+машин|на\s+авто)|кто\s+едет\s+на\s+машин|нужна\s+попутк|можно\s+подвез)/i.test(text);
+        const looksLikeQuestion = rideQuestion || text.includes('?')
+          || /^(а\s+)?(кто|что|где|когда|во\s+сколько|как|сколько|какой|какая|какие|можно|нужно|надо|брать\s+ли|есть\s+ли|у\s+кого)/i.test(text);
         /**
          * Решение «отвечать или молчать» принимает КОД, а не модель.
          * Когда выбор отдавали ИИ («верни пустую строку, если вопрос не
@@ -7104,7 +7109,11 @@ export default async function handler(req: any, res: any) {
             .from('bot_group_actions').select('created_at')
             .eq('chat_id', chatId).eq('action_type', 'info_reply')
             .order('created_at', { ascending: false }).limit(1).maybeSingle();
-          const quiet = !lastReply || (Date.now() - new Date((lastReply as any).created_at).getTime() > 90_000);
+          // Логистический вопрос отвечает непосредственно из БД, без ИИ и
+          // без риска «заспамить» чат, поэтому его нельзя блокировать общим
+          // антифлудом: после ответа на другой вопрос участник всё равно
+          // должен сразу получить актуальное число мест.
+          const quiet = rideQuestion || !lastReply || (Date.now() - new Date((lastReply as any).created_at).getTime() > 90_000);
           if (quiet) {
             try {
               const { data: ev } = await supabase.from('events').select('*').eq('id', (linkedEvent as any).id).maybeSingle();
@@ -7140,9 +7149,12 @@ export default async function handler(req: any, res: any) {
                * отвечаем прямо из базы, мгновенно и без квоты. ИИ остаётся
                * для всего остального.
                */
-              const freeSeatsNow = (rides || [])
-                .filter((r: any) => r.kind !== 'tent')
-                .reduce((s: number, r: any) => s + Math.max(0, (r.seats_total || 0) - (r.seats_taken || 0)), 0);
+              const freeRides = (rides || [])
+                .filter((r: any) => r.kind !== 'tent' && Number(r.seats_total) > Number(r.seats_taken || 0));
+              const freeSeatsNow = freeRides.reduce(
+                (sum: number, ride: any) => sum + Math.max(0, Number(ride.seats_total || 0) - Number(ride.seats_taken || 0)),
+                0,
+              );
               /**
                * Время сбора и время выезда — РАЗНОЕ, и правда лежит в программе.
                * На Нарочи в программе «06:00 — сбор» и «07:00 — выезд», а в
@@ -7183,7 +7195,7 @@ export default async function handler(req: any, res: any) {
                 quick = `💰 ${esc((ev as any)?.price_label || 'Взнос не указан — уточню у организатора')}`;
               } else if (/(свободн[а-яё]*\s+мест|есть\s+мест|мест[оа]?\s+в\s+машин|нужна\s+попутка|подвез)/i.test(text)) {
                 quick = freeSeatsNow > 0
-                  ? `🚗 Свободных мест: <b>${freeSeatsNow}</b>. Занять — кнопкой «Логистика и брони» в боте.`
+                  ? `🚗 Свободных мест: <b>${freeSeatsNow}</b>.\n${freeRides.map((ride: any) => `• ${esc(ride.driver_name || 'Водитель')} — ${Math.max(0, Number(ride.seats_total || 0) - Number(ride.seats_taken || 0))} места${ride.from_point ? `, старт: ${esc(ride.from_point)}` : ''}`).join('\n')}\n\nЗанять место — кнопкой «Логистика и брони» в боте.`
                   : `🚗 Свободных мест сейчас нет. Если поедешь своей машиной — напиши тут «еду на машине, N мест», я запишу.`;
               } else if (/кто\s+(едет|поедет|записал|будет)|скольк[а-яё]*\s+(человек|нас|едет)/i.test(text)) {
                 const names = (regs2 || []).map((r: any) => r.name).filter(Boolean);
