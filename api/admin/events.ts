@@ -700,6 +700,36 @@ export default async function handler(req: any, res: any) {
             lastErr = (e as Error).message;
           }
         }
+        /**
+         * ЗАПАСНОЙ ГЕНЕРАТОР — БЕЗ КЛЮЧА И БЕЗ ОПЛАТЫ.
+         * У Gemini картинки не входят в бесплатный тариф: ключ без биллинга
+         * отвечает 429 на любую image-модель, и кнопка «сгенерировать» просто
+         * ничего не делала. Владелец просил именно бесплатный вариант.
+         * Pollinations отдаёт картинку по URL, без ключа и регистрации.
+         * Качество ниже, чем у Gemini с оплатой, зато работает всегда —
+         * поэтому он именно запасной, а не основной: если биллинг включат,
+         * первым по-прежнему пробуется Gemini.
+         */
+        let usedFallback = false;
+        if (!b64) {
+          try {
+            const seed = Math.floor(Math.random() * 1e6);
+            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 900))}`
+              + `?width=1280&height=720&nologo=true&seed=${seed}`;
+            const r = await fetch(url, { headers: { 'User-Agent': 'flint-live-in-moment' } });
+            if (r.ok) {
+              const buf = Buffer.from(await r.arrayBuffer());
+              // Заглушка-ошибка весит считанные килобайты — отличаем её от кадра.
+              if (buf.length > 20_000) { b64 = buf.toString('base64'); usedFallback = true; }
+              else lastErr = 'Запасной генератор вернул пустую картинку';
+            } else {
+              lastErr = `Запасной генератор: HTTP ${r.status}`;
+            }
+          } catch (e) {
+            lastErr = `Запасной генератор недоступен: ${(e as Error).message}`;
+          }
+        }
+
         if (!b64) {
           return res.status(200).json({
             ok: false,
@@ -716,7 +746,7 @@ export default async function handler(req: any, res: any) {
         }
 
         // Кладём в публичный бакет event-images — оттуда картинку берут и сайт, и бот.
-        const path = `covers/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
+        const path = `covers/${usedFallback ? 'free-' : ''}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`;
         const bin = Buffer.from(b64, 'base64');
         const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
           method: 'POST',
@@ -733,7 +763,9 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: false, error: `Картинка нарисована, но не сохранилась: ${t.slice(0, 160)}` });
         }
         const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}`;
-        return res.status(200).json({ ok: true, url, bytes: bin.length });
+        // Говорим, чем нарисовано: у бесплатного генератора качество ниже, и
+        // организатор должен понимать, почему кадр проще ожидаемого.
+        return res.status(200).json({ ok: true, url, bytes: bin.length, source: usedFallback ? 'free' : 'gemini' });
       }
 
       // Живой статус расчёта: текущий shopping.split + расходы + сводка.
