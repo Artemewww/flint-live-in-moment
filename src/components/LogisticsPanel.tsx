@@ -55,6 +55,7 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
   const [seats, setSeats] = useState('2');
   const [fromPoint, setFromPoint] = useState('');
   const [departText, setDepartText] = useState('');
+  const [carInfo, setCarInfo] = useState('');
   const alive = useRef(true);
 
   const load = useCallback(async () => {
@@ -94,10 +95,12 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
       seats: Number(seats) || 0,
       fromPoint: fromPoint.trim(),
       departText: departText.trim(),
+      carInfo: carInfo.trim(),
     });
     setShowOffer(null);
     setFromPoint('');
     setDepartText('');
+    setCarInfo('');
   };
 
   if (!state) {
@@ -133,6 +136,8 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
                     {r.departText}
                   </span>
                 )}
+                {/* Марка и номер — чтобы на точке искали машину, а не человека. */}
+                {r.carInfo && <span className="text-white/70">🚘 {r.carInfo}</span>}
               </div>
             )}
           </div>
@@ -179,6 +184,7 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
                   setSeats(String(r.seatsTotal));
                   setFromPoint(r.fromPoint);
                   setDepartText(r.departText);
+                  setCarInfo(r.carInfo);
                 }}
                 className="text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-3 py-2 transition-all"
               >
@@ -323,12 +329,24 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
             />
           </div>
           {showOffer === 'car' && (
-            <input
-              value={fromPoint}
-              onChange={(e) => setFromPoint(e.target.value.slice(0, 120))}
-              placeholder={state.event.assemblyPoint || 'откуда стартуешь'}
-              className="w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50"
-            />
+            <>
+              <input
+                value={carInfo}
+                onChange={(e) => setCarInfo(e.target.value.slice(0, 80))}
+                placeholder="марка, цвет, номер"
+                className="w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50"
+              />
+              <input
+                value={fromPoint}
+                onChange={(e) => setFromPoint(e.target.value.slice(0, 120))}
+                placeholder={state.event.assemblyPoint || 'откуда стартуешь или координаты'}
+                className="w-full bg-black/30 border border-white/10 rounded-xl px-3 py-2 text-white text-sm outline-none focus:border-brand/50"
+              />
+              <p className="text-white/40 text-[10px] leading-snug">
+                В точку старта можно вставить координаты прямо из карт («53.93, 27.52») —
+                тогда у попутчиков кнопка «Маршрут» приведёт ровно туда, а не в поиск по названию.
+              </p>
+            </>
           )}
           <div className="flex gap-2">
             <button

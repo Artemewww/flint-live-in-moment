@@ -953,6 +953,9 @@ export default async function handler(req: any, res: any) {
             free: Math.max(0, seatsTotal - seatsTaken),
             fromPoint: r.from_point || '',
             departText: r.depart_text || '',
+            // Марка, цвет и номер — чтобы попутчик нашёл машину на точке, а не
+            // высматривал незнакомого человека. Живёт в свободной колонке note.
+            carInfo: r.note || '',
             fuelCost: Number(r.fuel_cost) || 0,
             isMine, iAmIn,
             passengers: (books || []).filter((b: any) => b.ride_id === r.id)
@@ -1049,6 +1052,7 @@ export default async function handler(req: any, res: any) {
           || String(((ev as any)?.logistics || {}).assemblyPoint || '').trim()
           || 'по договорённости';
         const departText = String(body.departText || '').slice(0, 60).trim() || 'по договорённости';
+        const carInfo = String(body.carInfo || '').slice(0, 80).trim();
 
         // Одна активная машина и одна палатка на человека: повтор = правка,
         // иначе в списке плодятся дубли одной и той же машины.
@@ -1059,6 +1063,7 @@ export default async function handler(req: any, res: any) {
           event_id: evId, driver_id: user.id,
           driver_name: user.first_name || user.username || (kind === 'tent' ? 'Хозяин палатки' : 'Водитель'),
           from_point: fromPoint, depart_text: departText, seats_total: seats, kind, active: true,
+          note: carInfo || null,
         };
         if (same) await supabase.from('rides').update(row).eq('id', (same as any).id);
         else await supabase.from('rides').insert(row);

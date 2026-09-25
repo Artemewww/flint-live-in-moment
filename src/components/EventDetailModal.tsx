@@ -328,27 +328,9 @@ export default function EventDetailModal({
               </h2>
             </div>
 
-          {/* Кнопки «Снять фото»/«Снять видео» ПОВЕРХ баннера — чтобы можно было сразу
-              нажать прямо из шапки карточки, не листая вниз. Доступны всегда; сервер
-              сам отклонит загрузку, если событие не идёт или юзер не записан. */}
-          <div className="absolute top-4 left-4 z-30 flex flex-col gap-2 sm:flex-row">
-            <button
-              type="button"
-              onClick={() => setShowSnap(true)}
-              className="inline-flex items-center gap-1.5 bg-brand text-black text-[11px] font-black font-mono uppercase tracking-wider rounded-full px-3.5 py-2 shadow-lg shadow-black/40 hover:bg-brand-hover transition-all cursor-pointer"
-              title="Снять фото / видео"
-            >
-              📷 Фото
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowSnap(true)}
-              className="inline-flex items-center gap-1.5 bg-black/70 text-white text-[11px] font-black font-mono uppercase tracking-wider rounded-full px-3.5 py-2 border border-white/15 shadow-lg shadow-black/40 hover:bg-black/90 hover:border-brand/40 transition-all cursor-pointer"
-              title="Снять фото / видео"
-            >
-              🎥 Видео
-            </button>
-          </div>
+          {/* Кнопки «Фото» и «Видео» поверх обложки УБРАНЫ: обе открывали
+              одно и то же окно, что и плитка «Снять» ниже. Три входа в одно
+              действие — это не удобство, а шум поверх картинки события. */}
 
           {/* Маячок «событие в моменте» — пульсирующий индикатор LIVE, пока событие идёт */}
           {isLiveNow && (
@@ -456,15 +438,9 @@ export default function EventDetailModal({
                   Позвать
                 </button>
               )}
-              <a
-                href={`https://t.me/campsflint_bot?start=event_${event.id}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/50 border border-white/10 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
-              >
-                <span className="text-base leading-none">🤖</span>
-                Бот
-              </a>
+              {/* Плитка «Бот» убрана: человек УЖЕ в приложении, и отправлять
+                  его обратно в бота незачем — всё, ради чего он туда ходил,
+                  теперь здесь. Бот остаётся каналом уведомлений. */}
             </div>
           </div>
 
@@ -476,7 +452,11 @@ export default function EventDetailModal({
           <div className="p-4 sm:p-6 space-y-6">
             
             {/* Time / Price / Location Info Blocks */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 font-mono text-xs">
+            {/* Две колонки и на телефоне: дата, место, условия и места — четыре
+                плитки, которые должны читаться одним взглядом, а не занимать
+                четыре экрана столбиком. Отступы и кегль поджаты под узкий
+                экран. */}
+            <div className="grid grid-cols-2 gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs [&>div]:p-3 sm:[&>div]:p-4">
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Calendar className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
