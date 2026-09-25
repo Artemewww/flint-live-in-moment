@@ -138,8 +138,13 @@ async function syncBuddies(evId: string): Promise<void> {
     .map((r: any) => Number(r.telegram_id))
     .filter((id: number) => Number.isFinite(id) && id > 0)));
 
-  const { data: rowsRaw } = await supabase
+  const { data: rowsRaw, error: rowsErr } = await supabase
     .from('event_buddies').select('telegram_id,pair_id').eq('event_id', evId);
+  // Таблицы ещё нет (миграция 2026-09-25-buddy-pairs.sql не накатана) — молча
+  // выходим. Иначе пары посчитались бы, люди получили бы «твой бади — X», а
+  // сохранить их было бы некуда: на следующей записи пары собрались бы заново
+  // и участники получали бы новых бади при каждом чужом чихе.
+  if (rowsErr) return;
   const rows = (rowsRaw || []).map((r: any) => ({ id: Number(r.telegram_id), pairId: String(r.pair_id) }));
 
   if (active.length < BUDDY_MIN) {
