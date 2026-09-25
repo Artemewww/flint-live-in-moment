@@ -242,6 +242,8 @@ export interface LogiState {
   error?: string;
   registered: boolean;
   event: { id: string; title: string; assemblyPoint: string; departureTime: string };
+  /** Что этому событию вообще нужно: машины, ночёвка. Считает сервер. */
+  features: { rides: boolean; tents: boolean };
   cars: LogiRide[];
   tents: LogiRide[];
   seekers: Array<{ name: string; fromArea: string; isMe: boolean }>;
@@ -251,6 +253,7 @@ export interface LogiState {
 const EMPTY_LOGI: LogiState = {
   ok: false, registered: false,
   event: { id: '', title: '', assemblyPoint: '', departureTime: '' },
+  features: { rides: true, tents: false },
   cars: [], tents: [], seekers: [], meSeeking: false,
 };
 

@@ -907,13 +907,32 @@ export default async function handler(req: any, res: any) {
         return data as any;
       };
 
+      /**
+       * ЧТО ВООБЩЕ НУЖНО ЭТОМУ СОБЫТИЮ.
+       * Копия featureOn из api/telegram/webhook.ts (общий _lib роняет функции
+       * на Vercel). Приложение показывало палатки всегда — и на однодневном
+       * спортивном старте участнику предлагали «свою палатку». Признак тот
+       * же, что у бота, чтобы они не расходились.
+       */
+      const featureOn = (ev: any, key: 'rides' | 'tents'): boolean => {
+        if (ev?.notifications?._format === 'online') return false;
+        const v = ev?.notifications?.[`feat_${key}`];
+        if (typeof v === 'boolean') return v;
+        // Однодневка — никто не ночует, палатки ни к чему.
+        if (key === 'tents') {
+          const end = ev?.date_end;
+          if (!end || end === ev?.date) return false;
+        }
+        return ev?.type !== 'intellectual';
+      };
+
       // ── Состояние: один запрос, из которого приложение рисует весь экран ──
       if (action === 'logi_state') {
         const evId = String(body.eventId || '');
         if (!evId) return res.status(200).json({ ok: false, error: 'no-event' });
 
         const [{ data: ev }, { data: allRides }, { data: reqs }, registered] = await Promise.all([
-          supabase.from('events').select('id,title,logistics,time').eq('id', evId).maybeSingle(),
+          supabase.from('events').select('id,title,logistics,time,type,date,date_end,notifications').eq('id', evId).maybeSingle(),
           supabase.from('rides').select('*').eq('event_id', evId).eq('active', true).order('created_at'),
           supabase.from('ride_requests').select('passenger_id,passenger_name,from_area').eq('event_id', evId).eq('active', true),
           isRegistered(evId),
@@ -973,6 +992,7 @@ export default async function handler(req: any, res: any) {
             assemblyPoint: ((ev as any)?.logistics || {}).assemblyPoint || '',
             departureTime: ((ev as any)?.logistics || {}).departureTime || (ev as any)?.time || '',
           },
+          features: { rides: featureOn(ev, 'rides'), tents: featureOn(ev, 'tents') },
           cars: shaped.filter((r: any) => r.kind === 'car'),
           tents: shaped.filter((r: any) => r.kind === 'tent'),
           seekers: (reqs || []).map((r: any) => ({
@@ -1724,26 +1744,34 @@ export default async function handler(req: any, res: any) {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(401).json({ error: 'Unauthorized' });
 
-      const { data: regs } = await supabase
+      /**
+       * Запрос был сломан дважды, и оба раза молча.
+       *
+       * 1. `status as event_status` — это синтаксис SQL, а не PostgREST: там
+       *    алиас пишется как `event_status:status`. Вложенный select падал,
+       *    и ВЕСЬ запрос возвращал ошибку.
+       * 2. `children_count` живёт в миграции 2026-final.sql, которая не
+       *    накатана. Колонки нет — запрос падает целиком.
+       *
+       * Ошибку никто не проверял, `data` приходил null, наружу уходило
+       * `{ registrations: [] }`. То есть эндпоинт ВСЕГДА отвечал «ты никуда
+       * не записан» — человек открывал событие, где он едет, и ему предлагали
+       * записаться заново.
+       *
+       * Поэтому здесь только колонки из schema.sql, без вложенных сущностей
+       * (единственный потребитель — App.tsx — читает лишь саму заявку) и с
+       * проверкой ошибки: тихо падать этот запрос больше не должен.
+       */
+      const { data: regs, error: regsErr } = await supabase
         .from('registrations')
-        .select(`
-          id,
-          event_id,
-          status,
-          payment_status,
-          payment_amount,
-          attended,
-          guest_count,
-          children_count,
-          transport_details,
-          has_transport,
-          transport_seats,
-          registered_at,
-          events!inner(title, date, location, status as event_status, type)
-        `)
+        .select('id,event_id,name,phone,status,payment_status,payment_amount,guest_count,has_transport,transport_details,transport_seats,registered_at')
         .eq('telegram_id', user.id)
         .order('registered_at', { ascending: false });
 
+      if (regsErr) {
+        slog('error', 'my_registrations failed', regsErr);
+        return res.status(500).json({ error: 'registrations-query-failed' });
+      }
       return res.status(200).json({ registrations: regs || [] });
     }
 

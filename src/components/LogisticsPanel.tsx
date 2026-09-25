@@ -103,6 +103,13 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
     setCarInfo('');
   };
 
+  // Событию не нужны ни машины, ни ночёвка (например, онлайн-встреча) —
+  // логистики у него нет, и пустой блок «машин пока нет» только мешает.
+  if (state && !state.features.rides && !state.features.tents
+      && state.cars.length === 0 && state.tents.length === 0) {
+    return null;
+  }
+
   if (!state) {
     return (
       <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex items-center gap-2 text-white/40 text-[11px]">
@@ -282,8 +289,11 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
         )}
       </div>
 
-      {/* ── Палатки: те же места, только спальные ── */}
-      {state.tents.length > 0 && (
+      {/* ── Палатки: только там, где ночуют. На однодневном спортивном старте
+             вопрос «своя палатка?» выглядит издевательством, поэтому признак
+             считает сервер — тот же, что у бота. Уже заявленные палатки
+             показываем в любом случае: иначе человек не сможет их убрать. ── */}
+      {(state.features.tents || state.tents.length > 0) && state.tents.length > 0 && (
         <div className="space-y-2 border-t border-white/10 pt-3">
           <span className="text-white/40 uppercase text-[9px] tracking-wider flex items-center gap-2">
             <Tent className="w-3.5 h-3.5 text-brand" /> Палатки
@@ -391,14 +401,16 @@ export function LogisticsPanel({ eventId, isRegistered }: Props) {
           >
             {busy === 'seek' ? '…' : state.meSeeking ? '✕ Больше не ищу попутку' : '🚶 Нужна попутка'}
           </button>
-          <button
-            type="button"
-            disabled={!isRegistered}
-            onClick={() => { setShowOffer('tent'); setDepartText(''); }}
-            className="text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-3 py-2 transition-all disabled:opacity-40"
-          >
-            <Tent className="w-3 h-3 inline mr-1" /> Своя палатка
-          </button>
+          {state.features.tents && (
+            <button
+              type="button"
+              disabled={!isRegistered}
+              onClick={() => { setShowOffer('tent'); setDepartText(''); }}
+              className="text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-3 py-2 transition-all disabled:opacity-40"
+            >
+              <Tent className="w-3 h-3 inline mr-1" /> Своя палатка
+            </button>
+          )}
         </div>
       )}
 
