@@ -7274,7 +7274,116 @@ export default async function handler(req: any, res: any) {
         }
 
         /**
-         * 5. МАШИНА ПРЯМО ИЗ ЧАТА.
+         * 5. КОМУ НУЖНО МЕСТО — ЗАЯВКА ПАССАЖИРА ПРЯМО ИЗ ЧАТА.
+         * Дословно из чата «BISON RACE & FLINT» за два дня до выезда:
+         * «Я просто с женой хотел, если можно нас куда-нибудь подкинуть, на
+         * бенз скинемся». Бот промолчал — не сработал НИ ОДИН паттерн:
+         * «подкинуть» это не «подвезти», знака вопроса нет, начало не похоже
+         * на вопрос. Организатор ответил «Отлично. Топ!» — и на этом всё
+         * кончилось: место никто не забронировал, жена нигде не учтена, а в
+         * логистике человек по-прежнему числился без машины.
+         * Теперь бот заводит заявку сам и сразу называет, к кому можно сесть.
+         *
+         * Просьбу от предложения отличает ИИ, а не регулярка: «подвезу» и
+         * «подвезите» — одна буква разницы и противоположный смысл.
+         */
+        // Один вызов ИИ на сообщение: у вебхука 10 с, а два подряд запроса к
+        // Gemini их съедают — Telegram посчитает доставку неудачной и пришлёт
+        // апдейт повторно, участник получит дубль ответа.
+        let aiUsed = false;
+        const seatNeed = /(?<![а-яёa-z])(подкин|подброс|подбер|захват|заберит|возьмит|нужн[оа]\s+(мест|попутк)|ищ[уе]м?\s+попутк|без\s+машины|не\s+на\s+ч[её]м|поехать\s+с\s+кем|можно\s+с\s+кем|мест[оа]?\s+для\s+(меня|нас)|подвезт|подвезит|подвези|подвез[её]т)/i;
+        if (linkedEvent && msg.from?.id && seatNeed.test(text) && text.length > 10) {
+          aiUsed = true;
+          try {
+            const parsed = await geminiJSON(
+              `Сообщение участника в чате поездки: «${text}»\n\n` +
+              `Человек ПРОСИТ подвезти его — ему нужно место в чужой машине? Или нет?\n` +
+              `Верни строго JSON: {"need": true|false, "people": сколько человек едет с ним всего, включая его самого (1, если не сказал), "from": "откуда его забрать, если сказал"}\n` +
+              `need=false, если он наоборот предлагает подвезти, спрашивает про другое или просто обсуждает. Ничего не выдумывай.`
+            );
+            if (parsed?.need === true) {
+              const people = Math.max(1, Math.min(6, Number(parsed.people) || 1));
+              const fromArea = String(parsed.from || '').slice(0, 120);
+              const evId = (linkedEvent as any).id;
+              const who = esc(msg.from.first_name || msg.from.username || 'Участник');
+
+              // Заявка в ту же таблицу, что и кнопка «🚶 Нужна попутка»:
+              // человек попадает в очередь и получит пинг, когда место освободится.
+              await supabase.from('ride_requests').upsert({
+                event_id: evId,
+                passenger_id: msg.from.id,
+                passenger_name: msg.from.first_name || msg.from.username || 'Пассажир',
+                from_area: fromArea || null,
+                active: true,
+              }, { onConflict: 'event_id,passenger_id' });
+
+              const { data: allCars } = await supabase
+                .from('rides').select('driver_id,driver_name,seats_total,seats_taken,from_point')
+                .eq('event_id', evId).eq('active', true).neq('kind', 'tent');
+              const withSeats = (allCars || []).filter(
+                (c: any) => Number(c.seats_total || 0) > Number(c.seats_taken || 0));
+              const freeOf = (c: any) => Math.max(0, Number(c.seats_total || 0) - Number(c.seats_taken || 0));
+              const freeTotal = withSeats.reduce((s: number, c: any) => s + freeOf(c), 0);
+
+              let out = `🚶 Записал заявку: <b>${who}</b> — нужно мест: <b>${people}</b>`
+                + (fromArea ? `, забрать: ${esc(fromArea)}` : '') + '.\n\n';
+              if (withSeats.length) {
+                out += 'Свободные места сейчас:\n'
+                  + withSeats.map((c: any) => `• ${esc(c.driver_name || 'Водитель')} — ${freeOf(c)}`
+                    + (c.from_point ? `, старт: ${esc(String(c.from_point).slice(0, 60))}` : '')).join('\n');
+                out += freeTotal >= people
+                  // «Отлично. Топ!» в чате местом не является: пока никто не нажал
+                  // кнопку, бронь живёт только на словах и место могут занять.
+                  ? '\n\nЖми «Занять место» — договорённость в чате бронью не считается.'
+                  : `\n\n⚠️ Свободных мест всего <b>${freeTotal}</b>, а нужно <b>${people}</b>. Нужен ещё водитель.`;
+              } else {
+                out += 'Машин со свободными местами пока нет — напишу, как появятся.';
+              }
+              if (people > 1) {
+                out += `\n\n👥 ${who}, отметь в боте, что едешь не один: иначе спутник не попадёт ни в состав, ни в расчёт еды и мест.`;
+              }
+
+              const rows: any[] = [];
+              if (withSeats.length) rows.push([{ text: '🚗 Занять место', callback_data: `logi_${evId}` }]);
+              if (people > 1) rows.push([{ text: '👥 Записать, что едешь не один', url: `https://t.me/${BOT_USERNAME}?start=event_${evId}` }]);
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML', text: out,
+                reply_markup: rows.length ? kb(rows) : undefined,
+              });
+
+              // Водителям со свободными местами — в личку: в чате просьба тонет.
+              const driverIds = [...new Set(withSeats.map((c: any) => Number(c.driver_id)))];
+              const drvOk = await approvedOnly(driverIds);
+              for (const did of driverIds) {
+                if (!drvOk.has(did) || did === Number(msg.from.id)) continue;
+                try {
+                  await tg('sendMessage', {
+                    chat_id: did, parse_mode: 'HTML',
+                    text: `🚶 <b>${who}</b> ищет ${people === 1 ? 'место' : `мест: ${people}`} на «${esc((linkedEvent as any).title)}»`
+                      + (fromArea ? `, забрать: ${esc(fromArea)}` : '')
+                      + '.\n\nУ тебя есть свободные — подхватишь?',
+                    reply_markup: kb([[{ text: '👀 Кто едет', callback_data: `rides_${evId}` }]]),
+                  });
+                } catch { /* заблокировал бота — не роняем остальных */ }
+              }
+
+              await supabase.from('bot_group_actions').insert({
+                chat_id: chatId, event_id: evId, action_type: 'ride_requested',
+                trigger_text: text.slice(0, 300),
+                response_text: `need=${people} free=${freeTotal}`,
+                data: { people, from: fromArea, free: freeTotal },
+              });
+            }
+          } catch {
+            // ИИ не ответил — бюджет вызова фактически не потрачен. Возвращаем
+            // его, чтобы блок 6 ниже успел дать хотя бы обычный ответ про
+            // свободные места: раньше на «нужна попутка» он отвечал всегда.
+            aiUsed = false;
+          }
+        }
+
+        /**
+         * 6. МАШИНА ПРЯМО ИЗ ЧАТА.
          * Люди объявляют транспорт словами: «беру каршеринг, 3 места, выезжаю
          * в 5», «поеду на своей, могу двоих забрать». Раньше это оставалось
          * текстом в чате: в rides машина не появлялась, свободные места никто
@@ -7284,9 +7393,8 @@ export default async function handler(req: any, res: any) {
         // Один вызов ИИ на сообщение: у вебхука 10 с, а два подряд запроса к
         // Gemini их съедают — Telegram посчитает доставку неудачной и пришлёт
         // апдейт повторно, участник получит дубль ответа.
-        let aiUsed = false;
         const carOffer = /(?<![а-яёa-z])(каршеринг|каршер|на\s+своей|на\s+машине|на\s+авто|за\s+рулём|за\s+рулем|подвезу|заберу|могу\s+взять|свободн[а-яё]*\s+мест)/i;
-        if (linkedEvent && carOffer.test(text) && text.length > 12 && !text.trim().endsWith('?')) {
+        if (linkedEvent && !aiUsed && carOffer.test(text) && text.length > 12 && !text.trim().endsWith('?')) {
           aiUsed = true;
           try {
             const parsed = await geminiJSON(
@@ -7336,7 +7444,7 @@ export default async function handler(req: any, res: any) {
         }
 
         /**
-         * 6. ОТВЕТЫ НА ОРГВОПРОСЫ.
+         * 7. ОТВЕТЫ НА ОРГВОПРОСЫ.
          * Организатор отвечал в чате на одно и то же: во сколько выезд, где
          * сбор, что взять, кто едет, сколько стоит. У бота вся эта информация
          * есть — пусть отвечает сам, но строго по данным события и не чаще
