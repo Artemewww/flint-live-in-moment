@@ -979,6 +979,8 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
       status: 'pending',
     });
     try { await supabase.rpc('increment_participants', { event_id: ev.id }); } catch {}
+    // Новый человек → достраиваем бади-связки и сразу говорим, кто чей напарник.
+    try { await announceBuddies(ev.id, ev.title, await syncBuddies(ev.id)); } catch { /* пары не должны ронять запись */ }
     if (ADMIN_CHAT_ID) {
       try {
         await tg('sendMessage', {
@@ -1050,6 +1052,196 @@ async function reassignAfterDrop(evId: string, tgId: number, whoName: string) {
     text: `⚠️ <b>${esc(name || 'Участник')} снялся с события</b>\n\nНа нём было:\n${esc(listText)}\n\nКто подхватит? Жми кнопку — станешь ответственным.`,
     reply_markup: kb(rows.slice(0, 8)),
   });
+}
+
+/**
+ * БАДИ-ПАРЫ.
+ * Правило «у каждого на событии есть бади» человек принимает на входе в клуб,
+ * и после Нарочи оно же разруливает спорные ситуации («разбитый термос повис
+ * в воздухе»). Только пар до сих пор не существовало: обязательство человек
+ * брал, а за кого он отвечает — не знал никто, включая организатора.
+ *
+ * Логика намеренно «липкая»: уже сложившиеся связки НЕ пересобираются, когда
+ * приходит новый человек. Иначе за день до выезда половина круга узнавала бы,
+ * что их бади теперь другой — и ответственность превращается в формальность.
+ * Меняется только то, что распалось: ушёл напарник — его место занимает
+ * следующий записавшийся.
+ *
+ * Дублируется в api/register.ts и api/cron/reminders.ts НАМЕРЕННО: общий
+ * api/_lib/ роняет функции на Vercel в рантайме (FUNCTION_INVOCATION_FAILED).
+ */
+// Меньше пяти человек — пары не нужны: в таком круге все и так на виду.
+const BUDDY_MIN = 5;
+
+type BuddyAssignment = { telegramId: number; pairId: string; mates: number[] };
+
+async function syncBuddies(evId: string): Promise<BuddyAssignment[]> {
+  // Веб-заявки без Telegram (отрицательный id-хеш) в пары не берём: такому
+  // «участнику» нечего написать и он не сможет держать связь с напарником.
+  const { data: regs } = await supabase
+    .from('registrations').select('telegram_id,registered_at')
+    .eq('event_id', evId).neq('status', 'cancelled')
+    .order('registered_at', { ascending: true });
+  const active = Array.from(new Set((regs || [])
+    .map((r: any) => Number(r.telegram_id))
+    .filter((id: number) => Number.isFinite(id) && id > 0)));
+
+  const { data: rowsRaw } = await supabase
+    .from('event_buddies').select('telegram_id,pair_id').eq('event_id', evId);
+  const rows = (rowsRaw || []).map((r: any) => ({ id: Number(r.telegram_id), pairId: String(r.pair_id) }));
+
+  if (active.length < BUDDY_MIN) {
+    if (rows.length) await supabase.from('event_buddies').delete().eq('event_id', evId);
+    return [];
+  }
+
+  // Что есть сейчас: связки из тех, кто ещё едет. Связка из одного — распалась.
+  const activeSet = new Set(active);
+  const before = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!activeSet.has(r.id)) continue;
+    before.set(r.pairId, [...(before.get(r.pairId) || []), r.id]);
+  }
+  const groups = new Map<string, number[]>();
+  for (const [pid, mem] of before) if (mem.length >= 2) groups.set(pid, [...mem]);
+
+  // Без пары: и новички, и те, у кого напарник снялся. Порядок — по записи.
+  const placed = new Set<number>();
+  for (const mem of groups.values()) for (const id of mem) placed.add(id);
+  const queue = active.filter((id) => !placed.has(id));
+
+  while (queue.length >= 2) {
+    const a = queue.shift() as number;
+    const b = queue.shift() as number;
+    groups.set(`p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, [a, b]);
+  }
+  // Остался один — не бросаем его без напарника: подсаживаем третьим в самую
+  // маленькую связку. Тройка честнее, чем человек, за которым никто не следит.
+  if (queue.length === 1) {
+    let best: string | null = null;
+    for (const [pid, mem] of groups) {
+      if (mem.length >= 3) continue;
+      if (best === null || mem.length < (groups.get(best) as number[]).length) best = pid;
+    }
+    if (best) groups.set(best, [...(groups.get(best) as number[]), queue[0]]);
+  }
+
+  // Диффим с тем, что лежит в БД: трогаем только изменившиеся связки, чтобы
+  // не сбрасывать notified_at тем, у кого ничего не поменялось.
+  const desired = new Map<number, string>();
+  for (const [pid, mem] of groups) for (const id of mem) desired.set(id, pid);
+
+  const gone = rows.map((r) => r.id).filter((id) => !desired.has(id));
+  if (gone.length) {
+    await supabase.from('event_buddies').delete().eq('event_id', evId).in('telegram_id', gone);
+  }
+
+  const changed = new Set<number>();
+  for (const [pid, mem] of groups) {
+    const was = before.get(pid) || [];
+    const same = was.length === mem.length && mem.every((id) => was.includes(id));
+    if (!same) for (const id of mem) changed.add(id);
+  }
+  if (!changed.size) return [];
+
+  await supabase.from('event_buddies').upsert(
+    [...changed].map((id) => ({
+      event_id: evId,
+      telegram_id: id,
+      pair_id: desired.get(id) as string,
+      notified_at: null,
+    })),
+    { onConflict: 'event_id,telegram_id' },
+  );
+
+  return [...changed].map((id) => ({
+    telegramId: id,
+    pairId: desired.get(id) as string,
+    mates: (groups.get(desired.get(id) as string) || []).filter((x) => x !== id),
+  }));
+}
+
+/** Имя, ник и телефон участников по telegram_id — для карточки бади. */
+async function buddyPeople(ids: number[]): Promise<Map<number, { name: string; username: string; phone: string }>> {
+  const map = new Map<number, { name: string; username: string; phone: string }>();
+  const clean = ids.filter((id) => Number.isFinite(id) && id > 0);
+  if (!clean.length) return map;
+  const { data } = await supabase.from('members').select('telegram_id,first_name,username,phone').in('telegram_id', clean);
+  for (const m of data || []) {
+    map.set(Number((m as any).telegram_id), {
+      name: String((m as any).first_name || 'Участник'),
+      username: String((m as any).username || ''),
+      phone: String((m as any).phone || ''),
+    });
+  }
+  return map;
+}
+
+/** Человек ссылкой: по нику, иначе tg://user — работает и без @username. */
+function buddyLink(id: number, p?: { name: string; username: string }): string {
+  const name = esc(p?.name || 'Участник');
+  return p?.username ? `<a href="https://t.me/${esc(p.username)}">${name}</a>` : `<a href="tg://user?id=${id}">${name}</a>`;
+}
+
+/** Что такое бади — одним блоком, чтобы человек не гадал, зачем ему это. */
+const BUDDY_RULES =
+  '<b>Что это значит</b>\n' +
+  '• Спишитесь до выезда — договоритесь, как встречаетесь.\n' +
+  '• На событии держите друг друга в поле зрения: от сбора до разъезда.\n' +
+  '• Пропал, заболел, стало плохо — ты первый, кто это заметит и скажет организатору.\n' +
+  '• Бытовые и спорные вопросы решаете между собой, а не через организатора.\n\n' +
+  '<i>Спрос с обоих: и с тебя, и с твоего бади.</i>';
+
+/** Карточка «твой бади» для одного человека. */
+async function buddyCardText(evTitle: string, mates: number[]): Promise<string> {
+  const people = await buddyPeople(mates);
+  const list = mates.map((id) => `🤝 ${buddyLink(id, people.get(id))}`).join('\n');
+  return (
+    `🤝 <b>Твой бади на «${esc(evTitle)}»</b>\n\n${list}\n\n` +
+    `Бади — напарник, который держит тебя в поле зрения от сбора до разъезда.\n\n${BUDDY_RULES}`
+  );
+}
+
+/** Доска связок: круг видит, кто с кем — так пара перестаёт быть формальностью. */
+async function buddyBoardText(evId: string): Promise<string> {
+  const { data: rows } = await supabase
+    .from('event_buddies').select('telegram_id,pair_id').eq('event_id', evId);
+  if (!(rows || []).length) return '';
+  const groups = new Map<string, number[]>();
+  for (const r of rows as any[]) {
+    const pid = String(r.pair_id);
+    groups.set(pid, [...(groups.get(pid) || []), Number(r.telegram_id)]);
+  }
+  const people = await buddyPeople((rows as any[]).map((r) => Number(r.telegram_id)));
+  const lines = [...groups.values()].map(
+    (mem) => `• ${mem.map((id) => esc(people.get(id)?.name || 'Участник')).join(' — ')}`,
+  );
+  return `\n\n<b>Связки события</b>\n${lines.join('\n')}`;
+}
+
+/** Разослать тем, у кого пара только что появилась или изменилась. */
+async function announceBuddies(evId: string, evTitle: string, fresh: BuddyAssignment[]): Promise<void> {
+  if (!fresh.length) return;
+  const sent: number[] = [];
+  for (const a of fresh) {
+    if (!a.mates.length) continue;
+    try {
+      const r: any = await tg('sendMessage', {
+        chat_id: a.telegramId,
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        text: await buddyCardText(evTitle, a.mates),
+      });
+      // notified_at ставим ТОЛЬКО по факту доставки: кто ещё не открывал диалог
+      // с ботом, иначе навсегда остался бы «уже оповещённым» и не узнал бади.
+      if (r?.ok === true) sent.push(a.telegramId);
+    } catch { /* заблокировал бота — не роняем остальных */ }
+  }
+  if (sent.length) {
+    await supabase.from('event_buddies')
+      .update({ notified_at: new Date().toISOString() })
+      .eq('event_id', evId).in('telegram_id', sent);
+  }
 }
 
 // Очередь ожидания: место освободилось → зовём первого в очереди на эту машину/палатку.
@@ -1703,6 +1895,8 @@ function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
   // Статистика + логистика + оплата
   const logi: any[] = [];
   logi.push({ text: '📊 Кто', callback_data: `stats_${ev.id}` });
+  // Бади — там же, где состав: «кто едет» и «за кого я отвечаю» это один вопрос.
+  logi.push({ text: '🤝 Бади', callback_data: `buddy_${ev.id}` });
   if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Лог', callback_data: `logi_${ev.id}` });
   if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
   if (logi.length) rows.push(logi);
@@ -5766,6 +5960,54 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * «🤝 Бади» — кто мой напарник на этом событии.
+       * Связки пересобираем прямо на открытии: состав события живой, и человек
+       * должен увидеть актуального бади, а не того, кто уже снялся.
+       */
+      if (data.startsWith('buddy_')) {
+        const evId = data.slice('buddy_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const ev = await getEvent(evId);
+        const { data: myReg } = await supabase
+          .from('registrations').select('id')
+          .eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+        if (!myReg) {
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🤝 Бади появляется после записи на событие — это напарник, который держит тебя в поле зрения от сбора до разъезда.',
+            reply_markup: kb([[{ text: '✅ Записаться', callback_data: `reg_${evId}` }]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        await announceBuddies(evId, ev?.title || 'событие', await syncBuddies(evId));
+        const { data: mine } = await supabase
+          .from('event_buddies').select('pair_id').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+        if (!mine) {
+          const { count } = await supabase
+            .from('registrations').select('id', { count: 'exact', head: true })
+            .eq('event_id', evId).neq('status', 'cancelled');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text:
+              `🤝 <b>Бади пока не назначен</b>\n\n` +
+              `Связки собираются, когда на событие записано от ${BUDDY_MIN} человек — сейчас ${Number(count) || 0}. ` +
+              `В маленьком круге все и так на виду.\n\nКак только наберёмся — пришлю сюда, кто твой напарник.`,
+          });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: mates } = await supabase
+          .from('event_buddies').select('telegram_id')
+          .eq('event_id', evId).eq('pair_id', (mine as any).pair_id).neq('telegram_id', tgId);
+        const mateIds = (mates || []).map((m: any) => Number(m.telegram_id));
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML', disable_web_page_preview: true,
+          text: (await buddyCardText(ev?.title || 'событие', mateIds)) + (await buddyBoardText(evId)),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('logi_')) {
         const evId = data.slice('logi_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
@@ -6187,6 +6429,15 @@ export default async function handler(req: any, res: any) {
         try {
           await reassignAfterDrop(evId, tgId, (reg as any)?.name || cq.from.first_name || '');
         } catch { /* переназначение не должно ронять отмену */ }
+        /**
+         * Его бади остался без напарника — и узнать об этом должен сейчас, а
+         * не на точке сбора. Пересобираем связки и пишем тем, у кого состав
+         * поменялся: сам ушедший из пар уже удалён.
+         */
+        try {
+          const evForBuddy = await getEvent(evId);
+          await announceBuddies(evId, evForBuddy?.title || 'событие', await syncBuddies(evId));
+        } catch { /* пары не должны ронять отмену */ }
         return res.status(200).json({ ok: true });
       }
 

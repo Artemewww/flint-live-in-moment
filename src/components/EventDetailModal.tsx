@@ -638,6 +638,42 @@ export default function EventDetailModal({
                   </p>
                 )}
 
+                {/* За кого я отвечаю: бади. Правило человек принимает на входе
+                    в клуб, но напарника до сих пор негде было посмотреть — он
+                    приходил одним сообщением в бот и терялся в переписке.
+                    Связку собирает сервер: от 5 записавшихся, нечётный третий
+                    подсаживается в пару (см. миграцию 2026-09-25-buddy-pairs). */}
+                {(event.myBuddies?.length ?? 0) > 0 && (
+                  <div className="border-t border-white/10 pt-3 space-y-1.5">
+                    <span className="text-white/40 uppercase text-[9px] tracking-wider block">
+                      {event.myBuddies!.length > 1 ? 'Твои бади' : 'Твой бади'}
+                    </span>
+                    <div className="text-white text-sm font-bold">
+                      {event.myBuddies!.map((b, i) => (
+                        <span key={`${b.name}-${i}`}>
+                          {i > 0 && ', '}
+                          {b.username ? (
+                            <a
+                              href={`https://t.me/${b.username}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-brand underline"
+                            >
+                              {b.name}
+                            </a>
+                          ) : (
+                            b.name
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                    <p className="text-white/60 text-[11px] leading-snug">
+                      Держите друг друга в поле зрения от сбора до разъезда. Пропал, заболел,
+                      стало плохо — ты первый, кто это заметит и скажет организатору. Спрос с обоих.
+                    </p>
+                  </div>
+                )}
+
                 {/* С кем я еду: машина, попутчики, контакт водителя. */}
                 {event.myRide ? (
                   <div className="border-t border-white/10 pt-3 space-y-1.5">

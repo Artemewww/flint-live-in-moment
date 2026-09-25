@@ -96,6 +96,139 @@ function clientIp(req: any): string {
   return xf || String(req.headers?.['x-real-ip'] || '') || 'unknown';
 }
 
+/**
+ * БАДИ-ПАРЫ (копия логики из api/telegram/webhook.ts — общий _lib роняет
+ * функции на Vercel). Запись идёт и из Mini App, и из бота: связки должны
+ * достраиваться в обоих случаях, иначе половина круга останется без напарника.
+ * Подробности модели — в supabase/migrations/2026-09-25-buddy-pairs.sql.
+ */
+const BUDDY_MIN = 5;
+
+async function syncBuddies(evId: string): Promise<Array<{ telegramId: number; mates: number[] }>> {
+  const { data: regs } = await supabase
+    .from('registrations').select('telegram_id,registered_at')
+    .eq('event_id', evId).neq('status', 'cancelled')
+    .order('registered_at', { ascending: true });
+  const active = Array.from(new Set((regs || [])
+    .map((r: any) => Number(r.telegram_id))
+    .filter((id: number) => Number.isFinite(id) && id > 0)));
+
+  const { data: rowsRaw } = await supabase
+    .from('event_buddies').select('telegram_id,pair_id').eq('event_id', evId);
+  const rows = (rowsRaw || []).map((r: any) => ({ id: Number(r.telegram_id), pairId: String(r.pair_id) }));
+
+  if (active.length < BUDDY_MIN) {
+    if (rows.length) await supabase.from('event_buddies').delete().eq('event_id', evId);
+    return [];
+  }
+
+  const activeSet = new Set(active);
+  const before = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!activeSet.has(r.id)) continue;
+    before.set(r.pairId, [...(before.get(r.pairId) || []), r.id]);
+  }
+  const groups = new Map<string, number[]>();
+  for (const [pid, mem] of before) if (mem.length >= 2) groups.set(pid, [...mem]);
+
+  const placed = new Set<number>();
+  for (const mem of groups.values()) for (const id of mem) placed.add(id);
+  const queue = active.filter((id) => !placed.has(id));
+
+  while (queue.length >= 2) {
+    const a = queue.shift() as number;
+    const b = queue.shift() as number;
+    groups.set(`p${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, [a, b]);
+  }
+  if (queue.length === 1) {
+    let best: string | null = null;
+    for (const [pid, mem] of groups) {
+      if (mem.length >= 3) continue;
+      if (best === null || mem.length < (groups.get(best) as number[]).length) best = pid;
+    }
+    if (best) groups.set(best, [...(groups.get(best) as number[]), queue[0]]);
+  }
+
+  const desired = new Map<number, string>();
+  for (const [pid, mem] of groups) for (const id of mem) desired.set(id, pid);
+
+  const gone = rows.map((r) => r.id).filter((id) => !desired.has(id));
+  if (gone.length) await supabase.from('event_buddies').delete().eq('event_id', evId).in('telegram_id', gone);
+
+  const changed = new Set<number>();
+  for (const [pid, mem] of groups) {
+    const was = before.get(pid) || [];
+    const same = was.length === mem.length && mem.every((id) => was.includes(id));
+    if (!same) for (const id of mem) changed.add(id);
+  }
+  if (!changed.size) return [];
+
+  await supabase.from('event_buddies').upsert(
+    [...changed].map((id) => ({
+      event_id: evId, telegram_id: id, pair_id: desired.get(id) as string, notified_at: null,
+    })),
+    { onConflict: 'event_id,telegram_id' },
+  );
+
+  return [...changed].map((id) => ({
+    telegramId: id,
+    mates: (groups.get(desired.get(id) as string) || []).filter((x) => x !== id),
+  }));
+}
+
+/** Разослать тем, у кого связка только что появилась или изменилась. */
+async function announceBuddies(evId: string, evTitle: string, fresh: Array<{ telegramId: number; mates: number[] }>) {
+  if (!BOT_TOKEN || !fresh.length) return;
+  const ids = Array.from(new Set(fresh.flatMap((f) => f.mates)));
+  const people = new Map<number, { name: string; username: string }>();
+  if (ids.length) {
+    const { data } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ids);
+    for (const m of data || []) {
+      people.set(Number((m as any).telegram_id), {
+        name: String((m as any).first_name || 'Участник'),
+        username: String((m as any).username || ''),
+      });
+    }
+  }
+  const sent: number[] = [];
+  for (const f of fresh) {
+    if (!f.mates.length) continue;
+    const list = f.mates.map((id) => {
+      const p = people.get(id);
+      const name = escapeHtml(p?.name || 'Участник');
+      return `🤝 ${p?.username ? `<a href="https://t.me/${escapeHtml(p.username)}">${name}</a>` : `<a href="tg://user?id=${id}">${name}</a>`}`;
+    }).join('\n');
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: f.telegramId,
+          parse_mode: 'HTML',
+          disable_web_page_preview: true,
+          text:
+            `🤝 <b>Твой бади на «${escapeHtml(evTitle)}»</b>\n\n${list}\n\n` +
+            'Бади — напарник, который держит тебя в поле зрения от сбора до разъезда.\n\n' +
+            '<b>Что это значит</b>\n' +
+            '• Спишитесь до выезда — договоритесь, как встречаетесь.\n' +
+            '• На событии держите друг друга в поле зрения.\n' +
+            '• Пропал, заболел, стало плохо — ты первый, кто это заметит и скажет организатору.\n' +
+            '• Бытовые и спорные вопросы решаете между собой, а не через организатора.\n\n' +
+            '<i>Спрос с обоих: и с тебя, и с твоего бади.</i>',
+        }),
+      });
+      // notified_at ставим ТОЛЬКО по факту доставки: кто ещё не открывал диалог
+      // с ботом, иначе навсегда остался бы «уже оповещённым» и не узнал бади.
+      if ((await r.json())?.ok === true) sent.push(f.telegramId);
+    } catch { /* заблокировал бота — не роняем остальных */ }
+  }
+  if (sent.length) {
+    await supabase.from('event_buddies')
+      .update({ notified_at: new Date().toISOString() })
+      .eq('event_id', evId).in('telegram_id', sent);
+  }
+}
+
 /** Rate-limit на Supabase (кросс-инстанс). Бакет в bot_sessions под хеш-ключом. */
 async function rateLimit(scope: string, ident: string, max: number, windowMs: number): Promise<{ allowed: boolean; retryAfter: number }> {
   try {
@@ -342,6 +475,13 @@ export default async function handler(req: any, res: any) {
 
     // Счётчик участников (не критично, если RPC нет).
     try { await supabase.rpc('increment_participants', { event_id: eventId }); } catch {}
+
+    // Бади: достраиваем связки и сразу говорим человеку, за кого он отвечает.
+    // Правило «у каждого есть бади» он принял на входе в клуб — теперь у него
+    // есть и сам напарник, а не только обязательство.
+    try {
+      await announceBuddies(eventId, eventTitle || eventId, await syncBuddies(eventId));
+    } catch (e) { slog('warn', 'buddy sync skipped', e); }
 
     // Smart Hype: milestone-уведомления в чат при достижении порогов участников.
     // Запрашиваем актуальный счётчик и шлём сообщение ОДИН РАЗ при переходе
