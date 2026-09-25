@@ -462,15 +462,36 @@ export default function App() {
   useEffect(() => {
     const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
     if (!initData) return;
-    fetch('/api/my', {
+    /**
+     * Ходили в /api/my — эндпоинт удалили ещё в июле, объединив в profile.ts.
+     * Запрос молча падал в 404, ошибку глотал catch, и заявки с сервера НЕ
+     * подтягивались никогда: приложение знало о записи только из localStorage.
+     * Записался через бота, сменил телефон, почистил кэш Telegram — и тебе
+     * снова предлагали записаться на событие, где ты уже едешь.
+     */
+    fetch('/api/profile', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ initData }),
+      body: JSON.stringify({ action: 'my_registrations', initData }),
     })
       .then((r) => r.json())
       .then((d) => {
-        const regs = (d && d.registrations) || [];
-        if (!regs.length) return;
+        // Сервер отдаёт колонки как есть (snake_case) и вместе с отменёнными:
+        // снятые заявки в «записан» попадать не должны.
+        const regs = ((d && d.registrations) || [])
+          .filter((r: any) => r.status !== 'cancelled')
+          .map((r: any) => ({
+            id: r.id,
+            eventId: r.event_id,
+            name: r.name || '',
+            phone: r.phone || '',
+            status: r.status,
+            paymentStatus: r.payment_status,
+            paymentAmount: r.payment_amount,
+            hasTransport: r.has_transport,
+            transportSeats: r.transport_seats,
+            registeredAt: r.registered_at,
+          }));
         setUserRegistrations((prev) => {
           const map = new Map(prev.map((r) => [r.eventId, r]));
           regs.forEach((r: any) =>
@@ -492,7 +513,13 @@ export default function App() {
           );
           return Array.from(map.values());
         });
-        setRegisteredEventIds((prev) => Array.from(new Set([...prev, ...regs.map((r: any) => r.eventId)])));
+        /**
+         * Внутри Telegram база — источник правды, а не localStorage. Раньше id
+         * только ДОБАВЛЯЛИСЬ объединением, и снятая через бота заявка навсегда
+         * оставалась в приложении: человек снялся, а ему по-прежнему
+         * показывали «ты записан» и не давали записаться заново.
+         */
+        setRegisteredEventIds(regs.map((r: any) => r.eventId));
       })
       .catch(() => {});
   }, []);
@@ -618,10 +645,13 @@ export default function App() {
       // Внутри Telegram — снимаем заявку и в БД (иначе на перезагрузке вернётся).
       const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
       if (initData) {
-        fetch('/api/my', {
+        // Тот же мёртвый /api/my: отмена уходила в 404, человек видел
+        // «участие отменено», а в базе оставался записанным — занимал место,
+        // числился в составе и получал напоминания о выезде.
+        fetch('/api/profile', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action: 'cancel', eventId, initData }),
+          body: JSON.stringify({ action: 'cancel_registration', eventId, initData }),
         }).catch(() => {});
       }
 
