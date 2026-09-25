@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
 import {
-  X, MapPin, Clock, Users, Sparkles, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
+  X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
 import { getPromoVideo } from '../promoVideo';
-import { getVectorIconByKey } from './VectorIcons';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
 import ProgramVoting from './ProgramVoting';
@@ -14,6 +13,7 @@ import LiveMedia from './LiveMedia';
 import SnapModal from './SnapModal';
 import { getEventGuide } from '../eventGuide';
 import { LogisticsPanel } from './LogisticsPanel';
+import { EventRules } from './EventRules';
 
 /**
  * Настоящий ли это чат события.
@@ -241,16 +241,6 @@ export default function EventDetailModal({
   };
 
   // Six vectors of development reference
-  const orderedKeys = ['foundation', 'wall', 'roof', 'decor', 'heat', 'life'] as const;
-  const qualityInfo = {
-    foundation: { label: 'Предназначение (Фундамент)', description: 'Осознание своей жизненной миссии, целей и глубокое понимание «Зачем ты здесь».' },
-    wall: { label: 'Воля (Стены)', description: 'Сила характера, развитие мощной самодисциплины и энергии для преодоления преград.' },
-    roof: { label: 'Совесть (Крыша)', description: 'Внутренний компас и нравственный щит. Защищает личность от разрушительных шагов.' },
-    decor: { label: 'Творчество (Украшение)', description: 'Раскрытие уникального потенциала, эстетического взгляда и ораторской харизмы.' },
-    heat: { label: 'Любовь (Тепло)', description: 'Эмпатия, подлинные партнерские узы Мужчины и Женщины, созидание душевного тепла.' },
-    life: { label: 'Счастье (Жизнь в доме)', description: 'Гармония, состояние подлинного присутствия здесь и сейчас без фальшивых ролей.' }
-  };
-
   // Prevent scroll behind modal
   useEffect(() => {
     document.body.style.overflow = 'hidden';
@@ -401,15 +391,20 @@ export default function EventDetailModal({
               Показываем всегда, не только записавшимся, — маршбросок/выезд открывают
               маршрут заранее, а live-ленту смотрят все. */}
           <div className="px-4 sm:px-6 mt-1" id={`event-actions-${event.id}`}>
-            <div className="flex flex-wrap gap-2">
+            {/* Бенто-сетка: три колонки одинаковых плиток вместо flex-wrap, где
+                кнопки разной длины выстраивались рваной лесенкой и занимали
+                три-четыре строки. Всё, ради чего человек открыл карточку,
+                должно попадать в первый экран, а не уезжать под скролл. */}
+            <div className="grid grid-cols-3 gap-2">
               {event.logistics?.routeUrl && (
                 <a
                   href={event.logistics.routeUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1.5 bg-brand text-black text-[11px] font-black font-mono uppercase tracking-wider rounded-xl px-3.5 py-2.5 transition-all hover:bg-brand-hover shadow-lg shadow-brand/20"
+                  className="flex flex-col items-center justify-center gap-1 bg-brand text-black text-[10px] font-black font-mono uppercase tracking-wider rounded-xl px-2 py-3 transition-all hover:bg-brand-hover shadow-lg shadow-brand/20 text-center leading-tight"
                 >
-                  📍 {event.logistics.routeLabel || 'Маршрут'}
+                  <span className="text-base leading-none">📍</span>
+                  {event.logistics.routeLabel || 'Маршрут'}
                 </a>
               )}
               {/* Live-галерея события: существующая точка media_<id> в Mini App. */}
@@ -417,18 +412,59 @@ export default function EventDetailModal({
                 href={`/api/events?action=gallery&id=${encodeURIComponent(event.id)}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-[11px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-3.5 py-2.5 transition-all"
+                className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
               >
-                📸 Live-фото события
+                <span className="text-base leading-none">📸</span>
+                Live-фото
               </a>
               {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки. */}
               <button
                 type="button"
                 onClick={() => setShowSnap(true)}
-                className="inline-flex items-center gap-1.5 text-[11px] font-black font-mono uppercase tracking-wider text-black bg-brand hover:bg-brand-hover rounded-xl px-3.5 py-2.5 transition-all shadow-lg shadow-brand/20"
+                className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-black bg-brand hover:bg-brand-hover rounded-xl px-2 py-3 transition-all shadow-lg shadow-brand/20 text-center leading-tight"
               >
-                📷 Снять фото / видео
+                <span className="text-base leading-none">📷</span>
+                Снять
               </button>
+              {/* Чат события и бот — переехали сюда из нижней панели: там они
+                  занимали постоянную полосу экрана, хотя нужны разово. */}
+              {isRealChatUrl(event.telegramBotUrl) && (
+                <a
+                  href={event.telegramBotUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">💬</span>
+                  Чат события
+                </a>
+              )}
+              {isRegistered && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'campsflint_bot'}?start=ev_${event.id}`;
+                    const tgApp = (window as any).Telegram?.WebApp;
+                    const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(`Еду на «${event.title}» с FLINT. Присоединяйся!`)}`;
+                    if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
+                    else if (navigator.share) navigator.share({ text: `Еду на «${event.title}» с FLINT. ${link}` }).catch(() => {});
+                    else { navigator.clipboard?.writeText(link); alert('Ссылка скопирована'); }
+                  }}
+                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                >
+                  <span className="text-base leading-none">📤</span>
+                  Позвать
+                </button>
+              )}
+              <a
+                href={`https://t.me/campsflint_bot?start=event_${event.id}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/50 border border-white/10 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+              >
+                <span className="text-base leading-none">🤖</span>
+                Бот
+              </a>
             </div>
           </div>
 
@@ -762,11 +798,86 @@ export default function EventDetailModal({
               </div>
             )}
 
+            {/* Программа подня́та выше логистики: человек сначала решает,
+                идёт ли он на ЭТО, и только потом — как добираться. Раньше
+                она лежала под составом и описанием, и до неё доскроливали
+                не все. */}
+            {/* Программа по времени */}
+            {guide.program.length > 0 && (
+              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-3">
+                <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
+                  <Clock className="w-3.5 h-3.5" /> Программа
+                </span>
+                {(() => {
+                  // Группируем программу по дню: «День N» или дата в начале строки
+                  // становится заголовком-разделителем, а под ним идут только время и
+                  // активность — без повтора даты в каждой строке (дерево по часам).
+                  // Заголовок дня в начале строки: «День N», «Day N», «N день»,
+                  // дата «12.07», дата с месяцем «17 июля», день недели «Суббота».
+                  const dayRe = /^\s*(День\s*\d+|Day\s*\d+|\d{1,2}\s*день\w*|\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?|\d{1,2}\s+(?:янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек)[а-я]*|понедельник|вторник|сред[аы]|четверг|пятниц[аы]|суббот[аы]|воскресень[ея])(?=[\s)\].,:–—-]|$)\s*[)\].,:–—-]*\s*/i;
+                  const groups: { day: string | null; items: string[] }[] = [];
+                  for (const raw of guide.program) {
+                    const m = raw.match(dayRe);
+                    const day = m ? m[1].trim() : null;
+                    const rest = (m ? raw.slice(m[0].length) : raw).trim();
+                    const last = groups[groups.length - 1];
+                    if (day && (!last || last.day !== day)) groups.push({ day, items: rest ? [rest] : [] });
+                    else if (last) { if (rest) last.items.push(rest); }
+                    else groups.push({ day, items: rest ? [rest] : [] });
+                  }
+                  const hasDays = groups.some((g) => g.day);
+                  if (!hasDays) {
+                    return (
+                      <ol className="space-y-2">
+                        {guide.program.map((step, i) => (
+                          <li key={i} className="flex gap-3 text-xs text-white/80">
+                            <span className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand font-bold flex items-center justify-center text-[10px]">{i + 1}</span>
+                            <span className="leading-relaxed pt-0.5">{step}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    );
+                  }
+                  return (
+                    <div className="space-y-3">
+                      {groups.map((g, gi) => (
+                        <div key={gi} className="space-y-1.5">
+                          {g.day && (
+                            <div className="text-brand text-[11px] font-bold uppercase tracking-wide flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-brand" />{g.day}
+                            </div>
+                          )}
+                          <ul className="space-y-1.5 border-l border-white/10 ml-[3px] pl-3">
+                            {g.items.map((it, ii) => {
+                              const tm = it.match(/^(\d{1,2}[:.]\d{2})\s*[–—-]?\s*/);
+                              const time = tm ? tm[1] : '';
+                              const text = tm ? it.slice(tm[0].length) : it;
+                              return (
+                                <li key={ii} className="flex gap-2 text-xs text-white/80">
+                                  {time && <span className="shrink-0 font-mono text-brand/90 text-[11px] pt-0.5 w-11">{time}</span>}
+                                  <span className="leading-relaxed pt-0.5">{text}</span>
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
             {/* Логистика прямо здесь: машины, места, палатки, попутки.
                 Раньше карточка отправляла за этим в бота — там каждая машина
                 отдельным сообщением, и число свободных мест устаревало сразу
                 после отправки. Теперь состояние живое, а бот только зовёт. */}
             <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />
+
+            {/* Правила круга: короткое напоминание вместо восьми экранов кодекса.
+                На место убранного «Дома Личности» встаёт то, что на выезде
+                действительно решает споры. */}
+            <EventRules />
 
             {/* Кто уже едет: состав, а не только цифра */}
             {roster.length > 0 && (
@@ -843,72 +954,6 @@ export default function EventDetailModal({
               </p>
             </div>
 
-            {/* Программа по времени */}
-            {guide.program.length > 0 && (
-              <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-3">
-                <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
-                  <Clock className="w-3.5 h-3.5" /> Программа
-                </span>
-                {(() => {
-                  // Группируем программу по дню: «День N» или дата в начале строки
-                  // становится заголовком-разделителем, а под ним идут только время и
-                  // активность — без повтора даты в каждой строке (дерево по часам).
-                  // Заголовок дня в начале строки: «День N», «Day N», «N день»,
-                  // дата «12.07», дата с месяцем «17 июля», день недели «Суббота».
-                  const dayRe = /^\s*(День\s*\d+|Day\s*\d+|\d{1,2}\s*день\w*|\d{1,2}[.\/]\d{1,2}(?:[.\/]\d{2,4})?|\d{1,2}\s+(?:янв|фев|мар|апр|ма[йя]|июн|июл|авг|сен|окт|ноя|дек)[а-я]*|понедельник|вторник|сред[аы]|четверг|пятниц[аы]|суббот[аы]|воскресень[ея])(?=[\s)\].,:–—-]|$)\s*[)\].,:–—-]*\s*/i;
-                  const groups: { day: string | null; items: string[] }[] = [];
-                  for (const raw of guide.program) {
-                    const m = raw.match(dayRe);
-                    const day = m ? m[1].trim() : null;
-                    const rest = (m ? raw.slice(m[0].length) : raw).trim();
-                    const last = groups[groups.length - 1];
-                    if (day && (!last || last.day !== day)) groups.push({ day, items: rest ? [rest] : [] });
-                    else if (last) { if (rest) last.items.push(rest); }
-                    else groups.push({ day, items: rest ? [rest] : [] });
-                  }
-                  const hasDays = groups.some((g) => g.day);
-                  if (!hasDays) {
-                    return (
-                      <ol className="space-y-2">
-                        {guide.program.map((step, i) => (
-                          <li key={i} className="flex gap-3 text-xs text-white/80">
-                            <span className="shrink-0 w-5 h-5 rounded-full bg-brand/15 text-brand font-bold flex items-center justify-center text-[10px]">{i + 1}</span>
-                            <span className="leading-relaxed pt-0.5">{step}</span>
-                          </li>
-                        ))}
-                      </ol>
-                    );
-                  }
-                  return (
-                    <div className="space-y-3">
-                      {groups.map((g, gi) => (
-                        <div key={gi} className="space-y-1.5">
-                          {g.day && (
-                            <div className="text-brand text-[11px] font-bold uppercase tracking-wide flex items-center gap-2">
-                              <span className="w-1.5 h-1.5 rounded-full bg-brand" />{g.day}
-                            </div>
-                          )}
-                          <ul className="space-y-1.5 border-l border-white/10 ml-[3px] pl-3">
-                            {g.items.map((it, ii) => {
-                              const tm = it.match(/^(\d{1,2}[:.]\d{2})\s*[–—-]?\s*/);
-                              const time = tm ? tm[1] : '';
-                              const text = tm ? it.slice(tm[0].length) : it;
-                              return (
-                                <li key={ii} className="flex gap-2 text-xs text-white/80">
-                                  {time && <span className="shrink-0 font-mono text-brand/90 text-[11px] pt-0.5 w-11">{time}</span>}
-                                  <span className="leading-relaxed pt-0.5">{text}</span>
-                                </li>
-                              );
-                            })}
-                          </ul>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-            )}
-
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек
                 дома, брать с собой нечего — и чек-лист кемпинга тем более. */}
             {needsCampingList && (
@@ -942,13 +987,6 @@ export default function EventDetailModal({
                 <CampingChecklist defaultOpen />
               </div>
             )}
-
-            {/* Вектор «Дома Личности» — зачем это */}
-            <div className="bg-brand/5 border border-brand/20 p-4 rounded-2xl space-y-1">
-              <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold">Дом Личности · зачем это</span>
-              <div className="text-sm font-bold text-white">{guide.vector.title}</div>
-              <p className="text-xs text-white/70 leading-relaxed">{guide.vector.text}</p>
-            </div>
 
             {/* Мед-показания — рядом с порогом входа и ДО кнопки записи:
                 человеку с противопоказанием нужно увидеть их раньше, чем он
@@ -1010,59 +1048,22 @@ export default function EventDetailModal({
               }}
             />
 
-            {/* Vector Alignment Breakdown ("Дом Личности") */}
-            <div className="space-y-3 pt-2">
-              <div className="flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-[#E6FD3A]" />
-                <span className="text-white/40 text-[10px] tracking-widest font-mono block uppercase">МАНИФЕСТ РАЗВИТИЯ «ДОМ ЛИЧНОСТИ»</span>
-              </div>
-
-              <div className="space-y-2">
-                {orderedKeys.map(key => {
-                  const isTrained = event.houseQualities.some(q => q.key === key);
-                  
-                  return (
-                    <div 
-                      key={key}
-                      className={`
-                        flex gap-3 p-3.5 rounded-2xl border transition-all
-                        ${isTrained 
-                          ? 'bg-[#E6FD3A]/5 border-[#E6FD3A]/20 text-white' 
-                          : 'bg-black/20 border-white/5 opacity-40'
-                        }
-                      `}
-                    >
-                      <div className={`p-1.5 rounded-xl border shrink-0 flex items-center justify-center h-9 w-9 ${
-                        isTrained 
-                          ? 'bg-[#E6FD3A]/10 border-[#E6FD3A]/25 text-[#E6FD3A] drop-shadow-[0_0_8px_rgba(230,253,58,0.2)]' 
-                          : 'bg-white/5 border-white/5 text-white/15'
-                      }`}>
-                        {getVectorIconByKey(key, false, 20)}
-                      </div>
-
-                      <div className="space-y-1 text-left">
-                        <strong className={`block text-xs uppercase font-mono tracking-wide ${isTrained ? 'text-[#E6FD3A]' : 'text-white/80'}`}>
-                          {key === 'foundation' ? '1. Предназначение (Фундамент)' :
-                           key === 'wall' ? '2. Воля (Стены)' :
-                           key === 'roof' ? '3. Совесть (Крыша)' :
-                           key === 'decor' ? '4. Творчество (Украшение)' :
-                           key === 'heat' ? '5. Любовь (Тепло)' : '6. Счастье (Жизнь в доме)'}
-                          {isTrained && <span className="font-sans text-[10px] lowercase text-white/50 font-normal pl-1.5">(активно развивается)</span>}
-                        </strong>
-                        <p className="text-[11px] text-white/60 leading-normal font-sans">
-                          {qualityInfo[key].description}
-                        </p>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            {/* Манифест «Дома Личности» со страницы события УБРАН.
+                Владелец: «это не ценная информация этого мероприятия, и так все
+                знают». Шесть векторов — про клуб в целом, а не про конкретный
+                выезд: они занимали пол-экрана перед кнопкой записи и оттесняли
+                вниз то, ради чего человек открыл карточку — программу, состав и
+                логистику. Манифест живёт в разделе «Манифест Сообщества». */}
 
           </div>
         </div>
 
-        {/* Footer Registration Action Area */}
+        {/* Нижняя панель — только там, где у человека есть ГЛАВНОЕ действие:
+            записаться, отметить интерес к закрытому набору, оставить отзыв.
+            У записанного действия нет: панель держала полосу экрана ради
+            надписи «участие подтверждено» и двух ссылок, которые теперь живут
+            плитками наверху. Сам факт записи виден в блоке «Твоё участие». */}
+        {!(isRegistered && phase !== 'past' && !isLocked) && (
         <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
           {phase === 'past' ? (
             /* Past event - feedback and share */
@@ -1205,6 +1206,7 @@ export default function EventDetailModal({
             </>
           )}
         </div>
+        )}
 
         {/* Снять фото / видео прямо из карточки события (живые кнопки) */}
         {showSnap && (
