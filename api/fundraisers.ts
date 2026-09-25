@@ -145,6 +145,58 @@ export default async function handler(req: any, res: any) {
       }
       return res.json({ ok: true, points: awarded });
     }
+    /**
+     * УДАЛЕНИЕ ВКЛАДА.
+     * В админке вкладов вообще не было видно: подтвердить, отклонить или
+     * убрать чужую запись было нечем, хотя pledge_status уже умел всё,
+     * кроме удаления. Ошибочную или фейковую запись надо уметь стирать.
+     * Подтверждённый вклад перед удалением откатывает баллы — иначе человек
+     * оставался бы с баллами за вклад, которого больше нет.
+     */
+    if (action === 'pledge_delete') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      if (!body.pledgeId) return res.status(400).json({ error: 'Не указан вклад' });
+      const { data: p } = await db.from('fundraiser_pledges')
+        .select('telegram_id,amount,fundraiser_id,status').eq('id', body.pledgeId).single();
+      if (!p) return res.status(404).json({ error: 'Вклад не найден' });
+      if (p.status === 'confirmed') {
+        const { data: f } = await db.from('fundraisers').select('points_per_100').eq('id', p.fundraiser_id).single();
+        const { data: m } = await db.from('members').select('points').eq('telegram_id', p.telegram_id).maybeSingle();
+        const back = Math.max(1, Math.round(Number(p.amount) * Number(f?.points_per_100 || 1)));
+        if (m) {
+          const { error: pe } = await db.from('members')
+            .update({ points: Math.max(0, Number(m.points || 0) - back) }).eq('telegram_id', p.telegram_id);
+          if (pe) console.error('[fundraisers] points rollback failed:', pe.message);
+        }
+      }
+      const { error } = await db.from('fundraiser_pledges').delete().eq('id', body.pledgeId);
+      if (error) throw error;
+      return res.json({ ok: true });
+    }
+
+    /**
+     * УДАЛЕНИЕ СБОРА.
+     * Черновик или сбор, который никто не поддержал, стирается целиком.
+     * А вот сбор с ПОДТВЕРЖДЁННЫМИ вкладами удалить нельзя: люди отдали
+     * деньги, и запись об этом — их гарантия, а не мусор в базе. Такой сбор
+     * закрывается статусом «Завершён», отчёт остаётся на странице.
+     */
+    if (action === 'delete') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      if (!body.id) return res.status(400).json({ error: 'Не указан сбор' });
+      const { data: ps } = await db.from('fundraiser_pledges').select('id,status').eq('fundraiser_id', body.id);
+      const confirmed = (ps || []).filter((x: any) => x.status === 'confirmed').length;
+      if (confirmed > 0) {
+        return res.status(400).json({
+          error: `Сбор нельзя удалить: ${confirmed} подтверждённых вклад(ов). Люди отдали деньги, и запись об этом — их гарантия. Закрой сбор статусом «Завершён».`,
+        });
+      }
+      await db.from('fundraiser_pledges').delete().eq('fundraiser_id', body.id);
+      const { error } = await db.from('fundraisers').delete().eq('id', body.id);
+      if (error) throw error;
+      return res.json({ ok: true });
+    }
+
     if (action === 'broadcast') {
       const { data: f } = await db.from('fundraisers').select('title,summary,slug,status').eq('id', body.id).eq('status', 'published').single(); if (!f) return res.status(404).json({ error: 'Разослать можно только опубликованный сбор' });
       // Реальная рассылка идёт по базе, поэтому по умолчанию — ТОЛЬКО костяк
