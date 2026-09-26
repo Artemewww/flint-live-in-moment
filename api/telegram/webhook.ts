@@ -3324,6 +3324,64 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * Вклад в сбор из уведомления организатору (api/fundraisers.ts → notifyOrganizer).
+       * Раньше подтвердить перевод можно было только в админке на сайте —
+       * организатор узнавал о деньгах с опозданием, а человек ждал без ответа.
+       * Нажать может организатор сбора (created_by) или костяк.
+       * Логика баллов — как в api/fundraisers.ts (pledge_status): задублирована
+       * намеренно, импорт из api/_lib/ роняет функции на Vercel.
+       */
+      if (data.startsWith('fpok_') || data.startsWith('fpno_')) {
+        const pledgeId = data.slice(5);
+        const ok = data.startsWith('fpok_');
+        const { data: pl } = await supabase.from('fundraiser_pledges')
+          .select('id,telegram_id,amount,fundraiser_id,status').eq('id', pledgeId).maybeSingle();
+        if (!pl) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Вклад уже удалён', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: fr } = await supabase.from('fundraisers')
+          .select('title,created_by,points_per_100,slug').eq('id', (pl as any).fundraiser_id).maybeSingle();
+        const isOwner = Number((fr as any)?.created_by || 0) === tgId;
+        if (!isOwner && !(await isCore(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отмечает организатор сбора или костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        // Меняем статус только из «ждёт»: двойное нажатие или два человека из
+        // костяка одновременно не начислят баллы дважды.
+        const { data: upd } = await supabase.from('fundraiser_pledges')
+          .update(ok
+            ? { status: 'confirmed', confirmed_at: new Date().toISOString(), confirmed_by: tgId }
+            : { status: 'rejected' })
+          .eq('id', pledgeId).eq('status', 'pending').select('id');
+        if (chatId && msgId) await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } });
+        if (!upd || !(upd as any[]).length) {
+          const st = (pl as any).status === 'confirmed' ? 'уже подтверждён' : (pl as any).status === 'rejected' ? 'уже отклонён' : 'уже обработан';
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Этот вклад ${st}`, show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const amount = Math.round(Number((pl as any).amount));
+        const title = esc((fr as any)?.title || 'сбор');
+        const contributor = Number((pl as any).telegram_id);
+        if (ok) {
+          const awarded = Math.max(1, Math.round(Number((pl as any).amount) * Number((fr as any)?.points_per_100 || 1)));
+          const { data: m } = await supabase.from('members').select('points').eq('telegram_id', contributor).maybeSingle();
+          if (m) await supabase.from('members').update({ points: Number((m as any).points || 0) + awarded }).eq('telegram_id', contributor);
+          try { await supabase.from('points_log').insert({ telegram_id: contributor, event_id: null, reason: 'fundraiser', points: awarded, description: 'Подтверждённый вклад в командный сбор' }); } catch { /* журнала может не быть */ }
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Подтверждено ✅ +${awarded} баллов участнику` });
+          if (chatId) await tg('sendMessage', { chat_id: chatId, reply_to_message_id: msgId, parse_mode: 'HTML', text: `✅ Вклад ${amount} BYN подтверждён — он в собранном.` });
+          await tg('sendMessage', { chat_id: contributor, parse_mode: 'HTML',
+            text: `💚 Организатор получил твой вклад <b>${amount} BYN</b> в «<b>${title}</b>». Спасибо!\n\n+${awarded} баллов в копилку.` });
+        } else {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отмечено: деньги не пришли' });
+          if (chatId) await tg('sendMessage', { chat_id: chatId, reply_to_message_id: msgId, parse_mode: 'HTML', text: `❌ Вклад ${amount} BYN отклонён. Участнику написал.` });
+          await tg('sendMessage', { chat_id: contributor, parse_mode: 'HTML',
+            text: `🤔 Организатор сбора «<b>${title}</b>» не нашёл твой перевод на ${amount} BYN.\n\nЕсли ты переводил — напиши организатору или в поддержку, разберёмся.` });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       /** Костяк одобряет черновик события — только после этого он на платформе. */
       if (data.startsWith('evok_') || data.startsWith('evno_')) {
         if (!(await isCore(tgId))) {

@@ -371,6 +371,56 @@ async function handleMedia(req: any, res: any) {
 }
 
 /**
+ * АВАТАРКИ УЧАСТНИКОВ.
+ * Состав события был списком прямоугольных плашек с буквой — людей не
+ * узнать в лицо. Фото берём у Telegram (getUserProfilePhotos): бот видит
+ * аватарку, если человек не спрятал её настройками приватности.
+ * Как и медиа — стримим через функцию: прямой URL файла содержит BOT TOKEN.
+ * Ссылка подписана (s = HMAC от id), поэтому прокси отдаёт только тех, кого
+ * сервер сам показал в составе, а не любой telegram_id по перебору.
+ * Кэш — сутки на CDN Vercel: аватарки меняются редко, функция не дёргается.
+ */
+function avatarSig(id: number): string {
+  return crypto.createHmac('sha256', BOT_TOKEN).update(`avatar:${id}`).digest('hex').slice(0, 16);
+}
+function avatarUrl(id: number): string {
+  return id > 0 && BOT_TOKEN ? `/api/events?action=avatar&u=${id}&s=${avatarSig(id)}` : '';
+}
+async function handleAvatar(req: any, res: any) {
+  const id = Number(req.query?.u || 0);
+  const sig = String(req.query?.s || '');
+  if (!id || !BOT_TOKEN || sig.length !== 16) return res.status(400).end();
+  const a = Buffer.from(sig), b = Buffer.from(avatarSig(id));
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(403).end();
+  try {
+    const ph = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getUserProfilePhotos`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_id: id, limit: 1 }),
+    }).then((r) => r.json());
+    const sizes: any[] = ph?.result?.photos?.[0] || [];
+    // Нужен кружок ~40–64px: берём самый маленький размер не меньше 160px.
+    const pick = sizes.find((x) => Number(x.width) >= 160) || sizes[sizes.length - 1];
+    // Фото нет или скрыто — 404, фронт покажет букву. Кэшируем и отказ,
+    // чтобы не спрашивать Telegram заново на каждом открытии карточки.
+    if (!pick?.file_id) { res.setHeader('Cache-Control', 'public, s-maxage=21600, max-age=21600'); return res.status(404).end(); }
+    const gf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: pick.file_id }),
+    }).then((r) => r.json());
+    const path = gf?.result?.file_path;
+    if (!path) return res.status(404).end();
+    const fr = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`);
+    if (!fr.ok) return res.status(404).end();
+    const buf = Buffer.from(await fr.arrayBuffer());
+    res.setHeader('Content-Type', fr.headers.get('content-type') || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, s-maxage=86400, max-age=86400');
+    return res.status(200).send(buf);
+  } catch {
+    return res.status(502).end();
+  }
+}
+
+/**
  * JSON-список медиа события для встраивания в мини-приложение (История события).
  * GET /api/events?action=media_list&id=<eventId>
  * Возвращает { items: [{ id, media_type, src, votes }] }, где src — путь к прокси
@@ -635,6 +685,7 @@ export default async function handler(req: any, res: any) {
     if (req.query?.action === 'gallery') return await handleGallery(req, res);
     if (req.query?.action === 'media_list') return await handleMediaList(req, res);
     if (req.query?.action === 'media') return await handleMedia(req, res);
+    if (req.query?.action === 'avatar') return await handleAvatar(req, res);
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
     // отдавался публично, а затем пускал по одному реф-коду — так не-член видел
@@ -734,6 +785,7 @@ export default async function handler(req: any, res: any) {
         const list = roster.get((r as any).event_id) || [];
         list.push({
           name: (r as any).name || p?.firstName || 'Участник',
+          avatar: avatarUrl(Number((r as any).telegram_id)),
           gender: p?.gender || null,
           isCore: p?.isCore || false,
           guests: Number((r as any).guest_count) || 0,
@@ -798,7 +850,7 @@ export default async function handler(req: any, res: any) {
        * Отдаём ТОЛЬКО свою связку — чужие пары на карточке не нужны, их видно
        * в боте («🤝 Бади»). Связки собирает api/register.ts и крон.
        */
-      const myBuddies = new Map<string, Array<{ name: string; username: string }>>();
+      const myBuddies = new Map<string, Array<{ name: string; username: string; avatar?: string }>>();
       if (viewerId && myEventIds.length) {
         const { data: mineRows } = await supabase
           .from('event_buddies').select('event_id,pair_id')
@@ -809,7 +861,7 @@ export default async function handler(req: any, res: any) {
             .from('event_buddies').select('event_id,pair_id,telegram_id')
             .in('event_id', myEventIds).in('pair_id', pairIds).neq('telegram_id', viewerId);
           const mateIds = Array.from(new Set((mateRows || []).map((r: any) => Number(r.telegram_id))));
-          const byId = new Map<number, { name: string; username: string }>();
+          const byId = new Map<number, { name: string; username: string; avatar: string }>();
           if (mateIds.length) {
             const { data: mm } = await supabase
               .from('members').select('telegram_id, first_name, username').in('telegram_id', mateIds);
@@ -817,6 +869,7 @@ export default async function handler(req: any, res: any) {
               byId.set(Number((m as any).telegram_id), {
                 name: String((m as any).first_name || 'Участник'),
                 username: String((m as any).username || ''),
+                avatar: avatarUrl(Number((m as any).telegram_id)),
               });
             }
           }

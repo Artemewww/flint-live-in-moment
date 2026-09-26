@@ -20,12 +20,15 @@ export interface EventParticipant {
   gender?: 'male' | 'female' | null;
   isCore?: boolean;
   guests?: number;
+  /** Ссылка на фото из Telegram (через прокси /api/events?action=avatar). */
+  avatar?: string;
 }
 
 /** Мой бади на событии: напарник, который держит меня в поле зрения. */
 export interface EventBuddy {
   name: string;
   username?: string;
+  avatar?: string;
 }
 
 /** Моя машина на событии: кто везёт, с кем еду, откуда стартуем. */

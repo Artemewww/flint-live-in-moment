@@ -137,8 +137,13 @@
 `jest` и `ts-jest` были прописаны в конфиге `package.json`, но отсутствовали в
 `devDependencies` — команда падала с `sh: 1: jest: not found`, поэтому пункт
 «все тесты проходят» висел незакрытым с июля. Зависимости добавлены.
-**Сейчас**: 2 сюиты, 14 тестов, всё зелёное (`ratelimit`, `buddies`).
-Что покрыть дальше: `verifyInitData`, разбор дат события, сплит счетов.
+**26.09.2026**: 4 сюиты, 80 тестов, всё зелёное (`ratelimit`, `buddies`,
+`group-intent`, `verify-init-data`).
+`verify-init-data` гоняет по одним сценариям **все пять копий** проверки подписи
+(events, register, profile, fundraisers, admin/events) — вырезает функцию прямо
+из исходника. Сразу нашёл дыру: в `api/fundraisers.ts` не было проверки
+`auth_date`, перехваченная подпись годилась вечно. Исправлено.
+Что покрыть дальше: разбор дат события, сплит счетов.
 
 ### 7. Мониторинг ошибок (Sentry / Vercel Analytics)
 **Статус**: Не сделано.
@@ -191,11 +196,12 @@ TODO_NEXT.md             # ✅ Этот файл (обновлён)
 - [x] Кнопка "Вступить через бот" ведёт на `?start=apply`
 - [x] Фича Smart Hype реализована и закоммичена (08.08.2026)
 - [x] Изменения запушены в GitHub main branch
-- [x] Все тесты проходят (`npm test`) — 25.09.2026, 14 тестов
+- [x] Все тесты проходят (`npm test`) — 26.09.2026, 80 тестов
 - [x] Код задеплоен через GitHub Integration (auto-deploy)
 - [ ] `ADMIN_TOKEN` установлен в Vercel Environment Variables
 - [ ] Миграции `club_assets` и `support_messages` накатаны в Supabase
-- [ ] **Миграция `2026-09-25-buddy-pairs.sql` накатана** (иначе бади не покажутся)
+- [x] **Миграция `2026-09-25-buddy-pairs.sql` накатана** — 26.09.2026
+- [x] Миграция `2026-member-gender.sql` накатана (+ страховочные `birthday date`, `phone text`) — 26.09.2026
 - [ ] Проверена работа Smart Hype в production (прогресс-бар, milestone-уведомления)
 
 ---

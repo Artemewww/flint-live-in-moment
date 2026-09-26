@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import Avatar from './Avatar';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
@@ -759,24 +760,33 @@ export default function EventDetailModal({
                     <span className="text-white/40 uppercase text-[9px] tracking-wider block">
                       {event.myBuddies!.length > 1 ? 'Твои бади' : 'Твой бади'}
                     </span>
-                    <div className="text-white text-sm font-bold">
-                      {event.myBuddies!.map((b, i) => (
-                        <span key={`${b.name}-${i}`}>
-                          {i > 0 && ', '}
-                          {b.username ? (
-                            <a
-                              href={`https://t.me/${b.username}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-brand underline"
-                            >
-                              {b.name}
-                            </a>
-                          ) : (
-                            b.name
-                          )}
-                        </span>
-                      ))}
+                    <div className="flex flex-wrap gap-3">
+                      {event.myBuddies!.map((b, i) => {
+                        const inner = (
+                          <>
+                            <Avatar name={b.name} src={b.avatar} size={40} />
+                            <span className="min-w-0">
+                              <span className="block truncate text-sm font-bold text-white">{b.name}</span>
+                              {b.username && <span className="block text-[11px] text-brand">написать @{b.username}</span>}
+                            </span>
+                          </>
+                        );
+                        return b.username ? (
+                          <a
+                            key={`${b.name}-${i}`}
+                            href={`https://t.me/${b.username}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-2.5 rounded-full bg-white/5 border border-white/10 py-1 pl-1 pr-4 no-underline"
+                          >
+                            {inner}
+                          </a>
+                        ) : (
+                          <span key={`${b.name}-${i}`} className="flex items-center gap-2.5 rounded-full bg-white/5 border border-white/10 py-1 pl-1 pr-4">
+                            {inner}
+                          </span>
+                        );
+                      })}
                     </div>
                     <p className="text-white/60 text-[11px] leading-snug">
                       Держите друг друга в поле зрения от сбора до разъезда. Пропал, заболел,
@@ -969,27 +979,21 @@ export default function EventDetailModal({
                     {rosterFemale > 0 && `♀ ${rosterFemale}`}
                   </span>
                 </div>
-                <div className="flex flex-wrap gap-2">
+                {/* Кружки с фото из Telegram: людей узнают в лицо, а не по букве.
+                    Кольцо бренда — костяк, «+N» — гости, которых человек везёт. */}
+                <div className="grid grid-cols-[repeat(auto-fill,minmax(64px,1fr))] gap-x-2 gap-y-3">
                   {roster.map((p, i) => (
-                    <span
-                      key={`${p.name}-${i}`}
-                      className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl pl-1.5 pr-3 py-1.5"
-                    >
-                      <span
-                        className={`w-6 h-6 rounded-lg flex items-center justify-center text-[11px] font-black shrink-0 ${
-                          p.gender === 'female'
-                            ? 'bg-rose-400/20 text-rose-300'
-                            : p.gender === 'male'
-                              ? 'bg-brand/20 text-brand'
-                              : 'bg-white/10 text-white/50'
-                        }`}
-                      >
-                        {(p.name || '?').trim().charAt(0).toUpperCase()}
+                    <div key={`${p.name}-${i}`} className="flex flex-col items-center gap-1.5 min-w-0">
+                      <span className="relative">
+                        <Avatar name={p.name} src={p.avatar} size={48} ring={p.isCore ? 'brand' : 'none'} />
+                        {!!p.guests && (
+                          <span className="absolute -bottom-1 -right-1 rounded-full bg-white text-black text-[9px] font-black px-1.5 py-0.5 leading-none">
+                            +{p.guests}
+                          </span>
+                        )}
                       </span>
-                      <span className="text-white text-xs font-bold">{p.name}</span>
-                      {p.isCore && <span className="text-[8px] font-mono uppercase text-brand">костяк</span>}
-                      {!!p.guests && <span className="text-[9px] font-mono text-white/40">+{p.guests}</span>}
-                    </span>
+                      <span className="w-full truncate text-center text-[11px] font-bold text-white/85">{p.name}</span>
+                    </div>
                   ))}
                 </div>
                 <p className="text-white/30 text-[9px] font-mono">Состав видят только участники клуба</p>
