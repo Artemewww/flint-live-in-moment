@@ -1,71 +1,80 @@
-import React, { useRef, useState } from 'react';
-import { Check, ChevronDown, Minus, X } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Minus, X } from 'lucide-react';
 
 /**
- * Обложка-галерея: листается пальцем, счётчик «2/6», тап — на весь экран.
- * Одна обложка не отвечает на вопрос «как там будет»; пять живых кадров
- * места — отвечают. Без дополнительных фото ведёт себя как прежняя обложка.
+ * Обложка + фото места.
+ * Раньше фото листались свайпом прямо по обложке — владелец: «человек не
+ * поймёт, что так листать надо». Теперь обложка неподвижна, а под ней ряд
+ * миниатюр: сразу видно, что фото несколько. Тап по миниатюре открывает
+ * просмотр со стрелками «‹ ›» и счётчиком.
  */
 export function HeroGallery({ images, title, children }: { images: string[]; title: string; children?: React.ReactNode }) {
-  const [idx, setIdx] = useState(0);
   const [full, setFull] = useState<number | null>(null);
-  const track = useRef<HTMLDivElement>(null);
-  const many = images.length > 1;
-  const onScroll = () => {
-    const el = track.current; if (!el) return;
-    setIdx(Math.round(el.scrollLeft / Math.max(el.clientWidth, 1)));
-  };
+  const cover = images[0];
+  const extra = images.slice(1);
+  const go = (d: number) => setFull((i) => (i === null ? i : (i + d + images.length) % images.length));
   return (
-    <div className="relative h-[42vh] min-h-[15rem] sm:h-80 w-full bg-black">
-      <div
-        ref={track}
-        onScroll={onScroll}
-        className="flex h-full w-full snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        {images.map((src, i) => (
+    <>
+      <div className="relative h-[42vh] min-h-[15rem] sm:h-80 w-full bg-black">
+        {cover && (
           <img
-            key={src + i}
-            src={src}
-            alt={i ? `${title} — фото ${i + 1}` : title}
+            src={cover}
+            alt={title}
             referrerPolicy="no-referrer"
-            loading={i ? 'lazy' : 'eager'}
-            onClick={() => many && setFull(i)}
-            className={`h-full w-full shrink-0 snap-center object-cover brightness-[0.55] select-none ${many ? 'cursor-zoom-in' : 'pointer-events-none'}`}
+            onClick={() => extra.length && setFull(0)}
+            className={`h-full w-full object-cover brightness-[0.55] select-none ${extra.length ? 'cursor-zoom-in' : 'pointer-events-none'}`}
           />
-        ))}
+        )}
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#121212] via-[#121212]/30 to-black/50" />
+        {/* Название и бейджи поверх фото не кликабельны — тап проходит к обложке. */}
+        <div className="pointer-events-none absolute inset-0">{children}</div>
       </div>
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#121212] via-[#121212]/30 to-black/50" />
-      {many && (
-        <>
-          <span className="pointer-events-none absolute left-4 top-4 rounded-full bg-black/60 px-2.5 py-1 font-mono text-[10px] font-bold text-white backdrop-blur">
-            📸 {idx + 1}/{images.length}
-          </span>
-          <span className="pointer-events-none absolute bottom-2 left-1/2 flex -translate-x-1/2 gap-1">
-            {images.map((_, i) => <span key={i} className={`h-1 rounded-full transition-all ${i === idx ? 'w-4 bg-white' : 'w-1 bg-white/40'}`} />)}
-          </span>
-        </>
-      )}
-      {/* Название и бейджи поверх фото не кликабельны — свайп проходит сквозь них. */}
-      <div className="pointer-events-none absolute inset-0">{children}</div>
 
-      {full !== null && (
-        <div className="fixed inset-0 z-[120] flex flex-col bg-black" onClick={() => setFull(null)}>
-          <div className="flex items-center justify-between p-4 text-white">
-            <span className="font-mono text-xs">{full + 1} / {images.length}</span>
-            <button type="button" onClick={() => setFull(null)} className="rounded-full border-0 bg-white/10 p-2 text-white" aria-label="Закрыть"><X className="h-5 w-5" /></button>
+      {extra.length > 0 && (
+        <div className="px-4 pt-3 sm:px-6">
+          <div className="flex items-center justify-between pb-2">
+            <span className="text-[10px] font-mono uppercase tracking-widest text-white/45">📸 Фото места · {images.length}</span>
+            <button type="button" onClick={() => setFull(0)} className="border-0 bg-transparent p-0 text-[11px] font-bold text-brand">Смотреть все</button>
           </div>
-          <div className="flex flex-1 snap-x snap-mandatory overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            ref={(el) => { if (el && full !== null) el.scrollLeft = full * el.clientWidth; }}
-            onClick={(e) => e.stopPropagation()}>
+          <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {images.map((src, i) => (
-              <div key={src + i} className="flex h-full w-full shrink-0 snap-center items-center justify-center p-2">
-                <img src={src} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
-              </div>
+              <button key={src + i} type="button" onClick={() => setFull(i)}
+                className="relative h-[72px] w-[72px] shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5 p-0">
+                <img src={src} alt={`${title} — фото ${i + 1}`} loading="lazy" referrerPolicy="no-referrer" className="h-full w-full object-cover" />
+              </button>
             ))}
           </div>
         </div>
       )}
-    </div>
+
+      {full !== null && (
+        <div className="fixed inset-0 z-[120] flex flex-col bg-black" onClick={() => setFull(null)}>
+          <div className="flex items-center justify-between p-4 text-white" onClick={(e) => e.stopPropagation()}>
+            <span className="font-mono text-sm">{full + 1} / {images.length}</span>
+            <button type="button" onClick={() => setFull(null)} className="rounded-full border-0 bg-white/10 p-2 text-white" aria-label="Закрыть"><X className="h-5 w-5" /></button>
+          </div>
+          <div className="relative flex flex-1 items-center justify-center p-2" onClick={(e) => e.stopPropagation()}>
+            <img src={images[full]} alt="" className="max-h-full max-w-full rounded-lg object-contain" />
+            {images.length > 1 && (
+              <>
+                <button type="button" onClick={() => go(-1)} aria-label="Предыдущее фото"
+                  className="absolute left-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border-0 bg-white/15 text-white backdrop-blur"><ChevronLeft className="h-6 w-6" /></button>
+                <button type="button" onClick={() => go(1)} aria-label="Следующее фото"
+                  className="absolute right-2 top-1/2 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full border-0 bg-white/15 text-white backdrop-blur"><ChevronRight className="h-6 w-6" /></button>
+              </>
+            )}
+          </div>
+          <div className="flex justify-center gap-1.5 overflow-x-auto p-3" onClick={(e) => e.stopPropagation()}>
+            {images.map((src, i) => (
+              <button key={src + i} type="button" onClick={() => setFull(i)}
+                className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 p-0 ${i === full ? 'border-brand' : 'border-transparent opacity-60'}`}>
+                <img src={src} alt="" className="h-full w-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -139,6 +148,36 @@ export function TripBlock({ trip }: { trip?: { docs?: string; flights?: string; 
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Яндекс-карта точки, куда едем — записавшимся (место сбора и точку выезда
+ * видят только участники). Встроенная карта с меткой + кнопка «Маршрут»
+ * в приложении Яндекс Карт. Нет координат — ищем по адресу.
+ */
+export function YandexMapBlock({ lat, lng, place }: { lat?: number; lng?: number; place?: string }) {
+  const has = !!lat && !!lng;
+  if (!has && !place) return null;
+  const widget = has
+    ? `https://yandex.ru/map-widget/v1/?ll=${lng},${lat}&z=14&pt=${lng},${lat},pm2rdm`
+    : `https://yandex.ru/map-widget/v1/?text=${encodeURIComponent(place || '')}&z=13`;
+  const open = has
+    ? `https://yandex.ru/maps/?ll=${lng},${lat}&z=16&pt=${lng},${lat},pm2rdm`
+    : `https://yandex.ru/maps/?text=${encodeURIComponent(place || '')}`;
+  const route = has ? `https://yandex.ru/maps/?rtext=~${lat},${lng}&rtt=auto` : open;
+  return (
+    <div className="space-y-2">
+      <span className="text-white/40 uppercase text-[9px] tracking-wider block">Куда едем</span>
+      <div className="overflow-hidden rounded-2xl border border-white/10 bg-black">
+        <iframe src={widget} title="Яндекс Карта — место события" loading="lazy" className="block h-56 w-full border-0" allowFullScreen />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <a href={route} target="_blank" rel="noopener noreferrer" className="rounded-xl bg-brand py-2.5 text-center text-[11px] font-black uppercase text-black no-underline">🧭 Маршрут</a>
+        <a href={open} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-white/15 py-2.5 text-center text-[11px] font-bold uppercase text-white/80 no-underline">Открыть карту</a>
+      </div>
+      {place && <p className="text-[11px] text-white/50">{place}</p>}
     </div>
   );
 }

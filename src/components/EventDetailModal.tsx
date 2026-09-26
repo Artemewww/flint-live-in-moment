@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
-import { HeroGallery, IncludedBlock, FaqBlock, TripBlock } from './EventShowcase';
+import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 , UserPlus} from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
@@ -721,6 +721,11 @@ export default function EventDetailModal({
                 <span className="text-brand uppercase text-[9px] tracking-wider font-bold flex items-center gap-2">
                   <Check className="w-4 h-4" /> Твоё участие
                 </span>
+
+                {/* Карта точки — только записавшимся: место видят участники. */}
+                {event.format !== 'online' && (
+                  <YandexMapBlock lat={event.coordinates?.lat || Number(extractCoords(event.location || '')?.lat) || undefined} lng={event.coordinates?.lng || Number(extractCoords(event.location || '')?.lon) || undefined} place={prettyPlace(event.location)} />
+                )}
 
                 {/* Кнопка «Позвать своих» убрана: то же действие уже живёт
                     иконкой у крестика наверху. Две кнопки под одно действие на

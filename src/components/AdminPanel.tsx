@@ -5088,7 +5088,6 @@ function EditEventModal({ event, onClose, onSave }: {
   onClose: () => void;
   onSave: (event: CommunityEvent) => void;
 }) {
-  const [generatingCover, setGeneratingCover] = useState(false);
   // Правка программы промптом + пересчёт при смене даты (правки из PDF 16.07).
   const [progPrompt, setProgPrompt] = useState('');
   const [progBusy, setProgBusy] = useState(false);
@@ -5118,7 +5117,8 @@ function EditEventModal({ event, onClose, onSave }: {
     logistics: (event.logistics || {}) as Record<string, any>,
     paymentDetails: (event.paymentDetails || {}) as Record<string, any>,
     houseQualities: (event.houseQualities || []) as HouseQuality[],
-    notifications: ((event as any).notifications || {}) as Record<string, any>
+    notifications: ((event as any).notifications || {}) as Record<string, any>,
+    deputyId: (event.deputyId || null) as number | null,
   });
 
   /**
@@ -5198,22 +5198,29 @@ function EditEventModal({ event, onClose, onSave }: {
       logistics: formData.logistics,
       paymentDetails: formData.paymentDetails,
       houseQualities: formData.houseQualities,
-      notifications: formData.notifications
+      notifications: formData.notifications,
+      deputyId: formData.deputyId || undefined,
     });
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="edit-event-modal">
-      <div className="absolute inset-0 bg-black/95" onClick={onClose} />
+    /* Правка события — во весь экран, а не в окошке шириной с телефон:
+       полей десятки, и в узком контейнере со скроллом в 60% высоты их было
+       неудобно править. Шапка с «Сохранить» всегда на виду. */
+    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0E0E0E]" id="edit-event-modal">
+      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-[#121212]/95 px-4 py-3 backdrop-blur sm:px-8">
+        <button onClick={onClose} className="shrink-0 rounded-full border-none bg-white/10 p-2 text-white cursor-pointer" aria-label="Закрыть"><X className="w-5 h-5" /></button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-white/40">Редактирование</p>
+          <h3 className="truncate font-bold text-base uppercase sm:text-lg">{formData.title || event.title}</h3>
+        </div>
+        <button onClick={handleSave} className="shrink-0 rounded-xl border-none bg-brand px-5 py-2.5 text-xs font-black uppercase text-black cursor-pointer hover:bg-brand-hover">Сохранить</button>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4"
-      >
-        <h3 className="font-bold text-lg uppercase">Редактировать: {event.title}</h3>
+      <div className="flex-1 overflow-y-auto">
+        <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-24 sm:px-8">
+          <OrganizerPicker value={formData.deputyId} onChange={(id) => setFormData({ ...formData, deputyId: id })} />
 
-        <div className="space-y-3 max-h-[60vh] overflow-y-auto">
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
               Название *
@@ -5361,35 +5368,6 @@ function EditEventModal({ event, onClose, onSave }: {
             <p className="text-[9px] text-white/30 mt-1">Вертикальная картинка (афиша) для рассылок в Telegram. Если не задана — используется основная.</p>
           </div>
 
-          {/* AI-генерация обложки с лоадером */}
-          <button
-            type="button"
-            disabled={!formData.title.trim() || generatingCover}
-            onClick={async () => {
-              setGeneratingCover(true);
-              try {
-                const url = await aiGenerateImage(formData.title, formData.description);
-                if (url) setFormData({...formData, image: url});
-                else alert('ИИ не смог сгенерировать обложку. Попробуй позже или загрузи свою.');
-              } catch (e) {
-                console.error('AI generate_image error:', e);
-                alert('Ошибка генерации: ' + (e as Error).message);
-              } finally {
-                setGeneratingCover(false);
-              }
-            }}
-            className="w-full bg-brand/10 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {generatingCover ? (
-              <>
-                <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
-                Генерация…
-              </>
-            ) : (
-              '🎨 Сгенерировать обложку'
-            )}
-          </button>
-
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
               Решаемая проблема / смысл (что закрывает событие)
@@ -5405,19 +5383,8 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Участники
-              </label>
-              <input
-                type="number"
-                value={formData.participantsCount}
-                onChange={(e) => setFormData({...formData, participantsCount: parseInt(e.target.value)})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              />
-            </div>
-
+          {/* «Участники» руками не правятся: число считается по записям. */}
+          <div>
             <div>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
                 Максимум мест
@@ -5593,23 +5560,22 @@ function EditEventModal({ event, onClose, onSave }: {
               <option value="closed">Завершено</option>
             </select>
           </div>
+          <div className="flex gap-2 pt-2">
+            <button
+              onClick={handleSave}
+              className="flex-1 bg-brand hover:bg-brand-hover text-black py-3.5 rounded-xl text-xs font-black uppercase border-none cursor-pointer"
+            >
+              Сохранить
+            </button>
+            <button
+              onClick={onClose}
+              className="flex-1 border border-white/10 bg-transparent py-3.5 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer"
+            >
+              Отмена
+            </button>
+          </div>
         </div>
-
-        <div className="flex gap-2 pt-2">
-          <button
-            onClick={handleSave}
-            className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase"
-          >
-            Сохранить
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60"
-          >
-            Отмена
-          </button>
-        </div>
-      </motion.div>
+      </div>
     </div>
   );
 }
@@ -5863,7 +5829,7 @@ function AddEventModal({ onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+        className="form-stable bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
       >
         <h3 className="font-bold text-lg uppercase">Новое мероприятие</h3>
 
