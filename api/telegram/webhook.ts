@@ -952,6 +952,71 @@ function eventCard(ev: any): string {
   );
 }
 
+/**
+ * АВТО-ПРИВЯЗКА ЧАТА К СОБЫТИЮ — бот думает за организатора.
+ * Раньше чат выезда был для бота «чужим», пока кто-то из костяка не
+ * вспомнит про /link. Теперь бот сам сверяет название группы с ближайшими
+ * событиями («Ислочь — тишина и природа» ↔ «Выезд на природу: Ислочь…»):
+ * уверен — привязывается сам и говорит об этом в чате и организатору;
+ * не уверен — показывает выбор (при добавлении бота в группу).
+ * Неудачная попытка по обычному сообщению повторяется не чаще раза в 6 ч.
+ */
+const autoLinkMiss = new Map<number, number>();
+const LINK_STOP = new Set(['выезд', 'выезда', 'чат', 'группа', 'событие', 'flint', 'флинт', 'клуб', 'для', 'это', 'наш', 'наша', 'the']);
+function titleWords(t: string): Set<string> {
+  return new Set(String(t || '').toLowerCase().replace(/ё/g, 'е').split(/[^a-zа-я0-9]+/i).filter((w) => w.length >= 3 && !LINK_STOP.has(w)));
+}
+async function autoLinkGroup(chat: any, opts: { announce: boolean; askIfUnsure: boolean }): Promise<string | null> {
+  const chatId = Number(chat?.id);
+  if (!chatId) return null;
+  const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+  if (gl) return String((gl as any).event_id);
+  if (!opts.askIfUnsure && (autoLinkMiss.get(chatId) || 0) > Date.now()) return null;
+  const today = new Date().toISOString().slice(0, 10);
+  const until = new Date(Date.now() + 60 * 86400000).toISOString().slice(0, 10);
+  const { data: evs } = await supabase.from('events').select('id,title,date,deputy_id,telegram_bot_url')
+    .in('status', ['open', 'locked']).gte('date', today).lte('date', until).order('date').limit(30);
+  const cw = titleWords(chat?.title || '');
+  const scored = (evs || []).map((e: any) => {
+    const ew = titleWords(e.title);
+    const common = [...cw].filter((w) => ew.has(w) || [...ew].some((x) => x.length >= 5 && w.length >= 5 && x.slice(0, 5) === w.slice(0, 5))).length;
+    return { e, score: cw.size && ew.size ? common / Math.min(cw.size, ew.size) : 0 };
+  }).sort((a: any, b: any) => b.score - a.score);
+  const best = scored[0], second = scored[1];
+  if (best && best.score >= 0.5 && (!second || best.score - second.score >= 0.15)) {
+    const ev = best.e;
+    await supabase.from('event_groups').upsert({ event_id: ev.id, chat_id: chatId, chat_title: chat?.title || null, active: true }, { onConflict: 'chat_id' });
+    if (!ev.telegram_bot_url) {
+      try {
+        const r = await tg('exportChatInviteLink', { chat_id: chatId });
+        if (typeof r?.result === 'string') await supabase.from('events').update({ telegram_bot_url: r.result }).eq('id', ev.id);
+      } catch { /* нет прав админа — не страшно */ }
+    }
+    if (opts.announce) {
+      await tg('sendMessage', {
+        chat_id: chatId, parse_mode: 'HTML',
+        text: `🔗 Вижу, этот чат — про «<b>${esc(ev.title)}</b>» (${esc(whenPhrase(ev.date))}). Подключился сам:\n\n` +
+          `• новых участников спрошу «едешь?» и внесу в состав;\n• за 3 дня и накануне сделаю перекличку;\n• отвечу на вопросы про место, машины и кто что везёт.\n\nНе то событие — костяк может поправить командой /link.`,
+      });
+    }
+    const org = Number(ev.deputy_id || 0);
+    if (org > 0) {
+      await tg('sendMessage', { chat_id: org, parse_mode: 'HTML',
+        text: `🔗 Я подключился к чату «${esc(chat?.title || 'группа')}» — это «<b>${esc(ev.title)}</b>». Теперь сам веду перекличку и спрашиваю новых, едут ли они. Тебе ничего делать не нужно.` });
+    }
+    return String(ev.id);
+  }
+  autoLinkMiss.set(chatId, Date.now() + 6 * 3600 * 1000);
+  if (opts.askIfUnsure && (evs || []).length) {
+    await tg('sendMessage', {
+      chat_id: chatId, parse_mode: 'HTML',
+      text: '👋 Привет! Я бот клуба FLINT. К какому событию этот чат? Выберите — и я начну вести состав, перекличку и напоминания (выбирает костяк):',
+      reply_markup: kb((evs || []).slice(0, 6).map((e: any) => [{ text: `${e.title} · ${whenPhrase(e.date)}`, callback_data: `bindchat_${e.id}` }])),
+    });
+  }
+  return null;
+}
+
 /** Регистрация из бота с реальным telegram_id (from — Telegram-пользователь). */
 async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | 'error'> {
   try {
@@ -7077,9 +7142,11 @@ export default async function handler(req: any, res: any) {
      */
     if (msg && Array.isArray(msg.new_chat_members) && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup')) {
       const chatId = msg.chat.id;
-      const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
-      if (gl) {
-        const { data: ev } = await supabase.from('events').select('id,title,date,status').eq('id', (gl as any).event_id).maybeSingle();
+      // Добавили самого бота — сразу пытаемся понять, чей это чат.
+      const botAdded = (msg.new_chat_members as any[]).some((u) => u?.is_bot && String(u.username || '').toLowerCase() === BOT_USERNAME.toLowerCase());
+      const linkedId = await autoLinkGroup(msg.chat, { announce: true, askIfUnsure: botAdded });
+      if (linkedId) {
+        const { data: ev } = await supabase.from('events').select('id,title,date,status').eq('id', linkedId).maybeSingle();
         const people = (msg.new_chat_members as any[]).filter((u) => u && !u.is_bot);
         if (ev && people.length) {
           const ids = people.map((u) => Number(u.id));
@@ -7421,6 +7488,8 @@ export default async function handler(req: any, res: any) {
         // (ставится через /link), затем фолбэк по username чата — у ЗАКРЫТЫХ
         // групп (обычный случай) username нет, поэтому старый способ почти
         // всегда давал null и ИИ-менеджер молчал во всех приватных группах.
+        // Чат ещё не привязан — пробуем привязать сам (по названию группы).
+        await autoLinkGroup(msg.chat, { announce: true, askIfUnsure: false });
         const { data: eventGroupLink } = await supabase
           .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
         let linkedEvent: any = null;
