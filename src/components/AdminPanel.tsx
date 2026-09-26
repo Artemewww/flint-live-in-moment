@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrganizerPicker from './OrganizerPicker';
+import EventExtrasEditor from './EventExtrasEditor';
 import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -4910,10 +4911,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
  * записи, машины/попутки, палатки); включил — процесс сразу доступен.
  * Без явного флага поведение определяется типом события (как раньше).
  */
-function FeatureToggles({ value, type, onChange }: {
+function FeatureToggles({ value, type, onChange, scale }: {
   value: Record<string, any>;
   type: string;
   onChange: (v: Record<string, any>) => void;
+  /** Масштаб события: палатки без ночёвки не бывают — тумблер не показываем. */
+  scale?: string;
 }) {
   // Формат события задаёт, какие блоки вообще имеют смысл: онлайну не нужны
   // машины, палатки и совместная готовка. Хранится в notifications._format
@@ -4926,7 +4929,7 @@ function FeatureToggles({ value, type, onChange }: {
     { key: 'feat_food', label: '🍽 Готовка и меню', def: defFood },
     { key: 'feat_rides', label: '🚗 Машины и попутки', def: defLogi },
     { key: 'feat_tents', label: '⛺ Палатки', def: defLogi },
-  ];
+  ].filter((it) => !(it.key === 'feat_tents' && (scale === 'hours' || scale === 'day')));
   const FORMATS = [
     { k: 'offline', l: '📍 Вживую' },
     { k: 'online', l: '💻 Онлайн' },
@@ -5219,6 +5222,7 @@ function EditEventModal({ event, onClose, onSave }: {
           )}
 
           <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
+          <EventExtrasEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
 
           <ItineraryEditor
             value={formData.logistics?.itinerary || []}
@@ -5518,6 +5522,53 @@ function EditEventModal({ event, onClose, onSave }: {
 }
 
 // Add Event Modal — бесшовный ИИ-флоу
+type EventScale = 'hours' | 'day' | 'overnight' | 'multiday' | 'expedition';
+const SCALES: { k: EventScale; l: string; hint: string }[] = [
+  { k: 'hours', l: '⏱ Пара часов', hint: 'кино, кафе, встреча' },
+  { k: 'day', l: '☀️ День', hint: 'без ночёвки' },
+  { k: 'overnight', l: '⛺ С ночёвкой', hint: '1–2 ночи' },
+  { k: 'multiday', l: '🥾 Несколько дней', hint: 'поход, кемп' },
+  { k: 'expedition', l: '✈️ Большая поездка', hint: 'недели, за границу' },
+];
+/** Масштаб по датам, если ИИ его не назвал: разница дат и длительность дня. */
+function inferScale(f: { date?: string; dateEnd?: string; time?: string; timeEnd?: string }): EventScale {
+  if (f.date && f.dateEnd && f.dateEnd > f.date) {
+    const days = Math.round((new Date(f.dateEnd).getTime() - new Date(f.date).getTime()) / 86400000);
+    return days > 14 ? 'expedition' : days >= 3 ? 'multiday' : 'overnight';
+  }
+  const h = (t?: string) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? Number(m[1]) + Number(m[2]) / 60 : null; };
+  const a = h(f.time), b = h(f.timeEnd);
+  return a !== null && b !== null && b > a && b - a <= 5 ? 'hours' : 'day';
+}
+function ScaleChips({ value, onChange }: { value: EventScale; onChange: (k: EventScale) => void }) {
+  return (
+    <div>
+      <label className="text-[10px] text-white/40 uppercase font-mono block mb-1.5">Масштаб — от него зависят поля</label>
+      <div className="flex flex-wrap gap-1.5">
+        {SCALES.map((x) => (
+          <button key={x.k} type="button" onClick={() => onChange(x.k)} title={x.hint}
+            className={`rounded-full px-3 py-1.5 text-[11px] font-bold cursor-pointer border ${value === x.k ? 'bg-brand text-black border-brand' : 'bg-white/5 text-white/70 border-white/10'}`}>
+            {x.l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+/** Большая поездка: документы, дорога и бюджет — то, что спрашивают первым. */
+function TripEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value || {};
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+      <label className="text-[10px] text-white/40 uppercase font-mono block">✈️ Поездка</label>
+      <input value={v.docs || ''} onChange={(e) => onChange({ ...v, docs: e.target.value })} placeholder="Документы и виза (напр. загранпаспорт, виза по прилёту)" className={inp} />
+      <input value={v.flights || ''} onChange={(e) => onChange({ ...v, flights: e.target.value })} placeholder="Как добираемся (перелёт Минск—Стамбул—Денпасар)" className={inp} />
+      <input value={v.budget || ''} onChange={(e) => onChange({ ...v, budget: e.target.value })} placeholder="Бюджет на человека (≈ 1500 $ без перелёта)" className={inp} />
+    </div>
+  );
+}
+
 function AddEventModal({ onClose, onAdd }: {
   onClose: () => void;
   onAdd: (event: CommunityEvent) => void;
@@ -5530,6 +5581,8 @@ function AddEventModal({ onClose, onAdd }: {
   const [editing, setEditing] = useState(false);
   // Организатор обязателен: без него событие не создаётся (сервер тоже проверяет).
   const [organizerId, setOrganizerId] = useState<number | null>(null);
+  // Поля под масштаб события; «показать все» — на случай, когда ИИ ошибся.
+  const [showAllFields, setShowAllFields] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -5611,13 +5664,21 @@ function AddEventModal({ onClose, onAdd }: {
      * получали логистику по зуму. Организатор может переключить любой тумблер
      * после генерации — решение ИИ это подсказка, а не запрет.
      */
-    if (d.format || d.features) {
+    if (d.format || d.features || d.scale) {
       updates.notifications = {
         ...(formData.notifications || {}),
         ...(d.features || {}),
         ...(d.format ? { _format: d.format } : {}),
+        ...(d.scale ? { _scale: d.scale } : {}),
       };
     }
+    // Витрина события от ИИ: «что включено», FAQ, данные поездки.
+    const extra: Record<string, any> = {};
+    if (d.included?.length) extra.included = d.included;
+    if (d.notIncluded?.length) extra.notIncluded = d.notIncluded;
+    if (d.faq?.length) extra.faq = d.faq;
+    if (d.trip) extra.trip = d.trip;
+    if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));
 
     // У онлайна нет физической локации — геокодить «Zoom» бессмысленно.
@@ -5687,6 +5748,18 @@ function AddEventModal({ onClose, onAdd }: {
     };
     onAdd(newEvent);
   };
+
+  const scale: EventScale = (formData.notifications?._scale as EventScale) || inferScale(formData);
+  const lg = formData.logistics || {};
+  const feats = formData.notifications || {};
+  // Раздел показываем, если он нужен масштабу ИЛИ в нём уже есть данные.
+  const sections = {
+    logistics: scale !== 'hours' || !!feats.feat_rides || !!lg.assemblyPoint,
+    trip: scale === 'expedition' || !!(lg.trip && (lg.trip.docs || lg.trip.flights || lg.trip.budget)),
+    extras: ['overnight', 'multiday', 'expedition'].includes(scale) || !!(lg.gallery?.length || lg.included?.length || lg.faq?.length),
+    itinerary: ['hours', 'day'].includes(scale) || !!lg.itinerary?.length,
+  };
+  const hiddenCount = Object.values(sections).filter((x) => !x).length;
 
   const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30';
 
@@ -5827,12 +5900,26 @@ function AddEventModal({ onClose, onAdd }: {
                 )}
 
                 {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
-                <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
-                <ItineraryEditor
-                  value={formData.logistics?.itinerary || []}
-                  onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
-                  event={formData}
-                />
+
+                {/* Масштаб решает, какие разделы нужны: кино на пару часов не
+                    спрашивает про палатки, поездка на Бали — спрашивает про визу. */}
+                <ScaleChips value={scale} onChange={(k) => setFormData({ ...formData, notifications: { ...(formData.notifications || {}), _scale: k } })} />
+
+                {(showAllFields || sections.logistics) && <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />}
+                {(showAllFields || sections.trip) && <TripEditor value={formData.logistics?.trip} onChange={(trip) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), trip } })} />}
+                {(showAllFields || sections.extras) && <EventExtrasEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />}
+                {(showAllFields || sections.itinerary) && (
+                  <ItineraryEditor
+                    value={formData.logistics?.itinerary || []}
+                    onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+                    event={formData}
+                  />
+                )}
+                {!showAllFields && hiddenCount > 0 && (
+                  <button type="button" onClick={() => setShowAllFields(true)} className="w-full rounded-xl border border-dashed border-white/15 bg-transparent py-2 text-[11px] text-white/50 cursor-pointer">
+                    Показать все поля (+{hiddenCount} разд., обычно не нужны для «{SCALES.find((x) => x.k === scale)?.l}»)
+                  </button>
+                )}
                 <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
                 <textarea placeholder="Описание" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className={inp} rows={3} />
 
@@ -5850,7 +5937,7 @@ function AddEventModal({ onClose, onAdd }: {
                 <ListEditor label="Программа" placeholder="Шаг" items={formData.program} aiHint onChange={(v) => setFormData({...formData, program: v})} onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }} />
 
                 <ListEditor label="Порог входа" placeholder="Условие" items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []} onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})} onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})} />
-                <FeatureToggles value={formData.notifications} type={formData.type} onChange={(v) => setFormData({ ...formData, notifications: v })} />
+                <FeatureToggles value={formData.notifications} type={formData.type} scale={scale} onChange={(v) => setFormData({ ...formData, notifications: v })} />
               </div>
             )}
           </div>

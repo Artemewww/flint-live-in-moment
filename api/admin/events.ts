@@ -651,6 +651,35 @@ export default async function handler(req: any, res: any) {
        * Ошибки не глотаем: кончилась квота или ключ протух — так и пишем,
        * чтобы владелец знал, что нужно заменить ключ в панели.
        */
+      /**
+       * Фото галереи события — в хранилище, а не в базу.
+       * Обложку исторически клали dataURL-ом прямо в events.image; для галереи
+       * из 5–10 фото это раздуло бы /api/events на мегабайты. Кладём файл в
+       * публичный бакет event-images и отдаём ссылку.
+       */
+      if (req.query?.action === 'upload_image') {
+        const dataUrl = String(body.dataUrl || '');
+        const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+        if (!m) return res.status(400).json({ error: 'Ожидалась картинка PNG/JPEG/WebP' });
+        const bin = Buffer.from(m[2], 'base64');
+        if (bin.length < 1024) return res.status(400).json({ error: 'Файл пустой или повреждён' });
+        if (bin.length > 4_000_000) return res.status(400).json({ error: 'Файл больше 4 МБ — выбери поменьше' });
+        const ext = m[1] === 'image/png' ? 'png' : /jpe?g/.test(m[1]) ? 'jpg' : 'webp';
+        const path = `gallery/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
+          method: 'POST',
+          headers: {
+            apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
+            'Content-Type': m[1],
+            'x-upsert': 'true',
+          },
+          body: bin,
+        });
+        if (!up.ok) return res.status(500).json({ error: 'Не удалось сохранить фото в хранилище' });
+        return res.status(200).json({ ok: true, url: `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}` });
+      }
+
       if (req.query?.action === 'gen_cover') {
         const title = String(body.title || '').trim();
         if (!title) return res.status(400).json({ error: 'Сначала впиши название события' });

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
+import { HeroGallery, IncludedBlock, FaqBlock, TripBlock } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
@@ -195,6 +196,9 @@ export default function EventDetailModal({
    * мужчины, женщины, семьи?» — по одной цифре новичок не понимает, его это
    * круг или нет. Имя/пол/костяк отдаёт /api/events, закрытый гейтом клуба.
    */
+  // Обложка + галерея места (logistics.gallery) — листаются на обложке.
+  const heroImages = [event.image, ...((event.logistics as any)?.gallery || [])].filter((x, i, a) => !!x && a.indexOf(x) === i) as string[];
+  const extras = (event.logistics || {}) as any;
   const roster = event.participants || [];
   const rosterMale = roster.filter((p) => p.gender === 'male').length;
   const rosterFemale = roster.filter((p) => p.gender === 'female').length;
@@ -330,15 +334,7 @@ export default function EventDetailModal({
         <div className="overflow-y-auto w-full flex-grow scrollbar-none" id="detail-scroll-container">
           
           {/* Cover Hero Banner — во всю ширину экрана, без рамок (пожелание владельца) */}
-          <div className="relative h-[42vh] min-h-[15rem] sm:h-80 w-full bg-black">
-            <img
-              src={event.image}
-              alt={event.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover brightness-[0.55] select-none pointer-events-none"
-            />
-            {/* Ambient gradients */}
-            <div className="absolute inset-0 bg-gradient-to-t from-[#121212] via-[#121212]/30 to-black/50" />
+          <HeroGallery images={heroImages} title={event.title}>
             <div className="absolute bottom-5 left-4 right-4 sm:bottom-6 sm:left-6 sm:right-6 space-y-2">
               <span className={`
                 px-3 py-1 rounded-full text-[10px] font-bold font-mono uppercase tracking-widest inline-flex items-center gap-1.5 bg-black/75 border
@@ -390,7 +386,7 @@ export default function EventDetailModal({
               </span>
             </div>
           )}
-        </div>
+        </HeroGallery>
 
           {/* Промо-ролик события: реклама перед решением о регистрации.
               Видео проигрывается по клику (автоплей в вебвью Telegram блокируется),
@@ -1045,6 +1041,9 @@ export default function EventDetailModal({
               </p>
             </div>
 
+            <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
+            <TripBlock trip={extras.trip} />
+
             <div id="sect-gear" className="scroll-mt-4" />
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек
                 дома, брать с собой нечего — и чек-лист кемпинга тем более. */}
@@ -1130,6 +1129,8 @@ export default function EventDetailModal({
                 </p>
               </div>
             )}
+
+            <FaqBlock faq={extras.faq || []} />
 
             <div id="sect-vote" className="scroll-mt-4" />
             {/* Program Voting */}
