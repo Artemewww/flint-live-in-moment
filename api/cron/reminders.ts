@@ -1064,6 +1064,66 @@ export default async function handler(req: any, res: any) {
       }
     } catch { /* подогрев не должен ронять остальные напоминания */ }
 
+    /**
+     * АВТО-ПЕРЕКЛИЧКА В ЧАТЕ СОБЫТИЯ — бот думает за организатора.
+     * Раньше «кто едет?» кто-то должен был вспомнить и спросить руками
+     * (/перекличка). Теперь бот сам, за 3 дня и за 1 день до события, пишет
+     * в привязанный чат: кто записан, кто пишет в чате, но не отметился,
+     * и кнопки «Еду / Думаю / Не еду». По одному разу на отметку
+     * (events.logistics._rollcall), организатору — сводка в личку.
+     */
+    try {
+      for (const days of [3, 1]) {
+        const { data: evs } = await supabase
+          .from('events').select('id,title,date,logistics,deputy_id,max_participants')
+          .eq('date', dayOffset(days)).in('status', ['open', 'locked']);
+        for (const ev of evs || []) {
+          const lg: any = (ev as any).logistics || {};
+          const done: Record<string, boolean> = lg._rollcall || {};
+          if (done[`d${days}`]) continue;
+          const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', (ev as any).id).eq('active', true).maybeSingle();
+          const chatId = Number((eg as any)?.chat_id || 0);
+          const { data: regs } = await supabase.from('registrations').select('telegram_id,name,guest_count').eq('event_id', (ev as any).id).neq('status', 'cancelled');
+          const regIds = new Set((regs || []).map((r: any) => Number(r.telegram_id)));
+          const heads = (regs || []).reduce((n: number, r: any) => n + 1 + (Number(r.guest_count) || 0), 0);
+          if (chatId) {
+            const { data: talkers } = await supabase.from('group_messages').select('telegram_id,first_name,username').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(300);
+            const seen = new Map<number, string>();
+            for (const t of talkers || []) {
+              const id = Number((t as any).telegram_id);
+              if (id > 0 && !regIds.has(id) && !seen.has(id)) seen.set(id, (t as any).first_name || (t as any).username || 'Участник');
+            }
+            const list = (regs || []).map((r: any, i: number) => `${i + 1}. ${esc(r.name || 'Участник')}${r.guest_count ? ` +${r.guest_count}` : ''}`).join('\n');
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `📋 <b>${days === 1 ? 'Завтра' : 'Через 3 дня'} — «${esc((ev as any).title)}»</b>\n\n` +
+                (list ? `Едут (${heads}):\n${list}` : 'Пока никто не отметился.') +
+                (seen.size ? `\n\n❓ ${[...seen.values()].slice(0, 15).map(esc).join(', ')} — вы с нами? Отметьтесь, чтобы попасть в машины, бади и список «кто что везёт».` : '') +
+                `\n\nОтметься кнопкой 👇`,
+              reply_markup: { inline_keyboard: [[
+                { text: '✅ Еду', callback_data: `grpgo_${(ev as any).id}` },
+                { text: '🤔 Думаю', callback_data: `grpmaybe_${(ev as any).id}` },
+                { text: '❌ Не еду', callback_data: `grpno_${(ev as any).id}` },
+              ]] },
+            });
+            report.eventReminders++;
+          }
+          // Организатору — короткая сводка: сколько едет, где провал.
+          const org = Number((ev as any).deputy_id || 0);
+          if (org > 0) {
+            const cap = Number((ev as any).max_participants) || 0;
+            await send(org,
+              `🧭 <b>«${esc((ev as any).title)}» — ${days === 1 ? 'завтра' : 'через 3 дня'}</b>\n\n` +
+              `Едут: <b>${heads}</b>${cap ? ` из ${cap}` : ''}.` +
+              (chatId ? `\nВ чат события я отправил перекличку — отметки придут сами.` : `\n⚠️ У события нет чата, куда я могу писать: добавь меня в группу выезда — я привяжусь сам.`) +
+              (cap && heads < Math.ceil(cap / 3) ? `\n\n📣 Мало людей — позови своих: ссылка в карточке события.` : ''),
+              undefined, 'events');
+          }
+          await supabase.from('events').update({ logistics: { ...lg, _rollcall: { ...done, [`d${days}`]: true } } }).eq('id', (ev as any).id);
+        }
+      }
+    } catch (e) { report.errors.push(`rollcall: ${(e as Error).message}`); }
+
     // Чистка галерей: через 7 дней после события остаётся топ-5 по голосам
     // (is_keeper), остальные строки удаляются. Сами файлы живут в Telegram
     // у отправителей — «удаление» значит только уход из галереи.
