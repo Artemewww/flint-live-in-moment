@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
+import EventTasks from './EventTasks';
 import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
@@ -525,7 +526,7 @@ export default function EventDetailModal({
               {isRegistered && (
                 <button
                   type="button"
-                  onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('openProfileTab', { detail: { tab: 'overview' } })); }}
+                  onClick={() => document.getElementById('sect-tasks')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
                   className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
                 >
                   <span className="text-base leading-none">📋</span>
@@ -892,6 +893,9 @@ export default function EventDetailModal({
                 </div>
               </div>
             )}
+
+            {/* Задачи события: кто что делает и к какому сроку — всем записавшимся. */}
+            {isRegistered && <EventTasks eventId={event.id} />}
 
             {/* Программа подня́та выше логистики: человек сначала решает,
                 идёт ли он на ЭТО, и только потом — как добираться. Раньше
