@@ -271,7 +271,7 @@ async function rateLimit(scope: string, ident: string, max: number, windowMs: nu
 // оплату. Их ставит только админка (api/admin/registrations.ts) и бот.
 const REG_FIELDS = [
   'has_transport', 'transport_details', 'transport_seats', 'has_license', 'inventory',
-  'category', 'dietary', 'guest_count', 'equipment', 'roles', 'notes',
+  'category', 'dietary', 'guest_count', 'equipment', 'roles', 'notes', 'food_optout',
 ];
 
 export default async function handler(req: any, res: any) {

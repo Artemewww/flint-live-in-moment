@@ -60,6 +60,27 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     source: ''
   });
 
+  /**
+   * Анкета под событие, а не одна на все случаи. Раньше кино в городе
+   * спрашивало про права и попутки, а поход — «вилку и ложку» галочками.
+   * Вопрос задаём, только если он нужен этому событию.
+   */
+  const feats: Record<string, any> = (event as any).notifications || {};
+  const lg: Record<string, any> = (event as any).logistics || {};
+  const online = (event as any).format === 'online' || feats._format === 'online';
+  const needRides = !online && feats.feat_rides !== false;
+  const needLicense = needRides && (feats.feat_licenses === true || feats.feat_car_rental === true);
+  const needFood = !online && feats.feat_food !== false;
+  // Как делим деньги: из события; нет — выводим: платное → общий взнос,
+  // с общей едой → общий стол, иначе каждый за себя.
+  const costModel: 'self' | 'pool' | 'food_share' | 'bring_own' =
+    ['self', 'pool', 'food_share', 'bring_own'].includes(lg.costModel) ? lg.costModel
+      : (event as any).priceType === 'paid' && Number((event as any).priceAmount) > 0 ? 'pool'
+      : needFood ? 'food_share' : 'self';
+  const needs: string[] = Array.isArray(lg.needs) ? lg.needs.filter(Boolean) : [];
+  const [foodOptOut, setFoodOptOut] = useState<null | boolean>(null);
+  const [brings, setBrings] = useState<string[]>([]);
+
   // Referral flow inputs
   const [inviter, setInviter] = useState('');
   const [isCopied, setIsCopied] = useState(false);
@@ -178,14 +199,13 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       // Строка тут порождала legacy-записи, на которых админка падала в белый
       // экран (`inventory.slice(...).map is not a function`) — см. toList()
       // в AdminPanel.tsx, там же нормализация уже накопленных строк.
-      inventory: toArr(formData.inventory),
       category: formData.category,
       dietary: formData.dietary,
       guest_count: formData.guestCount || 0,
-      equipment: toArr(formData.equipment),
-      roles: toArr(formData.roles),
+      // «Что везу на общее» — по нему раскладывается, кто что везёт.
+      equipment: brings.length ? brings : undefined,
+      food_optout: costModel === 'food_share' ? foodOptOut === true : undefined,
       agreedPd: consentGiven,
-      sourceHint: formData.source.trim() || undefined,
     });
 
     // ЛЮБАЯ ошибка сервера — НЕ показываем «успех». Раньше обрабатывался только
@@ -246,12 +266,13 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     if (!phone.trim()) return setError('Пожалуйста, укажите телефон для связи');
     if (!isMember && !inviter.trim()) return setError('Пожалуйста, обязательно укажите, от кого вы пришли (Имя друга или промокод)');
     if (isClosedEvent && !accessCode.trim()) return setError('Это закрытое событие — введите код доступа');
-    if (formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
+    if (needRides && formData.transportMode === null) return setError('Укажите, как добираетесь — это нужно для логистики');
     if ((formData.transportMode === 'car' || formData.transportMode === 'carsharing')
       && !formData.carBrand.trim() && !formData.transportDetails.trim()) {
       return setError('Укажите марку авто — так вас найдут на точке сбора');
     }
-    if (formData.hasLicense === null) return setError('Укажите, есть ли у вас водительские права — это нужно для авто и квадроциклов');
+    if (needLicense && formData.hasLicense === null) return setError('Укажите, есть ли у вас водительские права — это нужно для авто и квадроциклов');
+    if (costModel === 'food_share' && foodOptOut === null) return setError('Ответь про общий стол: скидываешься или едешь со своей едой');
     if (formData.category === null) return setError('Укажите категорию участника — по ней считают состав и размещение');
     if (!consentGiven) return setError('Нужно согласие на обработку персональных данных');
 
@@ -451,14 +472,16 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       />
                     </div>
 
-                    {/* Транспорт — обязательный выбор (без него логистика слепая) */}
+                    {/* Транспорт — только если до места нужно добираться. */}
+                    {needRides && (
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
                       <label className="text-xs text-white/60 flex items-center gap-2">
                         <Truck className="w-4 h-4 text-brand" />
                         Как добираетесь? <span className="text-brand">*</span>
                       </label>
 
-                      {/* Права — критично для событий с арендой квадроциклов/авто */}
+                      {/* Права — только для событий с арендой авто/квадроциклов. */}
+                      {needLicense && (<>
                       <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50">
                         🎫 Есть ли водительские права? <span className="text-brand">*</span>
                       </label>
@@ -484,6 +507,8 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       <p className="text-[10px] text-white/40 italic">
                         Для событий с квадроциклами и арендой авто — права обязательны. Покажем организатору, кто может вести.
                       </p>
+
+                      </>)}
 
                       <div className="space-y-2">
                         {([
@@ -561,21 +586,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         </div>
                       )}
                     </div>
-
-                    {/* Инвентарь */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
-                      <label className="text-xs text-white/60 flex items-center gap-2">
-                        <Package className="w-4 h-4 text-brand" />
-                        Инвентарь (через запятую)
-                      </label>
-                      <textarea
-                        value={(formData as any).inventory || ''}
-                        onChange={(e) => setFormData({...formData, inventory: e.target.value} as any)}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
-                        placeholder="Палатка, спальник, каремат, газовка..."
-                        rows={2}
-                      />
-                    </div>
+                    )}
 
                     {/* Категория участника */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -606,7 +617,8 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       </div>
                     </div>
 
-                    {/* Пищевые предпочтения */}
+                    {/* Пищевые предпочтения — только если на событии общая еда. */}
+                    {needFood && (
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
                       <label className="text-xs text-white/60 block">Пищевые предпочтения</label>
                       <select
@@ -619,6 +631,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         <option value="vegan">Веган</option>
                       </select>
                     </div>
+                    )}
 
                     {/* Гости: сколько человек берёшь с собой (0–2 кнопкой или своё число) */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -664,65 +677,44 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       )}
                     </div>
 
-                    {/* Снаряжение (чек-лист) */}
+                    {/* ДЕНЬГИ — одной понятной фразой, как это устроено на этом событии. */}
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
-                      <label className="text-xs text-white/60 block">Снаряжение (выберите что есть)</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {['Вилка', 'Ложка', 'Спальник', 'Фонарик', 'Дождевик', 'Аптечка', 'Мусорные пакеты', 'Антисептик', 'Туалетная бумага', 'Лопата'].map((item) => (
-                          <label key={item} className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={(formData.equipment || '').split(',').includes(item)}
-                              onChange={(e) => {
-                                const current = formData.equipment ? formData.equipment.split(',').filter(Boolean) : [];
-                                const updated = e.target.checked
-                                  ? [...current, item]
-                                  : current.filter(i => i !== item);
-                                setFormData({...formData, equipment: updated.join(',')} as any);
-                              }}
-                              className="rounded"
-                            />
-                            {item}
-                          </label>
-                        ))}
-                      </div>
+                      <label className="text-xs text-white/60 block">💳 Как с деньгами</label>
+                      {costModel === 'self' && <p className="text-[13px] text-white/85">Каждый платит за себя на месте: билеты, еда, аренда — сам.</p>}
+                      {costModel === 'pool' && <p className="text-[13px] text-white/85">Общий взнос: <b className="text-brand">{(event as any).priceLabel || `${(event as any).priceAmount} Br`}</b>. Реквизиты придут после записи.</p>}
+                      {costModel === 'bring_own' && <p className="text-[13px] text-white/85">Каждый везёт своё. Общее (мангал, котёл…) распределим — отметь ниже, что можешь взять.</p>}
+                      {costModel === 'food_share' && (
+                        <>
+                          <p className="text-[13px] text-white/85">Общий стол: продукты покупаем вместе и делим поровну на тех, кто в общем котле.</p>
+                          <div className="grid grid-cols-2 gap-2">
+                            <button type="button" onClick={() => setFoodOptOut(false)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === false ? 'bg-brand text-black' : 'bg-white/10 text-white/70'}`}>🍲 Я в общем котле</button>
+                            <button type="button" onClick={() => setFoodOptOut(true)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === true ? 'bg-brand text-black' : 'bg-white/10 text-white/70'}`}>🥪 Еду со своей едой</button>
+                          </div>
+                        </>
+                      )}
+                      {lg.costNote && <p className="text-[11px] text-white/50">{lg.costNote}</p>}
                     </div>
 
-                    {/* Роли */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
-                      <label className="text-xs text-white/60 block">Готов помочь с (роли)</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {['Готовка', 'Уборка', 'Транспорт', 'Фото', 'Музыка', 'Организация'].map((role) => (
-                          <label key={role} className="flex items-center gap-2 text-xs text-white/60 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={(formData.roles || '').split(',').includes(role)}
-                              onChange={(e) => {
-                                const current = formData.roles ? formData.roles.split(',').filter(Boolean) : [];
-                                const updated = e.target.checked
-                                  ? [...current, role]
-                                  : current.filter(i => i !== role);
-                                setFormData({...formData, roles: updated.join(',')} as any);
-                              }}
-                              className="rounded"
-                            />
-                            {role}
-                          </label>
-                        ))}
+                    {/* ЧТО ПРИВЕЗЁШЬ НА ОБЩЕЕ — чипы из списка события, а не
+                        «вилка/ложка» галочками. Что никто не взял — бот
+                        распределит сам и покажет в карточке «Кто что везёт». */}
+                    {needs.length > 0 && (
+                      <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
+                        <label className="text-xs text-white/60 block">🎒 Что можешь привезти на общее?</label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {needs.map((n) => {
+                            const on = brings.includes(n);
+                            return (
+                              <button key={n} type="button" onClick={() => setBrings(on ? brings.filter((x) => x !== n) : [...brings, n])}
+                                className={`rounded-full px-3 py-1.5 text-xs font-bold ${on ? 'bg-brand text-black' : 'bg-white/10 text-white/70'}`}>
+                                {on ? '✓ ' : ''}{n}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <p className="text-[10px] text-white/40">Не отметишь — ничего страшного: что останется, бот распределит поровну.</p>
                       </div>
-                    </div>
-
-                    {/* Источник */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-2">
-                      <label className="text-xs text-white/60 block">Откуда узнали о мероприятии?</label>
-                      <input
-                        type="text"
-                        value={formData.source}
-                        onChange={(e) => setFormData({...formData, source: e.target.value})}
-                        className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white text-xs"
-                        placeholder="Telegram, друг, соцсети..."
-                      />
-                    </div>
+                    )}
 
                     {/* Согласие на обработку персональных данных */}
                     <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4 space-y-2">

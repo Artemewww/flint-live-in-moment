@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Minus, X } from 'lucide-react';
+import Avatar from './Avatar';
 
 /**
  * Обложка + фото места.
@@ -178,6 +179,60 @@ export function YandexMapBlock({ lat, lng, place }: { lat?: number; lng?: number
         <a href={open} target="_blank" rel="noopener noreferrer" className="rounded-xl border border-white/15 py-2.5 text-center text-[11px] font-bold uppercase text-white/80 no-underline">Открыть карту</a>
       </div>
       {place && <p className="text-[11px] text-white/50">{place}</p>}
+    </div>
+  );
+}
+
+/**
+ * «Кто что везёт» — общее снаряжение без переписки в чате.
+ * Что человек отметил в анкете («привезу мангал») — за ним. Что никто не
+ * взял — бот раскладывает поровну: самому свободному, по порядку записи,
+ * чтобы никто не вёз три вещи, пока другой не везёт ничего. Распределение
+ * детерминированное — у всех на экране один и тот же ответ.
+ */
+export function WhoBrings({ needs, people }: { needs: string[]; people: { name: string; avatar?: string; brings?: string[] }[] }) {
+  const list = needs.filter(Boolean);
+  if (!list.length || !people.length) return null;
+  const load = people.map(() => 0);
+  const rows = list.map((need) => {
+    const takers = people.map((p, i) => ({ p, i })).filter(({ p }) => (p.brings || []).some((b) => b.toLowerCase() === need.toLowerCase()));
+    takers.forEach(({ i }) => { load[i] += 1; });
+    return { need, takers, auto: null as null | { p: typeof people[number]; i: number } };
+  });
+  for (const r of rows) {
+    if (r.takers.length) continue;
+    let best = 0;
+    for (let i = 1; i < people.length; i++) if (load[i] < load[best]) best = i;
+    load[best] += 1;
+    r.auto = { p: people[best], i: best };
+  }
+  const autoCount = rows.filter((r) => r.auto).length;
+  return (
+    <div className="space-y-2">
+      <span className="block text-[10px] font-mono uppercase tracking-widest text-white/40">🎒 Кто что везёт</span>
+      <div className="divide-y divide-white/5 overflow-hidden rounded-2xl border border-white/10 bg-white/[.03]">
+        {rows.map((r) => (
+          <div key={r.need} className="flex items-center gap-3 px-3.5 py-2.5">
+            <span className="min-w-0 flex-1 truncate text-[13px] text-white/85">{r.need}</span>
+            {r.takers.length ? (
+              <span className="flex min-w-0 items-center gap-1.5 text-[12px] font-bold text-emerald-300">
+                <Avatar name={r.takers[0].p.name} src={r.takers[0].p.avatar} size={22} />
+                <span className="truncate">{r.takers.map((t) => t.p.name).join(', ')}</span>
+              </span>
+            ) : r.auto ? (
+              <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-amber-300" title="Никто не взял — бот предлагает">
+                <Avatar name={r.auto.p.name} src={r.auto.p.avatar} size={22} />
+                <span className="truncate">{r.auto.p.name}?</span>
+              </span>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {autoCount > 0 && (
+        <p className="text-[11px] text-white/45">
+          <span className="text-amber-300">Жёлтым</span> — никто не взял, бот предлагает поровну. Согласен или хочешь поменяться — напиши в чат события.
+        </p>
+      )}
     </div>
   );
 }

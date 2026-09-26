@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
 import EventTasks from './EventTasks';
-import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock } from './EventShowcase';
+import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock, WhoBrings } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
@@ -1052,6 +1052,14 @@ export default function EventDetailModal({
 
             <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
             <TripBlock trip={extras.trip} />
+            {/* Общее снаряжение: кто что везёт — видно всем, распределяет бот. */}
+            <WhoBrings needs={extras.needs || []} people={roster} />
+            {extras.costNote && (
+              <div className="rounded-2xl border border-white/10 bg-white/[.03] p-4">
+                <span className="block text-[10px] font-mono uppercase tracking-widest text-white/40">💳 Как с деньгами</span>
+                <p className="mt-1 text-sm text-white/80">{extras.costNote}</p>
+              </div>
+            )}
 
             <div id="sect-gear" className="scroll-mt-4" />
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек

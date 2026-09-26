@@ -5761,6 +5761,9 @@ function AddEventModal({ onClose, onAdd }: {
     if (d.notIncluded?.length) extra.notIncluded = d.notIncluded;
     if (d.faq?.length) extra.faq = d.faq;
     if (d.trip) extra.trip = d.trip;
+    if (d.costModel) extra.costModel = d.costModel;
+    if (d.costNote) extra.costNote = d.costNote;
+    if (d.needs?.length) extra.needs = d.needs;
     if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));
 

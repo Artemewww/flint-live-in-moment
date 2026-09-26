@@ -758,7 +758,7 @@ export default async function handler(req: any, res: any) {
       }
 
       const { data: regs } = await supabase
-        .from('registrations').select('event_id, guest_count, telegram_id, name').neq('status', 'cancelled');
+        .from('registrations').select('event_id, guest_count, telegram_id, name, equipment').neq('status', 'cancelled');
       const counts = new Map<string, number>();
       for (const r of regs || []) counts.set(r.event_id, (counts.get(r.event_id) || 0) + 1 + (Number((r as any).guest_count) || 0));
 
@@ -792,6 +792,8 @@ export default async function handler(req: any, res: any) {
         list.push({
           name: (r as any).name || p?.firstName || 'Участник',
           avatar: avatarUrl(Number((r as any).telegram_id)),
+          // Что везёт на общее (из анкеты) — для блока «Кто что везёт».
+          brings: Array.isArray((r as any).equipment) ? (r as any).equipment.map(String).slice(0, 12) : [],
           gender: p?.gender || null,
           isCore: p?.isCore || false,
           guests: Number((r as any).guest_count) || 0,

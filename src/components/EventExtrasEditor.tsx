@@ -119,6 +119,25 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
         {err && <p className="text-[10px] text-rose-400">{err}</p>}
       </div>
 
+      {/* Как делим деньги и что нужно на общее — отсюда анкета записи задаёт
+          понятные вопросы, а бот раскладывает «кто что везёт». */}
+      <div className="space-y-2">
+        <span className="text-[10px] font-mono uppercase text-white/40">💳 Как делим деньги</span>
+        <div className="grid grid-cols-2 gap-1.5">
+          {([
+            ['self', 'Каждый за себя'],
+            ['pool', 'Общий взнос'],
+            ['food_share', 'Общий стол (еда вскладчину)'],
+            ['bring_own', 'Каждый везёт своё'],
+          ] as const).map(([k, l]) => (
+            <button key={k} type="button" onClick={() => set('costModel', k)}
+              className={`rounded-lg border p-2 text-left text-[11px] font-bold ${v.costModel === k ? 'border-brand bg-brand/10 text-brand' : 'border-white/10 bg-transparent text-white/60'}`}>{l}</button>
+          ))}
+        </div>
+        <input value={v.costNote || ''} onChange={(e) => set('costNote', e.target.value)} placeholder="Пояснение (баня 300 BYN делим на всех, продукты ~25 BYN/чел)" className="w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+      </div>
+      <Lines label="🎒 Что нужно привезти на общее (бот распределит)" hint="Мангал, котёл, колонка, веники" items={Array.isArray(v.needs) ? v.needs : []} onChange={(x) => set('needs', x)} />
+
       <div className="grid gap-3 sm:grid-cols-2">
         <Lines label="✅ Что включено" hint="Трансфер из Минска" items={included} onChange={(x) => set('included', x)} />
         <Lines label="➖ Не включено" hint="Питание в кафе" items={notIncluded} onChange={(x) => set('notIncluded', x)} />
