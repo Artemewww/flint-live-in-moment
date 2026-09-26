@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrganizerPicker from './OrganizerPicker';
 import EventExtrasEditor from './EventExtrasEditor';
+import { makeShareCard } from '../shareCard';
 import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -977,6 +978,10 @@ function adminFetch(input: string, init?: RequestInit): Promise<Response> {
   return fetch(input, { ...init, headers });
 }
 const SESSION_TTL = 12 * 60 * 60 * 1000;
+/** Место для карточки шеринга: без координат и хвостов в скобках. */
+function prettyPlaceShort(loc?: string): string {
+  return String(loc || '').replace(/\(?-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\)?/g, '').replace(/\s{2,}/g, ' ').replace(/[,\s·]+$/, '').trim();
+}
 
 /**
  * Кнопка «Войти через Telegram» (официальный Login Widget) для обычного
@@ -5091,6 +5096,8 @@ function EditEventModal({ event, onClose, onSave }: {
   // Правка программы промптом + пересчёт при смене даты (правки из PDF 16.07).
   const [progPrompt, setProgPrompt] = useState('');
   const [progBusy, setProgBusy] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareNote, setShareNote] = useState('');
   const [formData, setFormData] = useState({
     title: event.title,
     description: event.description,
@@ -5362,10 +5369,27 @@ function EditEventModal({ event, onClose, onSave }: {
             )}
           </div>
 
-          <div className="mt-2">
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Вертикальная афиша для Telegram</label>
+          <div className="mt-2 space-y-2">
+            <label className="text-[10px] text-white/40 uppercase font-mono block">Картинка для шеринга (превью ссылки и бот)</label>
+            {/* Превью, которое видят при пересылке ссылки: фото, логотип
+                FLINT слева сверху, дата и название фирменным шрифтом. */}
+            <button
+              type="button"
+              disabled={shareBusy || !formData.title}
+              onClick={async () => {
+                setShareBusy(true); setShareNote('');
+                try {
+                  const url = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
+                  setFormData((f) => ({ ...f, telegramImage: url }));
+                  setShareNote('Готово — не забудь «Сохранить».');
+                } catch (e) { setShareNote(`Не получилось: ${(e as Error).message}`); }
+                finally { setShareBusy(false); }
+              }}
+              className="w-full rounded-xl border border-brand/40 bg-brand/10 py-2.5 text-xs font-black uppercase text-brand cursor-pointer disabled:opacity-50"
+            >{shareBusy ? 'Рисую карточку…' : '✨ Сделать превью с логотипом и датой'}</button>
+            {shareNote && <p className="text-[10px] text-brand">{shareNote}</p>}
             <ImageUploadField value={formData.telegramImage || ''} onChange={(url) => setFormData({...formData, telegramImage: url})} />
-            <p className="text-[9px] text-white/30 mt-1">Вертикальная картинка (афиша) для рассылок в Telegram. Если не задана — используется основная.</p>
+            <p className="text-[9px] text-white/30">Её показывает Telegram, когда пересылают ссылку, и бот, когда присылает событие. Можно загрузить свою афишу вместо сгенерированной.</p>
           </div>
 
           <div>
@@ -5767,8 +5791,16 @@ function AddEventModal({ onClose, onAdd }: {
     }
   };
 
-  const handleAdd = () => {
-    if (!formData.title || !formData.date || !organizerId) return;
+  const [creating, setCreating] = useState(false);
+  const handleAdd = async () => {
+    if (!formData.title || !formData.date || !organizerId || creating) return;
+    setCreating(true);
+    // Карточка для шеринга собирается сама: без неё пересланная ссылка
+    // выглядит голой. Не получилось (нет обложки/сети) — событие всё равно создаём.
+    let shareUrl = '';
+    try {
+      shareUrl = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
+    } catch { /* без карточки */ }
 
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
@@ -5804,7 +5836,9 @@ function AddEventModal({ onClose, onAdd }: {
       travelTime: formData.travelTime,
       notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications },
       deputyId: organizerId,
+      ...(shareUrl ? { telegramImage: shareUrl } : {}),
     };
+    setCreating(false);
     onAdd(newEvent);
   };
 
@@ -6007,8 +6041,8 @@ function AddEventModal({ onClose, onAdd }: {
 
         {/* КНОПКИ */}
         <div className="flex gap-2 pt-2">
-          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
-            ✅ Создать
+          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId || creating} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
+            {creating ? "Создаю…" : "✅ Создать"}
           </button>
           <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">
             Отмена

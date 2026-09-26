@@ -597,8 +597,8 @@ async function handleOg(req: any, res: any) {
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(desc)}">
 <meta property="og:image" content="${escapeHtml(imageUrl)}">
-<meta property="og:image:width" content="1280">
-<meta property="og:image:height" content="720">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta property="og:url" content="${escapeHtml(`${site}/e/${id}`)}">
 <meta name="twitter:card" content="summary_large_image">
 <style>
