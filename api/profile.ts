@@ -838,6 +838,99 @@ export default async function handler(req: any, res: any) {
     }
 
     // === MY_EVENTS (история событий участника) ===
+    /**
+     * СНАРЯЖЕНИЕ В ПРОФИЛЕ.
+     * Панель ходила в /api/equipment, а тот пускает только по серверному
+     * JWT_SECRET — у участника в Mini App его нет, поэтому любое «добавить» и
+     * «показать» получало 401: снаряжение нельзя было ни завести, ни увидеть.
+     * Теперь личное снаряжение живёт здесь, под подписью Telegram.
+     */
+    if (typeof action === 'string' && action.startsWith('gear_')) {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Открой приложение из Telegram' });
+      const { data: me } = await supabase.from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+      if (!me || !((me as any).is_core === true || (me as any).status === 'approved')) return res.status(403).json({ error: 'Только для участников клуба' });
+      const CONDITIONS = ['perfect', 'good', 'worn', 'damaged'];
+      const shapeGear = (g: any) => ({
+        id: g.id, item: g.item, quantity: Number(g.quantity) || 1, category: g.category || 'other',
+        condition: CONDITIONS.includes(g.condition) ? g.condition : 'good', price: Number(g.price) || 0,
+        photoUrl: g.photo_url || '', description: g.description || '', shareable: g.access_level === 'all',
+      });
+
+      if (action === 'gear_mine') {
+        const { data, error } = await supabase.from('member_equipment').select('*').eq('telegram_id', user.id).order('updated_at', { ascending: false });
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ items: (data || []).map(shapeGear) });
+      }
+
+      if (action === 'gear_save') {
+        const g = body.gear || {};
+        const item = String(g.item || '').trim().slice(0, 80);
+        if (!item) return res.status(400).json({ error: 'Назови вещь' });
+        // Фото: dataURL с телефона → в хранилище; готовую ссылку оставляем как есть.
+        let photoUrl = String(g.photoUrl || '').slice(0, 500);
+        const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(String(g.photo || ''));
+        if (m) {
+          const bin = Buffer.from(m[2], 'base64');
+          if (bin.length > 4_000_000) return res.status(400).json({ error: 'Фото больше 4 МБ' });
+          const path = `gear/${user.id}-${Date.now().toString(36)}.${m[1] === 'image/png' ? 'png' : 'jpg'}`;
+          const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
+            method: 'POST',
+            headers: { apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '', Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`, 'Content-Type': m[1], 'x-upsert': 'true' },
+            body: bin,
+          });
+          if (!up.ok) return res.status(500).json({ error: 'Не удалось сохранить фото' });
+          photoUrl = `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}`;
+        }
+        const row: any = {
+          telegram_id: user.id, item,
+          quantity: Math.max(1, Math.min(99, Number(g.quantity) || 1)),
+          category: String(g.category || 'other').slice(0, 30),
+          condition: CONDITIONS.includes(g.condition) ? g.condition : 'good',
+          price: Math.max(0, Number(g.price) || 0),
+          photo_url: photoUrl || null,
+          description: String(g.description || '').slice(0, 300) || null,
+          access_level: g.shareable ? 'all' : 'owner',
+          updated_at: new Date().toISOString(),
+        };
+        const q = g.id
+          ? supabase.from('member_equipment').update(row).eq('id', g.id).eq('telegram_id', user.id)
+          : supabase.from('member_equipment').upsert(row, { onConflict: 'telegram_id,item' });
+        const { data, error } = await q.select('*').single();
+        if (error) return res.status(500).json({ error: /duplicate/i.test(error.message) ? 'Такая вещь у тебя уже есть' : error.message });
+        return res.status(200).json({ ok: true, item: shapeGear(data) });
+      }
+
+      if (action === 'gear_delete') {
+        const { error } = await supabase.from('member_equipment').delete().eq('id', body.id).eq('telegram_id', user.id);
+        if (error) return res.status(500).json({ error: error.message });
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * «Что есть у круга»: вещи участников, которыми они готовы делиться, и
+       * имущество клуба. Прежде чем покупать палатку — видно, у кого она есть.
+       */
+      if (action === 'gear_circle') {
+        const { data: shared } = await supabase.from('member_equipment').select('*').eq('access_level', 'all').neq('telegram_id', user.id).limit(200);
+        const ownerIds = [...new Set((shared || []).map((g: any) => Number(g.telegram_id)))];
+        const { data: owners } = ownerIds.length ? await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ownerIds) : { data: [] };
+        const byId = new Map((owners || []).map((o: any) => [Number(o.telegram_id), o]));
+        const avatarOf = (id: number) => BOT_TOKEN ? `/api/events?action=avatar&u=${id}&s=${crypto.createHmac('sha256', BOT_TOKEN).update(`avatar:${id}`).digest('hex').slice(0, 16)}` : '';
+        const { data: inv } = await supabase.from('app_config').select('value').eq('key', 'club_inventory').maybeSingle();
+        let club: any[] = [];
+        try { club = JSON.parse(String((inv as any)?.value || '[]')); } catch { club = []; }
+        return res.status(200).json({
+          shared: (shared || []).map((g: any) => {
+            const o: any = byId.get(Number(g.telegram_id)) || {};
+            return { ...shapeGear(g), owner: { name: o.first_name || (o.username ? `@${o.username}` : 'Участник'), username: o.username || '', avatar: avatarOf(Number(g.telegram_id)) } };
+          }),
+          club,
+        });
+      }
+      return res.status(400).json({ error: 'Unknown gear action' });
+    }
+
     if (action === 'my_events') {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });

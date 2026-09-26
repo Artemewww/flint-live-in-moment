@@ -161,6 +161,8 @@ function mapEventToCamelCase(event: any) {
     // выяснять в переписке. Имя подставляется в обработчике списка.
     organizerId: event.deputy_id || null,
     organizerName: event.organizer_name || null,
+    organizerAvatar: event.deputy_id ? avatarUrl(Number(event.deputy_id)) : '',
+    organizerUsername: event.organizer_username || '',
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},
@@ -746,8 +748,12 @@ export default async function handler(req: any, res: any) {
         const { data: orgs } = await supabase
           .from('members').select('telegram_id,first_name,username').in('telegram_id', orgIds);
         const byId = new Map((orgs || []).map((m: any) => [Number(m.telegram_id), m.first_name || (m.username ? '@' + m.username : '')]));
+        const userById = new Map((orgs || []).map((m: any) => [Number(m.telegram_id), m.username || '']));
         for (const e of visible as any[]) {
-          if (e.deputy_id) e.organizer_name = byId.get(Number(e.deputy_id)) || null;
+          if (e.deputy_id) {
+            e.organizer_name = byId.get(Number(e.deputy_id)) || null;
+            e.organizer_username = userById.get(Number(e.deputy_id)) || '';
+          }
         }
       }
 

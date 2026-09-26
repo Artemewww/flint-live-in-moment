@@ -5,7 +5,7 @@ import {
   Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply, BookOpen, ListTodo,
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic } from '../telegram';
-import EquipmentPanel from './EquipmentPanel';
+import GearShelf from './GearShelf';
 import FoodSelectionPanel from './FoodSelectionPanel';
 import CampingChecklist from './CampingChecklist';
 
@@ -61,9 +61,11 @@ const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: '
 function ClubInventoryBlock() {
   const [items, setItems] = useState<any[] | null>(null);
   useEffect(() => {
-    fetch('/api/equipment?action=inventory')
+    // /api/equipment пускает только по серверному ключу — из Mini App он
+    // отвечал 401, и реестр всегда был «пуст». Тот же реестр отдаёт profile.
+    fetch('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'gear_circle', initData: getInitData() }) })
       .then((r) => r.json())
-      .then((j) => setItems(Array.isArray(j?.items) ? j.items : []))
+      .then((j) => setItems(Array.isArray(j?.club) ? j.club : []))
       .catch(() => setItems([]));
   }, []);
 
@@ -434,28 +436,17 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
 
           {tab === 'gear' && (
             <div className="space-y-5">
+              {/* Своё снаряжение с фото и «что есть у круга» — сверху: это то,
+                  за чем сюда приходят. Реестр клуба — ниже. */}
+              <GearShelf />
               <section className="space-y-2">
                 <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
                   Имущество клуба и складчина
                 </h3>
                 <p className="text-[11px] text-white/50 leading-snug">
                   Что у клуба уже есть, у кого лежит и кто на это скидывался.
-                  Прежде чем покупать — посмотри сюда.
                 </p>
                 <ClubInventoryBlock />
-              </section>
-              <section className="space-y-2">
-                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
-                  Личное снаряжение круга
-                </h3>
-                <p className="text-[11px] text-white/50 leading-snug">
-                  Своё, клубное и передачи из рук в руки. Прежде чем покупать или везти —
-                  посмотри, может это уже едет. Своё снаряжение добавь сюда же: круг увидит,
-                  чем ты можешь поделиться.
-                </p>
-                <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3">
-                  <EquipmentPanel />
-                </div>
               </section>
 
               {/* Чек-лист на 131 пункт разворачивался прямо в списке и

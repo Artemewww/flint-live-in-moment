@@ -154,8 +154,14 @@ export default async function handler(req: any, res: any) {
         nameById.set(String((m as any).telegram_id), (m as any).first_name || ((m as any).username ? '@' + (m as any).username : ''));
       }
 
+      // Фото из Telegram — чтобы в админке узнавать людей в лицо (прокси и
+      // подпись — как в api/events.ts avatarUrl; задублировано намеренно).
+      const avatarOf = (id: number) => id > 0 && BOT_TOKEN
+        ? `/api/events?action=avatar&u=${id}&s=${crypto.createHmac('sha256', BOT_TOKEN).update(`avatar:${id}`).digest('hex').slice(0, 16)}`
+        : '';
       const list = (members || []).map((m: any) => ({
         telegramId: String(m.telegram_id),
+        avatar: avatarOf(Number(m.telegram_id)),
         username: m.username,
         firstName: m.first_name,
         phone: m.phone || null,

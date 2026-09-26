@@ -537,7 +537,16 @@ export default async function handler(req: any, res: any) {
          `- needsCarRental: true, если участникам нужен автомобиль для поездки, а у части его нет — будут арендовать. Для выездов в лес/на воду почти всегда true;\n` +
          `- needsAccommodation: true, если событие с ночёвкой (палатки, дом, гостиница). Однодневное — false;\n` +
          `- hasAccommodationVote: true, если РАЗУМНО предложить выбор жилья (палатка vs домик) как голосование. Для активных выездов с ночёвкой — true, для событий где дом уже арендован — false;\n` +
-         `- fuelEstimate: примерная сумма на топливо на ВСЮ группу в BYN (0 если не нужно, напр. онлайн/город).`;
+         `- fuelEstimate: примерная сумма на топливо на ВСЮ группу в BYN (0 если не нужно, напр. онлайн/город);\n` +
+         `\nМАСШТАБ — от него зависит, какие поля увидит организатор:\n` +
+         `- scale: 'hours' (пара часов в городе: кино, кафе, встреча), 'day' (весь день, без ночёвки), ` +
+         `'overnight' (1–2 ночи: палатки, дом, баня с ночёвкой), 'multiday' (3–14 дней: поход, кемп, сплав), ` +
+         `'expedition' (большая поездка на недели/месяцы, часто за границу: Бали, Грузия, экспедиция);\n` +
+         `- included: 2–6 пунктов «что входит» (только то, что следует из идеи; для кино — «билет» если оплачен, иначе пусто);\n` +
+         `- notIncluded: 0–5 пунктов «что НЕ входит» (напр. «перелёт», «личные расходы»);\n` +
+         `- faq: 2–5 вопросов, которые участники реально зададут ИМЕННО про это событие, с короткими ответами ` +
+         `(«можно без опыта?», «что если дождь?»). Не выдумывай факты — если ответ зависит от организатора, так и скажи;\n` +
+         `- trip: ТОЛЬКО для scale='expedition' — { docs: что с документами/визой, flights: как добираемся, budget: бюджет на человека одной строкой }, иначе пустые строки.`;
       const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
         properties: {
@@ -569,6 +578,11 @@ export default async function handler(req: any, res: any) {
           needsAccommodation: { type: Type.BOOLEAN },
           hasAccommodationVote: { type: Type.BOOLEAN },
           fuelEstimate: { type: Type.NUMBER },
+          scale: { type: Type.STRING, enum: ['hours', 'day', 'overnight', 'multiday', 'expedition'] },
+          included: { type: Type.ARRAY, items: { type: Type.STRING } },
+          notIncluded: { type: Type.ARRAY, items: { type: Type.STRING } },
+          faq: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { q: { type: Type.STRING }, a: { type: Type.STRING } } } },
+          trip: { type: Type.OBJECT, properties: { docs: { type: Type.STRING }, flights: { type: Type.STRING }, budget: { type: Type.STRING } } },
         },
         required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
       });
@@ -616,6 +630,13 @@ export default async function handler(req: any, res: any) {
         needsAccommodation: !!p.needsAccommodation,
         hasAccommodationVote: !!p.hasAccommodationVote,
         fuelEstimate: Number(p.fuelEstimate) || 0,
+        // Масштаб и витрина: форма показывает поля под масштаб, а блоки
+        // «что включено» и FAQ сразу попадают на страницу события.
+        scale: ['hours', 'day', 'overnight', 'multiday', 'expedition'].includes(p.scale) ? p.scale : '',
+        included: (Array.isArray(p.included) ? p.included : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
+        notIncluded: (Array.isArray(p.notIncluded) ? p.notIncluded : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
+        faq: (Array.isArray(p.faq) ? p.faq : []).filter((f: any) => f && f.q && f.a).map((f: any) => ({ q: String(f.q).slice(0, 160), a: String(f.a).slice(0, 600) })).slice(0, 6),
+        trip: p.scale === 'expedition' && p.trip ? { docs: String(p.trip.docs || ''), flights: String(p.trip.flights || ''), budget: String(p.trip.budget || '') } : null,
       };
       /**
        * Адаптивная структура: блоки события зависят от его сути, а не от типа.

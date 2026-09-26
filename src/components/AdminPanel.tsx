@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import OrganizerPicker from './OrganizerPicker';
+import EventExtrasEditor from './EventExtrasEditor';
+import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
@@ -975,6 +978,37 @@ function adminFetch(input: string, init?: RequestInit): Promise<Response> {
 }
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 
+/**
+ * Кнопка «Войти через Telegram» (официальный Login Widget) для обычного
+ * браузера. Telegram сам показывает, кто ты, и отдаёт подписанные данные —
+ * сервер проверяет подпись токеном бота (admin/events?action=login_widget).
+ * Если домен сайта не привязан к боту в @BotFather (/setdomain), Telegram
+ * покажет «Bot domain invalid» — тогда работает вход через бота ниже.
+ */
+function TelegramLoginButton({ onAuth }: { onAuth: (user: Record<string, any>) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const cb = useRef(onAuth);
+  cb.current = onAuth;
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    (window as any).flintTgAuth = (user: Record<string, any>) => cb.current(user);
+    const sc = document.createElement('script');
+    sc.async = true;
+    sc.src = 'https://telegram.org/js/telegram-widget.js?22';
+    sc.setAttribute('data-telegram-login', 'campsflint_bot');
+    sc.setAttribute('data-size', 'large');
+    sc.setAttribute('data-radius', '12');
+    sc.setAttribute('data-userpic', 'false');
+    sc.setAttribute('data-request-access', 'write');
+    sc.setAttribute('data-onauth', 'flintTgAuth(user)');
+    el.innerHTML = '';
+    el.appendChild(sc);
+    return () => { el.innerHTML = ''; };
+  }, []);
+  return <div ref={box} className="flex min-h-[44px] justify-center" />;
+}
+
 function readSession(): boolean {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -1278,6 +1312,10 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
 
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose, onViewSite }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(readSession);
+  // Вход по подписи Telegram: пока идёт проверка, вместо формы — ожидание.
+  const [tgAuto, setTgAuto] = useState<'idle' | 'trying' | 'denied' | 'failed'>(() => (!readSession() && isInsideTelegram() ? 'trying' : 'idle'));
+  const [tgDeniedId, setTgDeniedId] = useState<number | null>(null);
+  const manualLogoutRef = useRef(false);
   const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -1311,6 +1349,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
+  // Организатор события из шаблона — без него сервер событие не создаст.
+  const [templateOrganizer, setTemplateOrganizer] = useState<number | null>(null);
   /** Тост результата последнего действия админа (сохранение, рассылка). */
   const [actionMsg, setActionMsg] = useState<{ ok: boolean; text: string } | null>(null);
   /** Вкладка «Участники»: показывать всех или только тех, кто реально приехал. */
@@ -1760,6 +1800,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
 
   const createFromTemplate = (template: EventTemplate) => {
+    if (!templateOrganizer) { setActionMsg({ ok: false, text: 'Сначала выбери организатора — без него событие не создаётся' }); return; }
     const date = templateDate;
     // Многодневный шаблон → dateEnd от выбранной даты.
     let dateEnd = '';
@@ -1799,7 +1840,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         reminder1d: true,
         reminder3h: true,
         reminder1h: true
-      }
+      },
+      deputyId: templateOrganizer || undefined,
     };
     onAddEvent(newEvent);
     setShowTemplates(false);
@@ -1838,6 +1880,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const handleTelegramLogin = async (silent = false): Promise<boolean> => {
     const initData = getInitData();
     if (!initData) { if (!silent) setLoginError('Открой админку внутри Telegram, чтобы войти по подписи.'); return false; }
+    setTgAuto('trying');
     if (!silent) { setLoginError(''); setLoggingIn(true); }
     try {
       const res = await adminFetch('/api/admin/events?action=login_telegram', {
@@ -1845,10 +1888,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         body: JSON.stringify({ initData }),
       });
       if (!res.ok) {
-        // Тихую попытку не превращаем в ошибку — просто покажем обычную форму пароля.
-        if (!silent) setLoginError(res.status === 403 ? 'Ты не в костяке клуба' : 'Подпись Telegram не подтверждена');
+        const e = await res.json().catch(() => ({} as any));
+        // Причину говорим прямо: «не в костяке» — это не сбой, а права,
+        // и владелец должен знать id, чтобы их выдать.
+        if (res.status === 403) { setTgAuto('denied'); setTgDeniedId(Number(e.telegramId) || null); }
+        else { setTgAuto('failed'); setLoginError(e.error || 'Подпись Telegram не подтверждена'); }
         return false;
       }
+      setTgAuto('idle');
+      manualLogoutRef.current = false;
       const j = await res.json().catch(() => ({}));
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       // Сохраняем токен для API-запросов — без него аудитория, переписка и инвентарь не работают.
@@ -1864,12 +1912,35 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
-  // Автовход костяка: внутри Telegram пробуем подпись сразу, без пароля.
+  /** Вход в браузере через официальную кнопку Telegram (Login Widget). */
+  const handleWidgetLogin = async (user: Record<string, any>) => {
+    setLoginError(''); setLoggingIn(true);
+    try {
+      const res = await adminFetch('/api/admin/events?action=login_widget', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user }),
+      });
+      const j = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        setLoginError(res.status === 403 ? `Твой Telegram (id ${j.telegramId || user.id}) не отмечен как костяк клуба` : (j.error || 'Не удалось войти'));
+        return;
+      }
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
+      if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch { /* приватный режим */ }
+      if (user.first_name) try { localStorage.setItem('flint_admin_name', String(user.first_name)); } catch { /* no-op */ }
+      manualLogoutRef.current = false;
+      setIsAuthenticated(true);
+      window.dispatchEvent(new Event('flint:events-refetch'));
+    } catch { setLoginError('Ошибка сети'); } finally { setLoggingIn(false); }
+  };
+
+  // Автовход костяка: внутри Telegram пробуем подпись сразу, без пароля —
+  // и при открытии, и когда сессия истекла по ходу работы (401).
   useEffect(() => {
-    if (isAuthenticated || !isInsideTelegram()) return;
+    if (isAuthenticated || !isInsideTelegram() || manualLogoutRef.current) return;
     handleTelegramLogin(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated]);
 
   // Веб-вход через Telegram (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает в боте, сайт опрашивает статус.
@@ -1946,7 +2017,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     finally { setCodeBusy(false); }
   };
 
-  const handleLogout = async () => {
+  /**
+   * Выход. Ручной — по кнопке; иначе это истёкшая сессия (сервер ответил 401).
+   * Внутри Telegram после истёкшей сессии админка сама входит заново по
+   * подписи, а после ручного выхода — нет, иначе выйти было бы невозможно.
+   */
+  const handleLogout = async (manual: unknown = false) => {
+    manualLogoutRef.current = manual === true;
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
     try { localStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* no-op */ }
     try { await adminFetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
@@ -2202,7 +2279,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         >
           <h2 className="font-display font-black text-xl uppercase text-center">Админ-панель</h2>
 
-          <div className="space-y-3">
+          {isInsideTelegram() && tgAuto === 'trying' && (
+            <div className="flex flex-col items-center gap-3 py-6 text-center">
+              <span className="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
+              <p className="text-sm text-white/70">Проверяем через Telegram, что ты из костяка…</p>
+            </div>
+          )}
+          {isInsideTelegram() && tgAuto === 'denied' && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-[12px] leading-5 text-amber-100">
+              Твой Telegram{tgDeniedId ? <> (id <b className="font-mono">{tgDeniedId}</b>)</> : null} не отмечен как костяк клуба —
+              поэтому админка не открылась сама. Попроси владельца отметить тебя костяком, или войди паролем ниже.
+            </div>
+          )}
+
+          <div className={isInsideTelegram() && tgAuto === 'trying' ? 'hidden' : 'space-y-3'}>
             {codeMode ? (
               <>
                 <p className="text-[11px] text-white/50 text-center">Вход по коду из Telegram — на случай, если забыл пароль.</p>
@@ -2296,6 +2386,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </>
             ) : (
               <>
+                {/* Официальная кнопка Telegram: один клик в браузере, без кода. */}
+                <TelegramLoginButton onAuth={handleWidgetLogin} />
                 <button
                   onClick={handleWebTelegramLogin}
                   disabled={webTgPolling}
@@ -2385,7 +2477,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </button>
             )}
             <button
-              onClick={handleLogout}
+              onClick={() => handleLogout(true)}
               className="text-[10px] font-mono uppercase text-white/50 hover:text-white bg-white/5 hover:bg-white/10 border-none rounded-full px-3 py-2 cursor-pointer"
               title="Выйти и забыть сессию"
             >
@@ -2508,9 +2600,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 text-[10px] text-white/50 mb-2">
-                  <Users className="w-3 h-3" />
-                  <span>{event.participantsCount}/{event.maxParticipants}</span>
+                <div className="flex items-center justify-between gap-2 text-[10px] text-white/50 mb-2">
+                  <span className="flex items-center gap-1.5">
+                    {(event.participants?.length || 0) > 0
+                      ? <AvatarStack people={event.participants || []} total={event.participantsCount} size={20} max={5} />
+                      : <Users className="w-3 h-3" />}
+                    <span>{event.participantsCount}/{event.maxParticipants}</span>
+                  </span>
+                  {/* Кто отвечает. Нет организатора — красная метка: назначь. */}
+                  {event.deputyId ? (
+                    <span className="flex min-w-0 items-center gap-1.5" title="Организатор">
+                      <Avatar name={event.organizerName || '?'} src={event.organizerAvatar} size={20} />
+                      <span className="truncate text-white/70">{event.organizerName || `id ${event.deputyId}`}</span>
+                    </span>
+                  ) : (
+                    <span className="shrink-0 rounded-full bg-rose-500/20 px-2 py-0.5 font-mono text-[9px] font-bold uppercase text-rose-300">нет организатора</span>
+                  )}
                 </div>
 
                 <div className="flex gap-1">
@@ -3949,26 +4054,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         Сменить код доступа
                       </button>
 
-                      <button
-                        onClick={() => {
-                          const candidates = (eventStats?.registrations || []).filter((r: any) => Number(r.telegramId) > 0);
-                          if (!candidates.length) { setActionMsg({ ok: false, text: 'Нет участников с Telegram-id' }); return; }
-                          setInputModal({
-                            title: 'Заместитель на событие',
-                            submitLabel: 'Назначить',
-                            fields: [{
-                              key: 'deputy', label: 'Кто помогает вести событие', type: 'select', required: true,
-                              value: selectedEvent.deputyId ? String(selectedEvent.deputyId) : '',
-                              options: candidates.map((r: any) => ({ value: String(r.telegramId), label: `${r.name}${r.telegram ? ` @${r.telegram}` : ''}` })),
-                            }],
-                            onSubmit: (v) => patchEvent({ deputyId: Number(v.deputy) }),
-                          });
-                        }}
-                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        {selectedEvent.deputyId ? `Заместитель: ${selectedEvent.deputyId}` : 'Заместитель на мероприятие'}
-                      </button>
+                      {/* Организатор — по лицам и из всего клуба, а не голый id из записавшихся. */}
+                      <OrganizerPicker
+                        value={selectedEvent.deputyId}
+                        onChange={(id) => patchEvent({ deputyId: id })}
+                      />
                     </div>
 
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -4864,6 +4954,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
               <p className="text-xs text-white/60 mb-2">Выберите дату и шаблон — событие сразу попадёт в календарь</p>
 
+              <div className="mb-3">
+                <OrganizerPicker value={templateOrganizer} onChange={(id) => setTemplateOrganizer(id)} />
+              </div>
+
               <div className="flex items-center gap-3 mb-4">
                 <label className="text-[10px] text-white/40 uppercase font-mono shrink-0">Дата события</label>
                 <input
@@ -4910,10 +5004,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
  * записи, машины/попутки, палатки); включил — процесс сразу доступен.
  * Без явного флага поведение определяется типом события (как раньше).
  */
-function FeatureToggles({ value, type, onChange }: {
+function FeatureToggles({ value, type, onChange, scale }: {
   value: Record<string, any>;
   type: string;
   onChange: (v: Record<string, any>) => void;
+  /** Масштаб события: палатки без ночёвки не бывают — тумблер не показываем. */
+  scale?: string;
 }) {
   // Формат события задаёт, какие блоки вообще имеют смысл: онлайну не нужны
   // машины, палатки и совместная готовка. Хранится в notifications._format
@@ -4926,7 +5022,7 @@ function FeatureToggles({ value, type, onChange }: {
     { key: 'feat_food', label: '🍽 Готовка и меню', def: defFood },
     { key: 'feat_rides', label: '🚗 Машины и попутки', def: defLogi },
     { key: 'feat_tents', label: '⛺ Палатки', def: defLogi },
-  ];
+  ].filter((it) => !(it.key === 'feat_tents' && (scale === 'hours' || scale === 'day')));
   const FORMATS = [
     { k: 'offline', l: '📍 Вживую' },
     { k: 'online', l: '💻 Онлайн' },
@@ -5219,6 +5315,7 @@ function EditEventModal({ event, onClose, onSave }: {
           )}
 
           <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
+          <EventExtrasEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />
 
           <ItineraryEditor
             value={formData.logistics?.itinerary || []}
@@ -5518,6 +5615,53 @@ function EditEventModal({ event, onClose, onSave }: {
 }
 
 // Add Event Modal — бесшовный ИИ-флоу
+type EventScale = 'hours' | 'day' | 'overnight' | 'multiday' | 'expedition';
+const SCALES: { k: EventScale; l: string; hint: string }[] = [
+  { k: 'hours', l: '⏱ Пара часов', hint: 'кино, кафе, встреча' },
+  { k: 'day', l: '☀️ День', hint: 'без ночёвки' },
+  { k: 'overnight', l: '⛺ С ночёвкой', hint: '1–2 ночи' },
+  { k: 'multiday', l: '🥾 Несколько дней', hint: 'поход, кемп' },
+  { k: 'expedition', l: '✈️ Большая поездка', hint: 'недели, за границу' },
+];
+/** Масштаб по датам, если ИИ его не назвал: разница дат и длительность дня. */
+function inferScale(f: { date?: string; dateEnd?: string; time?: string; timeEnd?: string }): EventScale {
+  if (f.date && f.dateEnd && f.dateEnd > f.date) {
+    const days = Math.round((new Date(f.dateEnd).getTime() - new Date(f.date).getTime()) / 86400000);
+    return days > 14 ? 'expedition' : days >= 3 ? 'multiday' : 'overnight';
+  }
+  const h = (t?: string) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ''); return m ? Number(m[1]) + Number(m[2]) / 60 : null; };
+  const a = h(f.time), b = h(f.timeEnd);
+  return a !== null && b !== null && b > a && b - a <= 5 ? 'hours' : 'day';
+}
+function ScaleChips({ value, onChange }: { value: EventScale; onChange: (k: EventScale) => void }) {
+  return (
+    <div>
+      <label className="text-[10px] text-white/40 uppercase font-mono block mb-1.5">Масштаб — от него зависят поля</label>
+      <div className="flex flex-wrap gap-1.5">
+        {SCALES.map((x) => (
+          <button key={x.k} type="button" onClick={() => onChange(x.k)} title={x.hint}
+            className={`rounded-full px-3 py-1.5 text-[11px] font-bold cursor-pointer border ${value === x.k ? 'bg-brand text-black border-brand' : 'bg-white/5 text-white/70 border-white/10'}`}>
+            {x.l}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+/** Большая поездка: документы, дорога и бюджет — то, что спрашивают первым. */
+function TripEditor({ value, onChange }: { value: any; onChange: (v: any) => void }) {
+  const v = value || {};
+  const inp = 'w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30';
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+      <label className="text-[10px] text-white/40 uppercase font-mono block">✈️ Поездка</label>
+      <input value={v.docs || ''} onChange={(e) => onChange({ ...v, docs: e.target.value })} placeholder="Документы и виза (напр. загранпаспорт, виза по прилёту)" className={inp} />
+      <input value={v.flights || ''} onChange={(e) => onChange({ ...v, flights: e.target.value })} placeholder="Как добираемся (перелёт Минск—Стамбул—Денпасар)" className={inp} />
+      <input value={v.budget || ''} onChange={(e) => onChange({ ...v, budget: e.target.value })} placeholder="Бюджет на человека (≈ 1500 $ без перелёта)" className={inp} />
+    </div>
+  );
+}
+
 function AddEventModal({ onClose, onAdd }: {
   onClose: () => void;
   onAdd: (event: CommunityEvent) => void;
@@ -5528,6 +5672,10 @@ function AddEventModal({ onClose, onAdd }: {
   const [questions, setQuestions] = useState<string[]>([]);
   const [geoLoading, setGeoLoading] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Организатор обязателен: без него событие не создаётся (сервер тоже проверяет).
+  const [organizerId, setOrganizerId] = useState<number | null>(null);
+  // Поля под масштаб события; «показать все» — на случай, когда ИИ ошибся.
+  const [showAllFields, setShowAllFields] = useState(false);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -5609,13 +5757,21 @@ function AddEventModal({ onClose, onAdd }: {
      * получали логистику по зуму. Организатор может переключить любой тумблер
      * после генерации — решение ИИ это подсказка, а не запрет.
      */
-    if (d.format || d.features) {
+    if (d.format || d.features || d.scale) {
       updates.notifications = {
         ...(formData.notifications || {}),
         ...(d.features || {}),
         ...(d.format ? { _format: d.format } : {}),
+        ...(d.scale ? { _scale: d.scale } : {}),
       };
     }
+    // Витрина события от ИИ: «что включено», FAQ, данные поездки.
+    const extra: Record<string, any> = {};
+    if (d.included?.length) extra.included = d.included;
+    if (d.notIncluded?.length) extra.notIncluded = d.notIncluded;
+    if (d.faq?.length) extra.faq = d.faq;
+    if (d.trip) extra.trip = d.trip;
+    if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));
 
     // У онлайна нет физической локации — геокодить «Zoom» бессмысленно.
@@ -5646,7 +5802,7 @@ function AddEventModal({ onClose, onAdd }: {
   };
 
   const handleAdd = () => {
-    if (!formData.title || !formData.date) return;
+    if (!formData.title || !formData.date || !organizerId) return;
 
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
@@ -5680,10 +5836,23 @@ function AddEventModal({ onClose, onAdd }: {
       paymentDetails: formData.paymentDetails,
       distanceFromMinsk: formData.distanceFromMinsk,
       travelTime: formData.travelTime,
-      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications }
+      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications },
+      deputyId: organizerId,
     };
     onAdd(newEvent);
   };
+
+  const scale: EventScale = (formData.notifications?._scale as EventScale) || inferScale(formData);
+  const lg = formData.logistics || {};
+  const feats = formData.notifications || {};
+  // Раздел показываем, если он нужен масштабу ИЛИ в нём уже есть данные.
+  const sections = {
+    logistics: scale !== 'hours' || !!feats.feat_rides || !!lg.assemblyPoint,
+    trip: scale === 'expedition' || !!(lg.trip && (lg.trip.docs || lg.trip.flights || lg.trip.budget)),
+    extras: ['overnight', 'multiday', 'expedition'].includes(scale) || !!(lg.gallery?.length || lg.included?.length || lg.faq?.length),
+    itinerary: ['hours', 'day'].includes(scale) || !!lg.itinerary?.length,
+  };
+  const hiddenCount = Object.values(sections).filter((x) => !x).length;
 
   const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30';
 
@@ -5824,12 +5993,26 @@ function AddEventModal({ onClose, onAdd }: {
                 )}
 
                 {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
-                <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />
-                <ItineraryEditor
-                  value={formData.logistics?.itinerary || []}
-                  onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
-                  event={formData}
-                />
+
+                {/* Масштаб решает, какие разделы нужны: кино на пару часов не
+                    спрашивает про палатки, поездка на Бали — спрашивает про визу. */}
+                <ScaleChips value={scale} onChange={(k) => setFormData({ ...formData, notifications: { ...(formData.notifications || {}), _scale: k } })} />
+
+                {(showAllFields || sections.logistics) && <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />}
+                {(showAllFields || sections.trip) && <TripEditor value={formData.logistics?.trip} onChange={(trip) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), trip } })} />}
+                {(showAllFields || sections.extras) && <EventExtrasEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} />}
+                {(showAllFields || sections.itinerary) && (
+                  <ItineraryEditor
+                    value={formData.logistics?.itinerary || []}
+                    onChange={(itinerary) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), itinerary } })}
+                    event={formData}
+                  />
+                )}
+                {!showAllFields && hiddenCount > 0 && (
+                  <button type="button" onClick={() => setShowAllFields(true)} className="w-full rounded-xl border border-dashed border-white/15 bg-transparent py-2 text-[11px] text-white/50 cursor-pointer">
+                    Показать все поля (+{hiddenCount} разд., обычно не нужны для «{SCALES.find((x) => x.k === scale)?.l}»)
+                  </button>
+                )}
                 <ImageUploadField value={formData.image} onChange={(url) => setFormData({...formData, image: url})} />
                 <textarea placeholder="Описание" value={formData.description} onChange={(e) => setFormData({...formData, description: e.target.value})} className={inp} rows={3} />
 
@@ -5847,15 +6030,18 @@ function AddEventModal({ onClose, onAdd }: {
                 <ListEditor label="Программа" placeholder="Шаг" items={formData.program} aiHint onChange={(v) => setFormData({...formData, program: v})} onGenerate={async () => { const ai = await aiProgram(formData); setFormData({...formData, program: ai || generateProgram(formData)}); }} />
 
                 <ListEditor label="Порог входа" placeholder="Условие" items={formData.entryThreshold ? formData.entryThreshold.split(/\s*[•·]\s*/).filter(Boolean) : []} onChange={(v) => setFormData({...formData, entryThreshold: v.join(' • ')})} onGenerate={() => setFormData({...formData, entryThreshold: generateThreshold(formData).join(' • ')})} />
-                <FeatureToggles value={formData.notifications} type={formData.type} onChange={(v) => setFormData({ ...formData, notifications: v })} />
+                <FeatureToggles value={formData.notifications} type={formData.type} scale={scale} onChange={(v) => setFormData({ ...formData, notifications: v })} />
               </div>
             )}
           </div>
         )}
 
+        {/* Кто отвечает за событие — обязательно, с фото, чтобы не ошибиться человеком. */}
+        <OrganizerPicker value={organizerId} onChange={(id) => setOrganizerId(id)} />
+
         {/* КНОПКИ */}
         <div className="flex gap-2 pt-2">
-          <button onClick={handleAdd} disabled={!formData.title || !formData.date} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
+          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
             ✅ Создать
           </button>
           <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">

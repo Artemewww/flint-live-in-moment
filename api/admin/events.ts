@@ -279,6 +279,12 @@ function passwordMatches(password: string): boolean {
  * ADMIN_SECRET наружу не выпускаем: он бессрочный и открывает все админ-роуты,
  * а из localStorage его может забрать любой XSS. Сессионный токен протухает.
  */
+/** Кого пускать в админку по Telegram: костяк и владелец клуба. */
+async function isCoreMember(tgId: number): Promise<boolean> {
+  const { data: m } = await supabase.from('members').select('is_core,role').eq('telegram_id', tgId).maybeSingle();
+  return !!m && ((m as any).is_core === true || (m as any).role === 'owner');
+}
+
 function sessionValue(): string {
   const exp = Date.now() + ADMIN_TTL_MS;
   const mac = crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex');
@@ -335,15 +341,51 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const user = verifyInitData(String(body.initData || ''));
     if (!user) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
-    const { data: m } = await supabase.from('members').select('is_core,status').eq('telegram_id', user.id).maybeSingle();
-    if (!m || (m as any).is_core !== true) {
-      return res.status(403).json({ error: 'Доступ только для костяка клуба' });
+    if (!(await isCoreMember(user.id))) {
+      return res.status(403).json({ error: 'Доступ только для костяка клуба', telegramId: user.id });
     }
     {
       const sess = sessionValue();
       res.setHeader('Set-Cookie', sessionCookie(sess));
       return res.status(200).json({ ok: true, core: true, token: sess });
     }
+  }
+
+  /**
+   * ВХОД В БРАУЗЕРЕ ОДНОЙ КНОПКОЙ — Telegram Login Widget.
+   * В обычном браузере нет initData Mini App, и костяк входил паролем или
+   * кодом, который бот присылал в Telegram. Официальная кнопка «Войти через
+   * Telegram» отдаёт подписанные данные пользователя: hash = HMAC-SHA256
+   * (ключ — SHA256 от токена бота) по отсортированным полям. Подделать без
+   * токена бота нельзя; auth_date не старше суток — защита от повтора.
+   * Нужен один раз /setdomain в @BotFather для домена сайта.
+   */
+  if (req.method === 'POST' && req.query?.action === 'login_widget') {
+    const rl = await rateLimit('login', clientIp(req), 8, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfter));
+      return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${Math.ceil(rl.retryAfter / 60)} мин.` });
+    }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const data = body.user && typeof body.user === 'object' ? body.user : {};
+    const hash = String(data.hash || '');
+    const tgId = Number(data.id) || 0;
+    if (!hash || !tgId || !BOT_TOKEN) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
+    const check = Object.keys(data).filter((k) => k !== 'hash' && data[k] !== undefined && data[k] !== null)
+      .sort().map((k) => `${k}=${data[k]}`).join('\n');
+    const secret = crypto.createHash('sha256').update(BOT_TOKEN).digest();
+    const expected = crypto.createHmac('sha256', secret).update(check).digest('hex');
+    const a = Buffer.from(expected), b = Buffer.from(hash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
+    if (!(Number(data.auth_date) > 0) || Date.now() / 1000 - Number(data.auth_date) > 24 * 60 * 60) {
+      return res.status(401).json({ error: 'Вход устарел — нажми кнопку ещё раз' });
+    }
+    if (!(await isCoreMember(tgId))) {
+      return res.status(403).json({ error: 'Доступ только для костяка клуба', telegramId: tgId });
+    }
+    const sess = sessionValue();
+    res.setHeader('Set-Cookie', sessionCookie(sess));
+    return res.status(200).json({ ok: true, core: true, token: sess });
   }
   // Вход костяка на ВЕБЕ (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает вход в боте (его личность
@@ -651,6 +693,35 @@ export default async function handler(req: any, res: any) {
        * Ошибки не глотаем: кончилась квота или ключ протух — так и пишем,
        * чтобы владелец знал, что нужно заменить ключ в панели.
        */
+      /**
+       * Фото галереи события — в хранилище, а не в базу.
+       * Обложку исторически клали dataURL-ом прямо в events.image; для галереи
+       * из 5–10 фото это раздуло бы /api/events на мегабайты. Кладём файл в
+       * публичный бакет event-images и отдаём ссылку.
+       */
+      if (req.query?.action === 'upload_image') {
+        const dataUrl = String(body.dataUrl || '');
+        const m = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+        if (!m) return res.status(400).json({ error: 'Ожидалась картинка PNG/JPEG/WebP' });
+        const bin = Buffer.from(m[2], 'base64');
+        if (bin.length < 1024) return res.status(400).json({ error: 'Файл пустой или повреждён' });
+        if (bin.length > 4_000_000) return res.status(400).json({ error: 'Файл больше 4 МБ — выбери поменьше' });
+        const ext = m[1] === 'image/png' ? 'png' : /jpe?g/.test(m[1]) ? 'jpg' : 'webp';
+        const path = `gallery/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+        const up = await fetch(`${process.env.SUPABASE_URL}/storage/v1/object/event-images/${path}`, {
+          method: 'POST',
+          headers: {
+            apikey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+            Authorization: `Bearer ${process.env.SUPABASE_SERVICE_ROLE_KEY || ''}`,
+            'Content-Type': m[1],
+            'x-upsert': 'true',
+          },
+          body: bin,
+        });
+        if (!up.ok) return res.status(500).json({ error: 'Не удалось сохранить фото в хранилище' });
+        return res.status(200).json({ ok: true, url: `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}` });
+      }
+
       if (req.query?.action === 'gen_cover') {
         const title = String(body.title || '').trim();
         if (!title) return res.status(400).json({ error: 'Сначала впиши название события' });
@@ -929,6 +1000,8 @@ export default async function handler(req: any, res: any) {
       // Отдельная вертикальная афиша для шеринга в Telegram (og:image при пересылке).
       // Колонка может отсутствовать до миграции — ниже сохраняем устойчиво.
       if (body.telegramImage !== undefined) (eventData as any).telegram_image = body.telegramImage || null;
+      // Организатор события (deputy_id): отвечает за выезд, ему идут вопросы.
+      if (Number(body.deputyId) > 0) (eventData as any).deputy_id = Number(body.deputyId);
 
       // Старая версия — чтобы после сохранения понять, что изменилось, и
       // уведомить записанных (только при реальном отличии ключевых полей).
@@ -938,6 +1011,17 @@ export default async function handler(req: any, res: any) {
       const { data: before } = await supabase
         .from('events').select('date,date_end,time,time_end,location,date_label,logistics,program,coordinates_lat,coordinates_lng,entry_threshold')
         .eq('id', body.id).maybeSingle();
+
+      /**
+       * БЕЗ ОРГАНИЗАТОРА СОБЫТИЯ НЕТ.
+       * Событие, за которое никто не отвечает, — это вопросы в пустоту: кому
+       * писать про машину, кто решает при дожде, кто собирает деньги.
+       * Новое событие без организатора не создаём. Старые события без него
+       * редактировать можно — админка подсвечивает их, чтобы назначили.
+       */
+      if (!before && !(Number(body.deputyId) > 0)) {
+        return res.status(400).json({ error: 'Назначь организатора события', details: 'Без организатора событие не создаётся: выбери, кто за него отвечает.' });
+      }
 
       let { data: event, error } = await supabase
         .from('events')
