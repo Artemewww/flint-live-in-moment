@@ -37,17 +37,15 @@ function FundCard({ fund, onOpen, wide }: { fund: PublicFundraiser; onOpen: (slu
         <span className="absolute left-1 top-1 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-brand">сбор</span>
       </span>
 
-      <span className="min-w-0 flex-1 space-y-1.5">
-        <span className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-black uppercase leading-tight">{fund.title}</span>
-        </span>
+      <span className="min-w-0 flex-1 space-y-1">
+        {fund.deadline && <span className="block font-mono text-[9px] uppercase tracking-wider text-white/40">до {dayMonth(fund.deadline)}</span>}
+        <span className="line-clamp-2 text-[13px] font-black uppercase leading-tight">{fund.title}</span>
         <span className="block h-1.5 overflow-hidden rounded-full bg-white/10">
           <span className="block h-full rounded-full bg-brand" style={{ width: `${pct}%` }} />
         </span>
         <span className="flex items-center justify-between gap-2">
           <span className="truncate text-[11px] text-white/60">
             <b className="text-white">{Math.round(fund.confirmedAmount)}</b> из {Math.round(fund.goalAmount)} BYN
-            {fund.deadline && <> · до {dayMonth(fund.deadline)}</>}
           </span>
           {(fund.supporters?.length || 0) > 0 && (
             <span className="flex shrink-0 -space-x-1.5">

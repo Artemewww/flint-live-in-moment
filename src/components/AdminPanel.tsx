@@ -1314,6 +1314,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     d.setDate(d.getDate() + 7);
     return d.toISOString().split('T')[0];
   });
+  // Организатор события из шаблона — без него сервер событие не создаст.
+  const [templateOrganizer, setTemplateOrganizer] = useState<number | null>(null);
   /** Тост результата последнего действия админа (сохранение, рассылка). */
   const [actionMsg, setActionMsg] = useState<{ ok: boolean; text: string } | null>(null);
   /** Вкладка «Участники»: показывать всех или только тех, кто реально приехал. */
@@ -1763,6 +1765,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
 
 
   const createFromTemplate = (template: EventTemplate) => {
+    if (!templateOrganizer) { setActionMsg({ ok: false, text: 'Сначала выбери организатора — без него событие не создаётся' }); return; }
     const date = templateDate;
     // Многодневный шаблон → dateEnd от выбранной даты.
     let dateEnd = '';
@@ -1802,7 +1805,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         reminder1d: true,
         reminder3h: true,
         reminder1h: true
-      }
+      },
+      deputyId: templateOrganizer || undefined,
     };
     onAddEvent(newEvent);
     setShowTemplates(false);
@@ -4864,6 +4868,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </div>
 
               <p className="text-xs text-white/60 mb-2">Выберите дату и шаблон — событие сразу попадёт в календарь</p>
+
+              <div className="mb-3">
+                <OrganizerPicker value={templateOrganizer} onChange={(id) => setTemplateOrganizer(id)} />
+              </div>
 
               <div className="flex items-center gap-3 mb-4">
                 <label className="text-[10px] text-white/40 uppercase font-mono shrink-0">Дата события</label>
