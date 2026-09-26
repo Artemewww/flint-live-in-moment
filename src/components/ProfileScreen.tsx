@@ -4,8 +4,9 @@ import {
   Calendar, MapPin, CreditCard, Truck, Package, UtensilsCrossed, Settings as SettingsIcon,
   Loader2, ShieldCheck, Clock, ArrowRightLeft, Save, Send, Reply, BookOpen, ListTodo,
 } from 'lucide-react';
-import { getInitData, isInsideTelegram, haptic } from '../telegram';
+import { getInitData, isInsideTelegram, haptic, getTelegramUser } from '../telegram';
 import GearShelf from './GearShelf';
+import Avatar from './Avatar';
 import FoodSelectionPanel from './FoodSelectionPanel';
 import CampingChecklist from './CampingChecklist';
 
@@ -46,6 +47,48 @@ function fmtWhen(at?: string | null): string {
   if (h < 24) return `${h} ч назад`;
   const d = Math.round(h / 24);
   return d < 30 ? `${d} дн назад` : new Date(at).toLocaleDateString('ru-RU');
+}
+
+/**
+ * История баллов по датам — как история бонусов в банке: за что начислено
+ * и сколько. Раньше было видно только итоговое число и непонятно, откуда оно.
+ */
+const POINT_ICON: Record<string, string> = { attendance: '🏕', invite: '🤝', role: '🎖', feedback: '💬', bonus: '🎁', fundraiser: '💚', 'fundraiser-rollback': '↩️' };
+function PointsHistory({ items }: { items: { id: number; points: number; reason: string; text: string; at: string }[] }) {
+  const [all, setAll] = useState(false);
+  if (!items.length) return null;
+  const shown = all ? items : items.slice(0, 6);
+  const groups: { day: string; rows: typeof items }[] = [];
+  for (const it of shown) {
+    const d = new Date(it.at);
+    const day = Number.isNaN(d.getTime()) ? '' : `${d.getDate()} ${RU_MON[d.getMonth()]}`;
+    const g = groups[groups.length - 1];
+    if (g && g.day === day) g.rows.push(it); else groups.push({ day, rows: [it] });
+  }
+  return (
+    <section className="space-y-2">
+      <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40 flex items-center gap-1.5"><Star className="w-3.5 h-3.5" /> История баллов</h3>
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] px-3.5">
+        {groups.map((g) => (
+          <div key={g.day} className="py-2">
+            <p className="py-1 text-[12px] font-bold text-white/80">{g.day}</p>
+            {g.rows.map((r) => (
+              <div key={r.id} className="flex items-center gap-3 py-1.5">
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/5 text-base">{POINT_ICON[r.reason] || '⭐'}</span>
+                <span className="min-w-0 flex-1 truncate text-[13px] text-white/85">{r.text}</span>
+                <span className={`shrink-0 text-[13px] font-bold ${r.points >= 0 ? 'text-emerald-400' : 'text-rose-300'}`}>{r.points > 0 ? '+' : ''}{r.points}</span>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+      {items.length > 6 && (
+        <button type="button" onClick={() => setAll((v) => !v)} className="w-full rounded-xl border-none bg-white/5 py-2 text-[12px] font-bold text-white/60 cursor-pointer">
+          {all ? 'Свернуть' : `Показать всё (${items.length})`}
+        </button>
+      )}
+    </section>
+  );
 }
 
 const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: 'Вегетарианец', vegan: 'Веган' };
@@ -120,6 +163,7 @@ function ClubInventoryBlock() {
 }
 
 export default function ProfileScreen({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
+  const myPhoto = useMemo(() => getTelegramUser()?.photo_url || '', []);
   const [tab, setTab] = useState<Tab>(initialTab || 'overview');
   // Чек-лист по умолчанию свёрнут: длинный список мешал видеть складчину.
   const [showChecklist, setShowChecklist] = useState(false);
@@ -317,69 +361,68 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
       <div
         className="bg-[#121212] md:rounded-3xl w-full max-w-2xl shadow-2xl relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[92vh] text-white"
       >
-        {/* ── Шапка: кто я + уровень. Видно всегда, не уезжает при скролле. ── */}
-        <div className="shrink-0 border-b border-white/10 bg-[#161616] p-4 sm:p-6 pt-5">
-          <div className="flex items-start gap-3">
-            <div className="shrink-0 w-12 h-12 rounded-2xl bg-brand/15 border border-brand/30 flex items-center justify-center font-display font-black text-xl text-brand">
-              {(p?.firstName || '?').trim().charAt(0).toUpperCase()}
+        {/* ── Шапка в духе банковского профиля: цветной блок, крупное фото,
+            имя и баллы «таблеткой». Видно всегда, не уезжает при скролле. ── */}
+        <div className="relative shrink-0 bg-gradient-to-b from-brand/[.14] to-[#161616] px-4 pb-4 pt-5 sm:px-6">
+          <button
+            onClick={onClose}
+            className="absolute right-3 top-3 p-2 rounded-full bg-black/30 hover:bg-black/50 border-none cursor-pointer text-white/80"
+            title="Закрыть"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <div className="flex flex-col items-center text-center">
+            <Avatar name={p?.firstName || '?'} src={myPhoto} size={72} ring={p?.isCore ? 'brand' : 'none'} />
+            <h2 className="mt-3 font-display font-black text-xl sm:text-2xl uppercase tracking-tight leading-none max-w-full truncate">
+              {p?.firstName || 'Профиль'}
+            </h2>
+            <div className="flex items-center justify-center gap-2 mt-2 flex-wrap">
+              {p?.username && <span className="text-[11px] font-mono text-white/50">@{p.username}</span>}
+              {p && (
+                <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full border ${
+                  p.isCore ? 'border-brand/40 text-brand bg-brand/10'
+                    : p.status === 'approved' ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/10'
+                    : 'border-white/15 text-white/50 bg-white/5'
+                }`}>
+                  {p.isCore ? 'Костяк' : p.status === 'approved' ? 'Участник' : p.status === 'pending_review' ? 'На рассмотрении' : 'Гость'}
+                </span>
+              )}
             </div>
-            <div className="min-w-0 flex-1">
-              <h2 className="font-display font-black text-lg sm:text-2xl uppercase tracking-tight leading-none truncate">
-                {p?.firstName || 'Профиль'}
-              </h2>
-              <div className="flex items-center gap-2 mt-1 flex-wrap">
-                {p?.username && <span className="text-[11px] font-mono text-white/50">@{p.username}</span>}
-                {p && (
-                  <span className={`text-[9px] font-mono uppercase tracking-widest px-2 py-0.5 rounded-full border ${
-                    p.isCore ? 'border-brand/40 text-brand bg-brand/10'
-                      : p.status === 'approved' ? 'border-emerald-500/30 text-emerald-300 bg-emerald-500/10'
-                      : 'border-white/15 text-white/50 bg-white/5'
-                  }`}>
-                    {p.isCore ? 'Костяк' : p.status === 'approved' ? 'Участник' : p.status === 'pending_review' ? 'На рассмотрении' : 'Гость'}
-                  </span>
-                )}
-              </div>
-            </div>
-            <button
-              onClick={onClose}
-              className="shrink-0 p-2 rounded-full bg-white/5 hover:bg-white/10 border-none cursor-pointer text-white/70 hover:text-white"
-              title="Закрыть"
-            >
-              <X className="w-5 h-5" />
-            </button>
           </div>
 
           {p && (
-            <div className="mt-4 space-y-1.5">
-              <div className="flex justify-between text-[10px] font-mono uppercase tracking-widest">
-                <span className="text-white/50">Уровень {level} · {levelTitle}</span>
-                {/* Прогресс ВНУТРИ уровня, а не от нуля: полоса рисуется по
-                    остатку (points % 500), и подпись обязана совпадать с ней. */}
-                <span className="text-brand font-bold">{p.points % 500} / 500 → ур. {level + 1}</span>
-              </div>
-              <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
-                <div className="bg-brand h-full transition-all" style={{ width: `${((p.points % 500) / 500) * 100}%` }} />
+            <div className="mt-4 flex items-center gap-3 rounded-2xl bg-black/30 p-3">
+              <span className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-brand px-3 text-sm font-black text-black">
+                <Star className="w-4 h-4 fill-black" /> {p.points}
+              </span>
+              <div className="min-w-0 flex-1 space-y-1">
+                <div className="flex justify-between text-[10px] font-mono uppercase tracking-widest">
+                  <span className="text-white/60 truncate">Ур. {level} · {levelTitle}</span>
+                  {/* Прогресс ВНУТРИ уровня: полоса по остатку points % 500. */}
+                  <span className="text-brand font-bold shrink-0">{p.points % 500}/500</span>
+                </div>
+                <div className="w-full bg-white/10 h-1.5 rounded-full overflow-hidden">
+                  <div className="bg-brand h-full transition-all" style={{ width: `${((p.points % 500) / 500) * 100}%` }} />
+                </div>
               </div>
             </div>
           )}
         </div>
 
-        {/* ── Вкладки ── */}
-        <div className="shrink-0 flex border-b border-white/10 bg-[#141414] overflow-x-auto scrollbar-none">
+        {/* ── Вкладки: текст с подчёркиванием, как в банковском профиле ── */}
+        <div className="shrink-0 flex gap-5 border-b border-white/10 bg-[#141414] px-4 sm:px-6 overflow-x-auto scrollbar-none">
           {TABS.map((t) => {
-            const Icon = t.icon;
             const active = tab === t.key;
             return (
               <button
                 key={t.key}
                 onClick={() => { setTab(t.key); haptic('success'); }}
-                className={`flex-1 min-w-[86px] px-3 py-3 flex flex-col items-center gap-1 border-none cursor-pointer bg-transparent transition-colors ${
-                  active ? 'text-brand' : 'text-white/40 hover:text-white/70'
+                className={`relative shrink-0 py-3 text-[13px] font-bold border-none cursor-pointer bg-transparent transition-colors whitespace-nowrap ${
+                  active ? 'text-white' : 'text-white/45 hover:text-white/70'
                 }`}
               >
-                <Icon className="w-4 h-4" />
-                <span className="text-[9px] font-mono uppercase tracking-wider whitespace-nowrap">{t.label}</span>
-                <span className={`h-0.5 w-full rounded-full ${active ? 'bg-brand' : 'bg-transparent'}`} />
+                {t.label}
+                <span className={`absolute inset-x-0 bottom-0 h-0.5 rounded-full ${active ? 'bg-brand' : 'bg-transparent'}`} />
               </button>
             );
           })}
@@ -737,6 +780,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                       </div>
                     </section>
                   )}
+                  {/* История баллов — внизу обзора: сначала то, что требует действия. */}
+                  <PointsHistory items={data?.pointsHistory || []} />
                 </>
               )}
 

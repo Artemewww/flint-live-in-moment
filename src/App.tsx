@@ -27,6 +27,9 @@ import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIco
 import { submitFeedback } from './api';
 import { FundraiserPage } from './components/FundraiserPage';
 import FundraiserBanner from './components/FundraiserBanner';
+import Avatar from './components/Avatar';
+import BottomNav from './components/BottomNav';
+import { Star } from 'lucide-react';
 
 // Маппинг snake_case -> camelCase для данных из Supabase
 function mapEventToCamelCase(event: any): CommunityEvent {
@@ -244,6 +247,9 @@ export default function App() {
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
   const [feedbackEvent, setFeedbackEvent] = useState<CommunityEvent | null>(null);
   const [showUserStats, setShowUserStats] = useState<boolean>(false);
+  const [myPoints, setMyPoints] = useState<number | null>(null);
+  /** Фото из Telegram для шапки (приходит в initData, если человек его не скрыл). */
+  const myPhoto = React.useMemo(() => getTelegramUser()?.photo_url || '', []);
   /** Инициал для аватара в шапке: внутри Telegram личность известна сразу. */
   const profileInitial = React.useMemo(() => {
     const name = getTelegramUser()?.first_name || '';
@@ -455,6 +461,8 @@ export default function App() {
         // шапке у всех («всегда виден»), и обычный участник видел вход в
         // панель, которая ему не принадлежит.
         setIsCoreUser(!!p && !!p.isCore);
+        // Баллы — в шапку, как бонусы в банковском приложении.
+        setMyPoints(p ? Number(p.points) || 0 : null);
         setViewerGender((p && p.gender) || null);
         // Костяк не блокируется; для остальных статус 'blocked' закрывает афишу.
         setBanned(!!p && p.status === 'blocked' && !p.isCore);
@@ -940,24 +948,27 @@ export default function App() {
                 </span>
               )}
             </button>
-            {/* Кнопка «История»: видео прошедших событий сообщества. */}
-            <button
-              onClick={() => setShowHistory(true)}
-              className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center relative text-brand"
-              id="header-history-btn"
-              title="История событий"
-              aria-label="История событий"
-            >
-              <Clapperboard className="w-4.5 h-4.5" />
-            </button>
+            {/* «История» переехала в нижнее меню. На её месте — баллы, как
+                бонусы в шапке банковского приложения: тап ведёт в профиль. */}
+            {myPoints !== null && (
+              <button
+                onClick={() => { setProfileTab('overview'); setShowUserStats(true); }}
+                className="h-8 px-2.5 rounded-full bg-brand text-black font-black text-[12px] flex items-center gap-1 border-none cursor-pointer"
+                id="header-points-btn"
+                title="Мои баллы"
+                aria-label={`Баллы: ${myPoints}`}
+              >
+                <Star className="w-3.5 h-3.5 fill-black" /> {myPoints}
+              </button>
+            )}
             <button
               onClick={() => setShowUserStats(true)}
-              className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative"
+              className="w-10 h-10 rounded-full bg-brand/15 border border-brand/30 hover:bg-brand/25 transition-all cursor-pointer flex items-center justify-center font-display font-black text-brand text-sm relative overflow-visible p-0"
               id="header-profile-btn"
               title="Профиль"
               aria-label="Профиль"
             >
-              {profileInitial}
+              {myPhoto ? <Avatar name={profileInitial} src={myPhoto} size={38} /> : profileInitial}
               {activeRegistrations.length > 0 && (
                 <span className="absolute -top-0.5 -right-0.5 bg-brand text-black font-black text-[9px] w-4 h-4 rounded-full flex items-center justify-center">
                   {activeRegistrations.length}
@@ -1199,7 +1210,7 @@ export default function App() {
       </header>
 
       {/* Central Content Canvas */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-10 relative z-10" id="main-content">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-8 pb-28 md:pb-8 space-y-10 relative z-10" id="main-content">
 
         {/* Пока афиша грузится — живой лоадер вместо пустого экрана.
             Люди писали «ничего не работает»: список приходил через 1-3 с,
@@ -1549,6 +1560,21 @@ export default function App() {
       {/* ПРОФИЛЬ УЧАСТНИКА */}
       {showUserStats && (
         <ProfileScreen initialTab={profileTab} onClose={() => { setShowUserStats(false); setProfileTab('overview'); }} />
+      )}
+
+      {/* Нижнее меню (мобильный): главные места приложения под большим пальцем. */}
+      {!showAdminPanel && (
+        <BottomNav
+          active={showUserStats ? (profileTab === 'events' ? 'events' : profileTab === 'gear' ? 'gear' : 'profile') : showHistory ? 'history' : 'home'}
+          badge={activeRegistrations.length}
+          onSelect={(k) => {
+            if (k === 'home') { setShowUserStats(false); setShowHistory(false); window.scrollTo({ top: 0, behavior: 'smooth' }); return; }
+            if (k === 'history') { setShowUserStats(false); setShowHistory(true); return; }
+            setShowHistory(false);
+            setProfileTab(k === 'events' ? 'events' : k === 'gear' ? 'gear' : 'overview');
+            setShowUserStats(true);
+          }}
+        />
       )}
 
       {/* EVENT POSTER MODAL */}
