@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Info, CheckCircle2 } from 'lucide-react';
 import { CommunityEvent, getYandexMapsUrl } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
+import { AvatarStack } from './Avatar';
 import { getToday } from '../data';
 
 interface InfoSectionProps {
@@ -164,7 +165,9 @@ export default function InfoSection({
               <span className="underline decoration-[#E6FD3A]/30 italic">{featuredEvent.location} 🗺️</span>
             </a>
             <span className="flex items-center gap-2">
-              <Users className="w-4 h-4 text-brand" />
+              {spotsTaken > 0 || (featuredEvent.participants?.length || 0) > 0
+                ? <AvatarStack people={featuredEvent.participants || []} total={spotsTaken} size={28} max={6} />
+                : <Users className="w-4 h-4 text-brand" />}
               <span>Занято мест: {spotsTaken} из {maxSpots}</span>
             </span>
           </div>

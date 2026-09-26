@@ -929,6 +929,8 @@ export default async function handler(req: any, res: any) {
       // Отдельная вертикальная афиша для шеринга в Telegram (og:image при пересылке).
       // Колонка может отсутствовать до миграции — ниже сохраняем устойчиво.
       if (body.telegramImage !== undefined) (eventData as any).telegram_image = body.telegramImage || null;
+      // Организатор события (deputy_id): отвечает за выезд, ему идут вопросы.
+      if (Number(body.deputyId) > 0) (eventData as any).deputy_id = Number(body.deputyId);
 
       // Старая версия — чтобы после сохранения понять, что изменилось, и
       // уведомить записанных (только при реальном отличии ключевых полей).
@@ -938,6 +940,17 @@ export default async function handler(req: any, res: any) {
       const { data: before } = await supabase
         .from('events').select('date,date_end,time,time_end,location,date_label,logistics,program,coordinates_lat,coordinates_lng,entry_threshold')
         .eq('id', body.id).maybeSingle();
+
+      /**
+       * БЕЗ ОРГАНИЗАТОРА СОБЫТИЯ НЕТ.
+       * Событие, за которое никто не отвечает, — это вопросы в пустоту: кому
+       * писать про машину, кто решает при дожде, кто собирает деньги.
+       * Новое событие без организатора не создаём. Старые события без него
+       * редактировать можно — админка подсвечивает их, чтобы назначили.
+       */
+      if (!before && !(Number(body.deputyId) > 0)) {
+        return res.status(400).json({ error: 'Назначь организатора события', details: 'Без организатора событие не создаётся: выбери, кто за него отвечает.' });
+      }
 
       let { data: event, error } = await supabase
         .from('events')

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { AvatarStack } from './Avatar';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, History, Sparkles, ChevronRight, Compass, ShieldAlert, ArrowUpRight, Lock, Archive
@@ -197,7 +198,11 @@ export default function EventFeed({
 
                       <div className="flex items-center justify-between pt-1">
                         <div className="flex items-center gap-2 text-[9px] text-white/40 font-mono">
-                          <span>{event.participantsCount} участников</span>
+                          {event.participantsCount > 0 || (event.participants?.length || 0) > 0 ? (
+                            <AvatarStack people={event.participants || []} total={event.participantsCount} size={24} />
+                          ) : (
+                            <span>Будь первым</span>
+                          )}
                           {event.priceType === 'paid' && event.priceAmount > 0 && (
                             <span className="text-brand/80">{event.priceAmount} Br</span>
                           )}

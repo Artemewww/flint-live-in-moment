@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { AvatarStack } from './Avatar';
 import { CommunityEvent } from '../types';
 import { Sparkles, Calendar, Users, X, ChevronRight, Lock, Image as ImageIcon } from 'lucide-react';
 
@@ -179,9 +180,13 @@ export default function CalendarGrid({ events, selectedEventId, onSelectEvent, o
           {evt.title}
         </h4>
         <div className="flex items-center gap-3 text-[10px] text-white/40 font-mono mt-0.5">
-          <span className="flex items-center gap-1">
-            <Users className="w-3 h-3" /> {evt.participantsCount}
-          </span>
+          {evt.participantsCount > 0 || (evt.participants?.length || 0) > 0 ? (
+            <AvatarStack people={evt.participants || []} total={evt.participantsCount} size={18} max={4} />
+          ) : (
+            <span className="flex items-center gap-1">
+              <Users className="w-3 h-3" /> 0
+            </span>
+          )}
           <span>{evt.time}</span>
           {evt.dateEnd && evt.dateEnd !== evt.date && (
             <span className="text-brand/60">• {evt.dateLabel || `${evt.date}–${evt.dateEnd}`}</span>

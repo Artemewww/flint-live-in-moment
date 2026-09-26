@@ -115,6 +115,8 @@ export interface CommunityEvent {
   /** Кто ведёт событие: видно участникам в карточке. */
   organizerId?: number | null;
   organizerName?: string | null;
+  organizerAvatar?: string;
+  organizerUsername?: string;
   lockedHint?: string;
   program: string[];
   /**

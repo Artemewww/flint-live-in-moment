@@ -164,6 +164,26 @@ export default async function handler(req: any, res: any) {
         avatar: avatarUrl(Number(m.telegram_id)),
       })) });
     }
+    /**
+     * Все идущие сборы — для карусели на главной. Раньше баннер показывал
+     * только последний: второй одновременный сбор просто не было видно.
+     * Отдаём только то, что нужно карточке (без реквизитов и истории).
+     */
+    if (req.method === 'GET' && action === 'list') {
+      const today = new Date().toISOString().slice(0, 10);
+      const { data, error } = await db.from('fundraisers').select('id,slug,title,summary,goal_amount,deadline,image_url')
+        .eq('status', 'published').gte('deadline', today).order('deadline', { ascending: true }).limit(10);
+      if (error) throw error;
+      const ids = (data || []).map((x: any) => x.id);
+      const { data: ps } = ids.length ? await db.from('fundraiser_pledges').select('fundraiser_id,amount,status,telegram_id').in('fundraiser_id', ids) : { data: [] };
+      return res.json({ fundraisers: (data || []).map((x: any) => {
+        const mine = (ps || []).filter((p: any) => p.fundraiser_id === x.id && p.status === 'confirmed');
+        const people = [...new Set(mine.map((p: any) => Number(p.telegram_id)))];
+        return { slug: x.slug, title: x.title, summary: x.summary, goalAmount: Number(x.goal_amount), deadline: x.deadline,
+          imageUrl: x.image_url || '', confirmedAmount: mine.reduce((s: number, p: any) => s + Number(p.amount), 0),
+          confirmedCount: people.length, supporters: people.slice(0, 4).map((id) => ({ avatar: avatarUrl(id) })) };
+      }) });
+    }
     if (req.method === 'GET') {
       const slug = clean(req.query?.slug || req.query?.id, 120);
       const query = db.from('fundraisers').select('*').eq('status', 'published');

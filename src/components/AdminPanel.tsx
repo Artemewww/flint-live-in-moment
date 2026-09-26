@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import OrganizerPicker from './OrganizerPicker';
+import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
@@ -2508,9 +2510,22 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   )}
                 </div>
 
-                <div className="flex items-center gap-1 text-[10px] text-white/50 mb-2">
-                  <Users className="w-3 h-3" />
-                  <span>{event.participantsCount}/{event.maxParticipants}</span>
+                <div className="flex items-center justify-between gap-2 text-[10px] text-white/50 mb-2">
+                  <span className="flex items-center gap-1.5">
+                    {(event.participants?.length || 0) > 0
+                      ? <AvatarStack people={event.participants || []} total={event.participantsCount} size={20} max={5} />
+                      : <Users className="w-3 h-3" />}
+                    <span>{event.participantsCount}/{event.maxParticipants}</span>
+                  </span>
+                  {/* Кто отвечает. Нет организатора — красная метка: назначь. */}
+                  {event.deputyId ? (
+                    <span className="flex min-w-0 items-center gap-1.5" title="Организатор">
+                      <Avatar name={event.organizerName || '?'} src={event.organizerAvatar} size={20} />
+                      <span className="truncate text-white/70">{event.organizerName || `id ${event.deputyId}`}</span>
+                    </span>
+                  ) : (
+                    <span className="shrink-0 rounded-full bg-rose-500/20 px-2 py-0.5 font-mono text-[9px] font-bold uppercase text-rose-300">нет организатора</span>
+                  )}
                 </div>
 
                 <div className="flex gap-1">
@@ -3949,26 +3964,11 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         Сменить код доступа
                       </button>
 
-                      <button
-                        onClick={() => {
-                          const candidates = (eventStats?.registrations || []).filter((r: any) => Number(r.telegramId) > 0);
-                          if (!candidates.length) { setActionMsg({ ok: false, text: 'Нет участников с Telegram-id' }); return; }
-                          setInputModal({
-                            title: 'Заместитель на событие',
-                            submitLabel: 'Назначить',
-                            fields: [{
-                              key: 'deputy', label: 'Кто помогает вести событие', type: 'select', required: true,
-                              value: selectedEvent.deputyId ? String(selectedEvent.deputyId) : '',
-                              options: candidates.map((r: any) => ({ value: String(r.telegramId), label: `${r.name}${r.telegram ? ` @${r.telegram}` : ''}` })),
-                            }],
-                            onSubmit: (v) => patchEvent({ deputyId: Number(v.deputy) }),
-                          });
-                        }}
-                        className="w-full bg-white/5 hover:bg-white/10 text-white/60 hover:text-white p-3 rounded-lg text-xs font-bold uppercase flex items-center justify-center gap-2 cursor-pointer border-none"
-                      >
-                        <UserPlus className="w-4 h-4" />
-                        {selectedEvent.deputyId ? `Заместитель: ${selectedEvent.deputyId}` : 'Заместитель на мероприятие'}
-                      </button>
+                      {/* Организатор — по лицам и из всего клуба, а не голый id из записавшихся. */}
+                      <OrganizerPicker
+                        value={selectedEvent.deputyId}
+                        onChange={(id) => patchEvent({ deputyId: id })}
+                      />
                     </div>
 
                     <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
@@ -5528,6 +5528,8 @@ function AddEventModal({ onClose, onAdd }: {
   const [questions, setQuestions] = useState<string[]>([]);
   const [geoLoading, setGeoLoading] = useState(false);
   const [editing, setEditing] = useState(false);
+  // Организатор обязателен: без него событие не создаётся (сервер тоже проверяет).
+  const [organizerId, setOrganizerId] = useState<number | null>(null);
   const [formData, setFormData] = useState({
     title: '',
     date: '',
@@ -5646,7 +5648,7 @@ function AddEventModal({ onClose, onAdd }: {
   };
 
   const handleAdd = () => {
-    if (!formData.title || !formData.date) return;
+    if (!formData.title || !formData.date || !organizerId) return;
 
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
@@ -5680,7 +5682,8 @@ function AddEventModal({ onClose, onAdd }: {
       paymentDetails: formData.paymentDetails,
       distanceFromMinsk: formData.distanceFromMinsk,
       travelTime: formData.travelTime,
-      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications }
+      notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications },
+      deputyId: organizerId,
     };
     onAdd(newEvent);
   };
@@ -5853,9 +5856,12 @@ function AddEventModal({ onClose, onAdd }: {
           </div>
         )}
 
+        {/* Кто отвечает за событие — обязательно, с фото, чтобы не ошибиться человеком. */}
+        <OrganizerPicker value={organizerId} onChange={(id) => setOrganizerId(id)} />
+
         {/* КНОПКИ */}
         <div className="flex gap-2 pt-2">
-          <button onClick={handleAdd} disabled={!formData.title || !formData.date} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
+          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
             ✅ Создать
           </button>
           <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">
