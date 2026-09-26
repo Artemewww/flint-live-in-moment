@@ -9,3 +9,10 @@ alter table tasks add column if not exists due_at timestamptz;
 alter table tasks add column if not exists assigned_by bigint;
 alter table tasks add column if not exists done_at timestamptz;
 create index if not exists idx_tasks_event_due on tasks(event_id, due_at);
+
+-- Задачи v2: кто вызвался помочь, тип задачи и кого подтвердить.
+-- kind = 'confirm' — «подтвердить участие»: target_id — чьё участие
+-- подтверждаем; кнопка «Пингануть» шлёт ему «Подтверждаю / Не еду».
+alter table tasks add column if not exists helpers jsonb default '[]'::jsonb;
+alter table tasks add column if not exists kind text;
+alter table tasks add column if not exists target_id bigint;
