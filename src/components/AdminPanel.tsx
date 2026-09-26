@@ -978,6 +978,37 @@ function adminFetch(input: string, init?: RequestInit): Promise<Response> {
 }
 const SESSION_TTL = 12 * 60 * 60 * 1000;
 
+/**
+ * Кнопка «Войти через Telegram» (официальный Login Widget) для обычного
+ * браузера. Telegram сам показывает, кто ты, и отдаёт подписанные данные —
+ * сервер проверяет подпись токеном бота (admin/events?action=login_widget).
+ * Если домен сайта не привязан к боту в @BotFather (/setdomain), Telegram
+ * покажет «Bot domain invalid» — тогда работает вход через бота ниже.
+ */
+function TelegramLoginButton({ onAuth }: { onAuth: (user: Record<string, any>) => void }) {
+  const box = useRef<HTMLDivElement>(null);
+  const cb = useRef(onAuth);
+  cb.current = onAuth;
+  useEffect(() => {
+    const el = box.current;
+    if (!el) return;
+    (window as any).flintTgAuth = (user: Record<string, any>) => cb.current(user);
+    const sc = document.createElement('script');
+    sc.async = true;
+    sc.src = 'https://telegram.org/js/telegram-widget.js?22';
+    sc.setAttribute('data-telegram-login', 'campsflint_bot');
+    sc.setAttribute('data-size', 'large');
+    sc.setAttribute('data-radius', '12');
+    sc.setAttribute('data-userpic', 'false');
+    sc.setAttribute('data-request-access', 'write');
+    sc.setAttribute('data-onauth', 'flintTgAuth(user)');
+    el.innerHTML = '';
+    el.appendChild(sc);
+    return () => { el.innerHTML = ''; };
+  }, []);
+  return <div ref={box} className="flex min-h-[44px] justify-center" />;
+}
+
 function readSession(): boolean {
   try {
     const raw = localStorage.getItem(SESSION_KEY);
@@ -1281,6 +1312,10 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
 
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose, onViewSite }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(readSession);
+  // Вход по подписи Telegram: пока идёт проверка, вместо формы — ожидание.
+  const [tgAuto, setTgAuto] = useState<'idle' | 'trying' | 'denied' | 'failed'>(() => (!readSession() && isInsideTelegram() ? 'trying' : 'idle'));
+  const [tgDeniedId, setTgDeniedId] = useState<number | null>(null);
+  const manualLogoutRef = useRef(false);
   const [onlineAdmins, setOnlineAdmins] = useState<{ id: string; name: string }[]>([]);
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -1845,6 +1880,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const handleTelegramLogin = async (silent = false): Promise<boolean> => {
     const initData = getInitData();
     if (!initData) { if (!silent) setLoginError('Открой админку внутри Telegram, чтобы войти по подписи.'); return false; }
+    setTgAuto('trying');
     if (!silent) { setLoginError(''); setLoggingIn(true); }
     try {
       const res = await adminFetch('/api/admin/events?action=login_telegram', {
@@ -1852,10 +1888,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         body: JSON.stringify({ initData }),
       });
       if (!res.ok) {
-        // Тихую попытку не превращаем в ошибку — просто покажем обычную форму пароля.
-        if (!silent) setLoginError(res.status === 403 ? 'Ты не в костяке клуба' : 'Подпись Telegram не подтверждена');
+        const e = await res.json().catch(() => ({} as any));
+        // Причину говорим прямо: «не в костяке» — это не сбой, а права,
+        // и владелец должен знать id, чтобы их выдать.
+        if (res.status === 403) { setTgAuto('denied'); setTgDeniedId(Number(e.telegramId) || null); }
+        else { setTgAuto('failed'); setLoginError(e.error || 'Подпись Telegram не подтверждена'); }
         return false;
       }
+      setTgAuto('idle');
+      manualLogoutRef.current = false;
       const j = await res.json().catch(() => ({}));
       try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
       // Сохраняем токен для API-запросов — без него аудитория, переписка и инвентарь не работают.
@@ -1871,12 +1912,35 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     }
   };
 
-  // Автовход костяка: внутри Telegram пробуем подпись сразу, без пароля.
+  /** Вход в браузере через официальную кнопку Telegram (Login Widget). */
+  const handleWidgetLogin = async (user: Record<string, any>) => {
+    setLoginError(''); setLoggingIn(true);
+    try {
+      const res = await adminFetch('/api/admin/events?action=login_widget', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user }),
+      });
+      const j = await res.json().catch(() => ({} as any));
+      if (!res.ok) {
+        setLoginError(res.status === 403 ? `Твой Telegram (id ${j.telegramId || user.id}) не отмечен как костяк клуба` : (j.error || 'Не удалось войти'));
+        return;
+      }
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify({ at: Date.now() })); } catch { /* приватный режим */ }
+      if (j.token) try { localStorage.setItem(ADMIN_TOKEN_KEY, j.token); } catch { /* приватный режим */ }
+      if (user.first_name) try { localStorage.setItem('flint_admin_name', String(user.first_name)); } catch { /* no-op */ }
+      manualLogoutRef.current = false;
+      setIsAuthenticated(true);
+      window.dispatchEvent(new Event('flint:events-refetch'));
+    } catch { setLoginError('Ошибка сети'); } finally { setLoggingIn(false); }
+  };
+
+  // Автовход костяка: внутри Telegram пробуем подпись сразу, без пароля —
+  // и при открытии, и когда сессия истекла по ходу работы (401).
   useEffect(() => {
-    if (isAuthenticated || !isInsideTelegram()) return;
+    if (isAuthenticated || !isInsideTelegram() || manualLogoutRef.current) return;
     handleTelegramLogin(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [isAuthenticated]);
 
   // Веб-вход через Telegram (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает в боте, сайт опрашивает статус.
@@ -1953,7 +2017,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     finally { setCodeBusy(false); }
   };
 
-  const handleLogout = async () => {
+  /**
+   * Выход. Ручной — по кнопке; иначе это истёкшая сессия (сервер ответил 401).
+   * Внутри Telegram после истёкшей сессии админка сама входит заново по
+   * подписи, а после ручного выхода — нет, иначе выйти было бы невозможно.
+   */
+  const handleLogout = async (manual: unknown = false) => {
+    manualLogoutRef.current = manual === true;
     try { localStorage.removeItem(SESSION_KEY); } catch { /* no-op */ }
     try { localStorage.removeItem(ADMIN_TOKEN_KEY); } catch { /* no-op */ }
     try { await adminFetch('/api/admin/events?action=logout', { method: 'POST' }); } catch { /* no-op */ }
@@ -2209,7 +2279,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         >
           <h2 className="font-display font-black text-xl uppercase text-center">Админ-панель</h2>
 
-          <div className="space-y-3">
+          {isInsideTelegram() && tgAuto === 'trying' && (
+            <div className="flex flex-col items-center gap-3 py-6 text-center">
+              <span className="w-8 h-8 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
+              <p className="text-sm text-white/70">Проверяем через Telegram, что ты из костяка…</p>
+            </div>
+          )}
+          {isInsideTelegram() && tgAuto === 'denied' && (
+            <div className="rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-[12px] leading-5 text-amber-100">
+              Твой Telegram{tgDeniedId ? <> (id <b className="font-mono">{tgDeniedId}</b>)</> : null} не отмечен как костяк клуба —
+              поэтому админка не открылась сама. Попроси владельца отметить тебя костяком, или войди паролем ниже.
+            </div>
+          )}
+
+          <div className={isInsideTelegram() && tgAuto === 'trying' ? 'hidden' : 'space-y-3'}>
             {codeMode ? (
               <>
                 <p className="text-[11px] text-white/50 text-center">Вход по коду из Telegram — на случай, если забыл пароль.</p>
@@ -2303,6 +2386,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </>
             ) : (
               <>
+                {/* Официальная кнопка Telegram: один клик в браузере, без кода. */}
+                <TelegramLoginButton onAuth={handleWidgetLogin} />
                 <button
                   onClick={handleWebTelegramLogin}
                   disabled={webTgPolling}
@@ -2392,7 +2477,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
               </button>
             )}
             <button
-              onClick={handleLogout}
+              onClick={() => handleLogout(true)}
               className="text-[10px] font-mono uppercase text-white/50 hover:text-white bg-white/5 hover:bg-white/10 border-none rounded-full px-3 py-2 cursor-pointer"
               title="Выйти и забыть сессию"
             >

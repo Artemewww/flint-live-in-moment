@@ -279,6 +279,12 @@ function passwordMatches(password: string): boolean {
  * ADMIN_SECRET наружу не выпускаем: он бессрочный и открывает все админ-роуты,
  * а из localStorage его может забрать любой XSS. Сессионный токен протухает.
  */
+/** Кого пускать в админку по Telegram: костяк и владелец клуба. */
+async function isCoreMember(tgId: number): Promise<boolean> {
+  const { data: m } = await supabase.from('members').select('is_core,role').eq('telegram_id', tgId).maybeSingle();
+  return !!m && ((m as any).is_core === true || (m as any).role === 'owner');
+}
+
 function sessionValue(): string {
   const exp = Date.now() + ADMIN_TTL_MS;
   const mac = crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex');
@@ -335,15 +341,51 @@ export default async function handler(req: any, res: any) {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const user = verifyInitData(String(body.initData || ''));
     if (!user) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
-    const { data: m } = await supabase.from('members').select('is_core,status').eq('telegram_id', user.id).maybeSingle();
-    if (!m || (m as any).is_core !== true) {
-      return res.status(403).json({ error: 'Доступ только для костяка клуба' });
+    if (!(await isCoreMember(user.id))) {
+      return res.status(403).json({ error: 'Доступ только для костяка клуба', telegramId: user.id });
     }
     {
       const sess = sessionValue();
       res.setHeader('Set-Cookie', sessionCookie(sess));
       return res.status(200).json({ ok: true, core: true, token: sess });
     }
+  }
+
+  /**
+   * ВХОД В БРАУЗЕРЕ ОДНОЙ КНОПКОЙ — Telegram Login Widget.
+   * В обычном браузере нет initData Mini App, и костяк входил паролем или
+   * кодом, который бот присылал в Telegram. Официальная кнопка «Войти через
+   * Telegram» отдаёт подписанные данные пользователя: hash = HMAC-SHA256
+   * (ключ — SHA256 от токена бота) по отсортированным полям. Подделать без
+   * токена бота нельзя; auth_date не старше суток — защита от повтора.
+   * Нужен один раз /setdomain в @BotFather для домена сайта.
+   */
+  if (req.method === 'POST' && req.query?.action === 'login_widget') {
+    const rl = await rateLimit('login', clientIp(req), 8, 15 * 60 * 1000);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfter));
+      return res.status(429).json({ error: `Слишком много попыток. Попробуй через ${Math.ceil(rl.retryAfter / 60)} мин.` });
+    }
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const data = body.user && typeof body.user === 'object' ? body.user : {};
+    const hash = String(data.hash || '');
+    const tgId = Number(data.id) || 0;
+    if (!hash || !tgId || !BOT_TOKEN) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
+    const check = Object.keys(data).filter((k) => k !== 'hash' && data[k] !== undefined && data[k] !== null)
+      .sort().map((k) => `${k}=${data[k]}`).join('\n');
+    const secret = crypto.createHash('sha256').update(BOT_TOKEN).digest();
+    const expected = crypto.createHmac('sha256', secret).update(check).digest('hex');
+    const a = Buffer.from(expected), b = Buffer.from(hash);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return res.status(401).json({ error: 'Подпись Telegram не подтверждена' });
+    if (!(Number(data.auth_date) > 0) || Date.now() / 1000 - Number(data.auth_date) > 24 * 60 * 60) {
+      return res.status(401).json({ error: 'Вход устарел — нажми кнопку ещё раз' });
+    }
+    if (!(await isCoreMember(tgId))) {
+      return res.status(403).json({ error: 'Доступ только для костяка клуба', telegramId: tgId });
+    }
+    const sess = sessionValue();
+    res.setHeader('Set-Cookie', sessionCookie(sess));
+    return res.status(200).json({ ok: true, core: true, token: sess });
   }
   // Вход костяка на ВЕБЕ (обычный браузер, где нет initData): сайт открывает
   // бота по одноразовому nonce, костяк подтверждает вход в боте (его личность
