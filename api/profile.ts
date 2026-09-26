@@ -462,6 +462,16 @@ export default async function handler(req: any, res: any) {
         };
       });
 
+      // История баллов — как история бонусов в банке: за что и сколько.
+      // Журнала может не быть до миграции points_log — тогда просто пусто.
+      let pointsHistory: any[] = [];
+      try {
+        const { data: pl } = await supabase.from('points_log')
+          .select('id,points,reason,description,created_at').eq('telegram_id', user.id)
+          .order('created_at', { ascending: false }).limit(40);
+        pointsHistory = (pl || []).map((x: any) => ({ id: x.id, points: Number(x.points) || 0, reason: x.reason || '', text: x.description || x.reason || 'Баллы', at: x.created_at }));
+      } catch { /* журнала нет */ }
+
       // Снаряжение участника + клубное на руках + незакрытые передачи.
       const { data: myGear } = await supabase
         .from('member_equipment')
@@ -591,6 +601,7 @@ export default async function handler(req: any, res: any) {
         events: myEvents,
         tasks,
         equipment: myGear || [],
+        pointsHistory,
         transfers,
         food,
         notifications,
