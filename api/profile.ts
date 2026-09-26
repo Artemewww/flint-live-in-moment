@@ -734,27 +734,41 @@ export default async function handler(req: any, res: any) {
         return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Minsk' });
       };
 
+      /**
+       * Добавление: одному, нескольким или «кто возьмёт». Несколько
+       * исполнителей — по задаче на каждого: у каждого свой статус.
+       * kind='confirm' — «подтвердить участие»: задача на меня, цель — человек
+       * (target_id); «Пингануть» шлёт ему кнопки «Подтверждаю / Не еду».
+       */
       if (action === 'event_task_add') {
-        const title = String(body.title || '').trim().slice(0, 200);
-        if (!title) return res.status(200).json({ ok: false, error: 'Что нужно сделать?' });
-        const assignee = Number(body.assignee) || null;
-        if (assignee && !nameById.has(assignee)) return res.status(200).json({ ok: false, error: 'Назначить можно только участнику события' });
+        const kind = body.kind === 'confirm' ? 'confirm' : null;
         const due = body.dueAt && !Number.isNaN(new Date(body.dueAt).getTime()) ? new Date(body.dueAt).toISOString() : null;
-        const row: any = { event_id: evId, title, taken_by: assignee, done: false, created_by: user.id, assigned_by: assignee ? user.id : null, due_at: due };
-        let ins = await supabase.from('tasks').insert(row).select('id').single();
-        if (ins.error && /due_at|assigned_by|column/i.test(ins.error.message)) {
-          // Миграция 2026-09-27-task-deadlines.sql не накатана — без срока.
-          const { due_at, assigned_by, ...core } = row;
-          ins = await supabase.from('tasks').insert(core).select('id').single();
+        const ids: number[] = (Array.isArray(body.assignees) ? body.assignees : body.assignee ? [body.assignee] : []).map(Number).filter((n: number) => n > 0);
+        if (ids.some((id) => !nameById.has(id))) return res.status(200).json({ ok: false, error: 'Назначить можно только участникам события' });
+        const who = nameById.get(user.id) || 'Организатор';
+        const rows: any[] = [];
+        if (kind === 'confirm') {
+          if (!ids.length) return res.status(200).json({ ok: false, error: 'Выбери, чьё участие подтвердить' });
+          for (const t of ids) rows.push({ event_id: evId, title: `Подтвердить участие: ${nameById.get(t)}`, taken_by: user.id, done: false, created_by: user.id, assigned_by: user.id, due_at: due, kind, target_id: t, helpers: [] });
+        } else {
+          const title = String(body.title || '').trim().slice(0, 200);
+          if (!title) return res.status(200).json({ ok: false, error: 'Что нужно сделать?' });
+          for (const a of (ids.length ? ids : [null])) rows.push({ event_id: evId, title, taken_by: a, done: false, created_by: user.id, assigned_by: a ? user.id : null, due_at: due, helpers: [] });
+        }
+        let ins = await supabase.from('tasks').insert(rows).select('id');
+        if (ins.error && /column|schema cache/i.test(ins.error.message)) {
+          // Миграция задач v2 не накатана — сохраняем без новых полей.
+          ins = await supabase.from('tasks').insert(rows.map(({ due_at, assigned_by, kind: k, target_id, helpers, ...core }: any) => core)).select('id');
         }
         if (ins.error) return res.status(200).json({ ok: false, error: ins.error.message });
-        const who = nameById.get(user.id) || 'Организатор';
-        if (assignee && assignee !== user.id) {
-          await notify(assignee, `📌 <b>${escT(who)}</b> назначил тебе задачу на «${escT((ev as any).title)}»:\n\n${escT(title)}${due ? `\n⏰ до ${escT(dueText(due))}` : ''}\n\nОтметить «готово» — в карточке события, блок «Задачи».`);
-        }
-        const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
-        if ((eg as any)?.chat_id) {
-          await notify(Number((eg as any).chat_id), `📌 Задача${assignee ? ` для <b>${escT(nameById.get(assignee))}</b>` : ' — кто возьмёт?'}: ${escT(title)}${due ? ` · до ${escT(dueText(due))}` : ''}`);
+        if (kind !== 'confirm') {
+          for (const a of ids) if (a !== user.id) {
+            await notify(a, `📌 <b>${escT(who)}</b> назначил тебе задачу на «${escT((ev as any).title)}»:\n\n${escT(rows[0].title)}${due ? `\n⏰ до ${escT(dueText(due))}` : ''}\n\nОтметить «готово» — в карточке события, блок «Задачи».`);
+          }
+          const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+          if ((eg as any)?.chat_id) {
+            await notify(Number((eg as any).chat_id), `📌 Задача${ids.length ? ` для <b>${ids.map((a) => escT(nameById.get(a))).join(', ')}</b>` : ' — кто возьмёт?'}: ${escT(rows[0].title)}${due ? ` · до ${escT(dueText(due))}` : ''}\nПомочь может любой — кнопка «🙋 Помогу» в карточке события.`);
+          }
         }
       }
 
@@ -779,18 +793,54 @@ export default async function handler(req: any, res: any) {
           if (op === 'done' && creator && creator !== user.id) {
             await notify(creator, `✅ <b>${escT(nameById.get(user.id) || 'Участник')}</b> выполнил задачу «${escT((t as any).title)}» (${escT((ev as any).title)}).`);
           }
+        } else if (op === 'help') {
+          // «Готов помочь»: любой участник вызывается к чужой задаче с пометкой.
+          const { data: full } = await supabase.from('tasks').select('helpers').eq('id', taskId).maybeSingle();
+          const list: any[] = Array.isArray((full as any)?.helpers) ? (full as any).helpers : [];
+          const note = String(body.note || '').trim().slice(0, 140);
+          const next = list.some((h: any) => Number(h.id) === user.id)
+            ? list.filter((h: any) => Number(h.id) !== user.id)
+            : [...list, { id: user.id, name: nameById.get(user.id) || 'Участник', note }];
+          const up = await supabase.from('tasks').update({ helpers: next }).eq('id', taskId);
+          if (up.error) return res.status(200).json({ ok: false, error: 'Нужна миграция задач (колонка helpers) — см. инструкцию' });
+          if (owner && owner !== user.id && next.length > list.length) {
+            await notify(owner, `🙋 <b>${escT(nameById.get(user.id) || 'Участник')}</b> готов помочь с задачей «${escT((t as any).title)}»${note ? `: ${escT(note)}` : ''}. Договоритесь в личке или в чате события.`);
+          }
+        } else if (op === 'ping') {
+          // «Пингануть»: цели приходит «Подтверждаю / Не еду» — задача
+          // закроется сама, когда человек ответит.
+          const { data: full } = await supabase.from('tasks').select('kind,target_id').eq('id', taskId).maybeSingle();
+          const target = Number((full as any)?.target_id || 0);
+          if ((full as any)?.kind !== 'confirm' || !target) return res.status(200).json({ ok: false, error: 'Это не задача подтверждения' });
+          if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'Бот недоступен' });
+          const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: target, parse_mode: 'HTML',
+              text: `👋 <b>${escT(nameById.get(user.id) || 'Организатор')}</b> просит подтвердить участие в «<b>${escT((ev as any).title)}</b>». Едешь?`,
+              reply_markup: { inline_keyboard: [[
+                { text: '✅ Подтверждаю', callback_data: `cfm_${taskId}_y` },
+                { text: '❌ Не еду', callback_data: `cfm_${taskId}_n` },
+              ]] },
+            }),
+          }).then((x) => x.json()).catch(() => null);
+          if (!r?.ok) return res.status(200).json({ ok: false, error: 'Не дошло: человек не открывал бота. Напиши или позвони ему сам.' });
         } else if (op === 'delete') {
           if (!isLead && Number((t as any).created_by) !== user.id) return res.status(200).json({ ok: false, error: 'Удалить может автор или организатор' });
           await supabase.from('tasks').delete().eq('id', taskId);
         } else return res.status(200).json({ ok: false, error: 'bad-op' });
       }
 
-      let q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,due_at,created_at').eq('event_id', evId).order('done').order('created_at');
+      let q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,due_at,created_at,helpers,kind,target_id').eq('event_id', evId).order('done').order('created_at');
+      if (q.error) q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,due_at,created_at').eq('event_id', evId).order('done').order('created_at') as any;
       if (q.error) q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,created_at').eq('event_id', evId).order('done').order('created_at') as any;
       const tasks = (q.data || []).map((t: any) => ({
         id: t.id, title: t.title, done: !!t.done, dueAt: t.due_at || null,
         assignee: t.taken_by ? { id: Number(t.taken_by), name: nameById.get(Number(t.taken_by)) || 'Участник', avatar: avatarOf(Number(t.taken_by)) } : null,
         mine: Number(t.taken_by) === user.id, canManage: isLead || Number(t.created_by) === user.id,
+        kind: t.kind || null,
+        target: t.target_id ? { id: Number(t.target_id), name: nameById.get(Number(t.target_id)) || 'Участник', avatar: avatarOf(Number(t.target_id)) } : null,
+        helpers: (Array.isArray(t.helpers) ? t.helpers : []).map((h: any) => ({ id: Number(h.id), name: h.name, note: h.note || '', avatar: avatarOf(Number(h.id)) })),
       }));
       return res.status(200).json({ ok: true, tasks, people, isLead, me: user.id });
     }

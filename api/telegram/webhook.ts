@@ -667,7 +667,7 @@ async function notifyQuotaExhausted() {
 
 /** Гарантированный JSON от Gemini (responseMimeType) + повтор: текстовый
  *  вариант отвечал прозой и парс задач срабатывал через раз. */
-async function geminiJSON(prompt: string): Promise<any | null> {
+async function geminiJSON(prompt: string, image?: { mime: string; data: string }): Promise<any | null> {
   const keys = await usableKeys();
   if (!keys.length) { await notifyQuotaExhausted(); return null; }
   // У каждой модели свой суточный лимит бесплатного тира (20 запросов),
@@ -680,8 +680,10 @@ async function geminiJSON(prompt: string): Promise<any | null> {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { maxOutputTokens: 1200, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
+        // image — фото из чата события (новое расписание, правила): модели
+        // flash мультимодальные, отдельный вызов не нужен.
+        contents: [{ parts: image ? [{ text: prompt }, { inline_data: { mime_type: image.mime, data: image.data } }] : [{ text: prompt }] }],
+        generationConfig: { maxOutputTokens: image ? 2000 : 1200, responseMimeType: 'application/json', thinkingConfig: { thinkingBudget: 0 } },
       }),
     });
     if (r.status === 429) { sawQuotaError = true; return 'quota' as any; }
@@ -2766,6 +2768,419 @@ async function clearSession(tgId: number) {
   await supabase.from('bot_sessions').delete().eq('telegram_id', tgId);
 }
 
+// ─── Изменения события: ИИ-ассистент в личке и контролёр чата события ─────
+// Организатор пишет боту как человеку («выезд переносим на 6:30», «палатку
+// отдал Олегу», «Стасу — купить еду к пятнице»), а в чате события бот сам
+// ловит новые правила/расписание/время. Обе дорожки сходятся здесь: одно
+// место, которое правит событие и разносит изменения всем.
+
+const CHANGE_LABEL: Record<string, string> = {
+  date: '📅 Дата', time: '🕐 Старт', gatherTime: '⏰ Сбор', departureTime: '🚐 Выезд',
+  assemblyPoint: '📍 Точка сбора', arrivalPoint: '🏁 Точка прибытия', location: '🗺 Локация',
+  returnInfo: '↩️ Возвращение', program: '📋 Программа', rules: '📜 Правила', note: '❗ Важно',
+};
+const LOGI_FIELDS = new Set(['gatherTime', 'departureTime', 'assemblyPoint', 'arrivalPoint', 'returnInfo']);
+type EvChange = { field: string; value: any };
+
+function currentValue(ev: any, field: string): string {
+  const lg = ev?.logistics || {};
+  if (field === 'date') return String(ev?.date || '');
+  if (field === 'time') return String(ev?.time || '');
+  if (field === 'location') return String(ev?.location || '');
+  if (field === 'program') return (Array.isArray(ev?.program) ? ev.program : []).join('; ');
+  if (field === 'rules' || field === 'note') return String(lg.notes || '');
+  return String(lg[field] || '');
+}
+
+/** Отсекаем мусор ИИ: чужие поля, кривые дата/время, пустое и «то же самое». */
+function cleanChanges(ev: any, raw: any): EvChange[] {
+  const out: EvChange[] = [];
+  for (const c of Array.isArray(raw) ? raw : []) {
+    const field = String(c?.field || '');
+    if (!CHANGE_LABEL[field] || out.some((x) => x.field === field && field !== 'rules' && field !== 'note')) continue;
+    let value: any = c?.value;
+    if (field === 'program') {
+      value = (Array.isArray(value) ? value : String(value || '').split(/\n|;/)).map((x: any) => String(x).trim()).filter(Boolean).slice(0, 30);
+      if (!value.length || value.join('; ') === currentValue(ev, field)) continue;
+    } else {
+      value = String(value ?? '').trim().slice(0, field === 'rules' || field === 'note' ? 800 : 200);
+      if (!value) continue;
+      if (field === 'date' && !/^\d{4}-\d{2}-\d{2}$/.test(value)) continue;
+      if (['time', 'gatherTime', 'departureTime'].includes(field)) {
+        const m = value.match(/^(\d{1,2})[:.](\d{2})$/);
+        if (!m) continue;
+        value = `${m[1].padStart(2, '0')}:${m[2]}`;
+      }
+      const cur = currentValue(ev, field).trim().toLowerCase();
+      if (field === 'rules' || field === 'note' ? cur.includes(value.toLowerCase()) : cur === value.toLowerCase()) continue;
+    }
+    out.push({ field, value });
+  }
+  return out;
+}
+
+/** «⏰ Сбор: <s>07:00</s> → 06:30» — было/стало видно сразу. */
+function changeLines(ev: any, changes: EvChange[]): string {
+  return changes.map((c) => {
+    const val = Array.isArray(c.value) ? c.value.map((x: string) => `\n   · ${esc(x)}`).join('') : `<b>${esc(c.value)}</b>`;
+    const was = ['rules', 'note', 'program'].includes(c.field) ? '' : currentValue(ev, c.field);
+    return `${CHANGE_LABEL[c.field]}:${was ? ` <s>${esc(was)}</s> →` : ''} ${val}`;
+  }).join('\n');
+}
+
+async function applyEventChanges(evId: string, changes: EvChange[]): Promise<any | null> {
+  const { data: ev } = await supabase.from('events').select('*').eq('id', evId).maybeSingle();
+  if (!ev) return null;
+  const lg: any = { ...((ev as any).logistics || {}) };
+  const patch: any = {};
+  for (const c of changes) {
+    if (c.field === 'date') {
+      patch.date = c.value;
+      const d = new Date(`${c.value}T12:00:00Z`);
+      if (!Number.isNaN(d.getTime())) patch.date_label = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' });
+    } else if (c.field === 'time') patch.time = c.value;
+    else if (c.field === 'location') patch.location = c.value;
+    else if (c.field === 'program') patch.program = c.value;
+    else if (LOGI_FIELDS.has(c.field)) lg[c.field] = c.value;
+    else {
+      // Правила и «важно» копим в logistics.notes — их показывает карточка события.
+      const stamp = new Date().toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: 'Europe/Minsk' });
+      lg.notes = `${lg.notes ? `${lg.notes}\n` : ''}${c.field === 'rules' ? '📜' : '❗'} ${c.value} (${stamp})`.slice(-3000);
+    }
+  }
+  patch.logistics = lg;
+  let up = await supabase.from('events').update(patch).eq('id', evId);
+  if (up.error && 'date_label' in patch) { delete patch.date_label; up = await supabase.from('events').update(patch).eq('id', evId); }
+  return up.error ? null : { ...(ev as any), ...patch };
+}
+
+/** В чат события и каждому записавшемуся в личку. */
+async function broadcastEvent(evId: string, html: string, opts: { group?: boolean; skip?: number } = {}): Promise<{ dm: number; group: boolean }> {
+  let group = false;
+  let dm = 0;
+  if (opts.group !== false) {
+    const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+    if ((eg as any)?.chat_id) {
+      const r = await tg('sendMessage', { chat_id: (eg as any).chat_id, parse_mode: 'HTML', text: html, disable_web_page_preview: true }).catch(() => null);
+      group = !!r?.ok;
+    }
+  }
+  const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', evId).neq('status', 'cancelled');
+  const ids = [...new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter((x) => x > 0 && x !== opts.skip))];
+  for (let i = 0; i < ids.length; i += 10) {
+    const out = await Promise.all(ids.slice(i, i + 10).map((id) =>
+      tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: html, disable_web_page_preview: true }).catch(() => null)));
+    dm += out.filter((r: any) => r?.ok).length;
+  }
+  return { dm, group };
+}
+
+// Предложения изменений из чатов ждут решения костяка в app_config — без миграции.
+async function loadProposals(): Promise<Record<string, any>> {
+  const { data } = await supabase.from('app_config').select('value').eq('key', 'change_proposals').maybeSingle();
+  try { return JSON.parse(String((data as any)?.value || '{}')) || {}; } catch { return {}; }
+}
+async function saveProposals(map: Record<string, any>) {
+  const keep = Object.entries(map).sort((a, b) => String(b[1]?.at).localeCompare(String(a[1]?.at))).slice(0, 40);
+  await supabase.from('app_config').upsert({ key: 'change_proposals', value: JSON.stringify(Object.fromEntries(keep)) }, { onConflict: 'key' });
+}
+
+// Сообщение похоже на оргизменение, только если есть И «что поменялось», И «о чём».
+const CHANGE_VERB = /(перенос|перенес|измен|поменя|сдвига|сдвину|нов(ое|ые|ая|ый)|теперь|вместо|отмен|уточнени|внимани|важно|регламент|правил|расписани)/i;
+const CHANGE_NOUN = /(врем|выезд|выезжа|сбор|собира|точк|старт|дат[аеуы]|расписани|правил|регламент|мест[оа]|адрес|программ|\d{1,2}[:.]\d{2})/i;
+function looksLikeChange(text: string): boolean {
+  return text.length > 12 && !text.startsWith('/') && !/\?\s*$/.test(text) && CHANGE_VERB.test(text) && CHANGE_NOUN.test(text);
+}
+
+/**
+ * Контролёр чата события: сообщение или фото (новый регламент, расписание,
+ * время выезда) → ИИ вытаскивает изменения → организатору и костяку в личку
+ * «Применить?». Сами ничего не меняем: в чате бывают догадки и шутки, а
+ * неверное время выезда хуже, чем никакого.
+ */
+async function detectGroupChange(chatId: number, evId: string, text: string, from: any, image?: { mime: string; data: string }, messageId?: number) {
+  const { data: ev } = await supabase.from('events').select('*').eq('id', evId).maybeSingle();
+  if (!ev) return;
+  const today = new Date().toISOString().slice(0, 10);
+  if (String((ev as any).date_end || (ev as any).date || '') < today) return; // событие прошло — это уже воспоминания
+  const lg = (ev as any).logistics || {};
+  const cur =
+    `Событие: ${(ev as any).title}. Дата: ${(ev as any).date}. Старт: ${(ev as any).time || '—'}. Локация: ${(ev as any).location || '—'}.\n` +
+    `Сбор: ${lg.gatherTime || '—'}. Выезд: ${lg.departureTime || '—'}. Точка сбора: ${lg.assemblyPoint || '—'}. Прибытие: ${lg.arrivalPoint || '—'}.\n` +
+    `Программа: ${currentValue(ev, 'program').slice(0, 600) || '—'}.\nПравила/важное: ${String(lg.notes || '—').slice(0, 600)}`;
+  const out = await geminiJSON(
+    'Ты — контролёр организационных изменений клуба FLINT. Ниже текущие данные события и новое сообщение' + (image ? ' с ФОТО' : '') + ' из чата события.\n' +
+    'Определи, сообщает ли оно ИЗМЕНЕНИЕ или НОВУЮ оргинформацию: дату, время старта/сбора/выезда, точку сбора или прибытия, локацию, ' +
+    'программу/расписание, правила/регламент, важное (что взять, ограничения). Вопросы, догадки, шутки, «может перенесём?» — НЕ изменение. ' +
+    'Если на фото расписание — program: массив строк «ЧЧ:ММ — пункт». Правила — кратко по пунктам, до 600 символов. Фото людей/природы — не изменение.\n' +
+    `Сегодня ${today}. Дата — YYYY-MM-DD, время — ЧЧ:ММ.\n` +
+    'Верни СТРОГО JSON: {"changes":[{"field":"date|time|gatherTime|departureTime|assemblyPoint|arrivalPoint|location|returnInfo|program|rules|note","value":"..."}],"confidence":0..1,"summary":"одна фраза"}. Нет изменений — {"changes":[]}.\n\n' +
+    `ТЕКУЩИЕ ДАННЫЕ:\n${cur}\n\nСООБЩЕНИЕ (${from?.first_name || 'участник'}): «${String(text || '').slice(0, 1500)}»`,
+    image,
+  );
+  if (!out || Number(out.confidence ?? 1) < 0.6) return;
+  const changes = cleanChanges(ev, out.changes);
+  if (!changes.length) return;
+  const props = await loadProposals();
+  const sig = JSON.stringify(changes);
+  if (Object.values(props).some((p: any) => p?.evId === evId && JSON.stringify(p.changes) === sig)) return; // уже спрашивали
+  const pid = Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  props[pid] = { evId, changes, summary: String(out.summary || '').slice(0, 200), fromName: from?.first_name || '', chatId, at: new Date().toISOString(), status: 'pending' };
+  await saveProposals(props);
+
+  const { data: cores } = await supabase.from('members').select('telegram_id').eq('is_core', true).limit(6);
+  const to = [...new Set([Number((ev as any).deputy_id) || 0, ...(cores || []).map((c: any) => Number(c.telegram_id))].filter((x) => x > 0))];
+  const cid = String(chatId);
+  const link = cid.startsWith('-100') && messageId ? `https://t.me/c/${cid.slice(4)}/${messageId}` : '';
+  const html =
+    `🛰 <b>В чате «${esc((ev as any).title)}» похоже на изменение</b>\n` +
+    `${esc(from?.first_name || 'Кто-то')}${image ? ' прислал(а) фото' : ' написал(а)'}${text ? `: «${esc(text.slice(0, 300))}»` : ''}\n\n` +
+    `${changeLines(ev, changes)}\n\n` +
+    'Применить? Обновлю карточку события и напишу всем участникам.';
+  for (const id of to) {
+    await tg('sendMessage', {
+      chat_id: id, parse_mode: 'HTML', text: html, disable_web_page_preview: true,
+      reply_markup: kb([
+        [{ text: '✅ Применить и разослать', callback_data: `chgy_${pid}` }],
+        [{ text: '📝 Только обновить', callback_data: `chgs_${pid}` }, { text: '❌ Не то', callback_data: `chgn_${pid}` }],
+        ...(link ? [[{ text: '💬 Открыть сообщение', url: link }]] : []),
+      ]),
+    }).catch(() => null);
+  }
+}
+
+/** «Олегу» ↔ «Олег», «Ане» ↔ «Аня»: сравниваем начало имени. */
+function nameMatch(a: string, b: string): boolean {
+  const n = (s: string) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/^@/, '').split(/\s+/)[0].replace(/[^a-zа-я0-9_]/g, '');
+  const x = n(a), y = n(b);
+  if (!x || !y) return false;
+  if (x === y) return true;
+  const k = Math.max(2, Math.min(4, Math.min(x.length, y.length) - 1));
+  return x.slice(0, k) === y.slice(0, k);
+}
+function pickPeople(names: any, pool: { id: number; name: string }[]) {
+  const ok: { id: number; name: string }[] = [];
+  const bad: string[] = [];
+  for (const raw of Array.isArray(names) ? names : []) {
+    const nm = String(raw || '').trim();
+    if (!nm) continue;
+    const exact = pool.filter((p) => p.name.toLowerCase() === nm.toLowerCase());
+    const hits = exact.length ? exact : pool.filter((p) => nameMatch(p.name, nm));
+    const uniq = [...new Map(hits.map((h) => [h.id, h])).values()];
+    if (uniq.length === 1) { if (!ok.some((o) => o.id === uniq[0].id)) ok.push(uniq[0]); }
+    else bad.push(uniq.length ? `«${nm}» — таких несколько (${uniq.map((u) => u.name).join(', ')})` : `«${nm}» нет среди участников`);
+  }
+  return { ok, bad };
+}
+
+async function sendConfirmPing(taskId: number, target: number, byName: string, evTitle: string): Promise<boolean> {
+  const r = await tg('sendMessage', {
+    chat_id: target, parse_mode: 'HTML',
+    text: `👋 <b>${esc(byName)}</b> просит подтвердить участие в «<b>${esc(evTitle)}</b>». Едешь?`,
+    reply_markup: kb([[{ text: '✅ Подтверждаю', callback_data: `cfm_${taskId}_y` }, { text: '❌ Не еду', callback_data: `cfm_${taskId}_n` }]]),
+  }).catch(() => null);
+  return !!r?.ok;
+}
+
+/**
+ * ИИ-ассистент организатора в личке: свободный текст → куда это записать и
+ * что сделать. Не хватает данных — один уточняющий вопрос. Всё найденное
+ * показываем списком «Понял так: …» и делаем только после «Выполнить».
+ * Возвращает false, если это просто вопрос — тогда отвечает консьерж.
+ */
+async function runAssistant(chatId: number, from: any, text: string, history: string[] = []): Promise<boolean> {
+  const uid = Number(from.id);
+  const m = await memberOf(uid);
+  const core = !!m && (m.is_core === true || m.role === 'owner');
+  if (!core && m?.role !== 'organizer') return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const since = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
+  const { data: evsRaw } = await supabase.from('events').select('id,title,date,time,location,logistics,program,deputy_id,status')
+    .in('status', ['open', 'locked']).gte('date', since).order('date').limit(10);
+  const evs = (evsRaw || []).filter((e: any) => core || Number(e.deputy_id) === uid);
+  const evIds = evs.map((e: any) => e.id);
+  const { data: regs } = evIds.length
+    ? await supabase.from('registrations').select('event_id,telegram_id,name').in('event_id', evIds).neq('status', 'cancelled')
+    : { data: [] as any[] };
+  const poolOf = (evId: string) => (regs || []).filter((r: any) => r.event_id === evId && Number(r.telegram_id) > 0)
+    .map((r: any) => ({ id: Number(r.telegram_id), name: String(r.name || 'Участник') }));
+  const inv = await loadInventory();
+  const evCtx = evs.map((e: any, i: number) => {
+    const lg = e.logistics || {};
+    return `[${i + 1}] ${e.title} · ${e.date}${e.time ? ` ${e.time}` : ''} · сбор ${lg.gatherTime || '—'} · выезд ${lg.departureTime || '—'} · точка ${lg.assemblyPoint || '—'} · участники: ${poolOf(e.id).map((p) => p.name).join(', ') || 'нет'}`;
+  }).join('\n');
+  const invCtx = inv.slice(0, 40).map((i: any) => `${i.title}${i.holderName ? ` (у ${i.holderName})` : ''}`).join('; ');
+  const convo = [...history, `Организатор: ${text.slice(0, 800)}`].slice(-8);
+  const out = await geminiJSON(
+    'Ты — ИИ-ассистент организатора клуба FLINT («Живи в моменте», Минск). Организатор пишет свободным текстом: факты, поручения, изменения. ' +
+    'Пойми, КУДА это записать и ЧТО сделать, и верни действия. Не хватает данных (какое событие, кому, какая вещь) — задай ОДИН короткий вопрос в "ask" и не возвращай actions. ' +
+    'Подходящее событие одно — не спрашивай, бери его. Ничего не выдумывай.\n' +
+    `Сегодня ${today} (Минск).\nСОБЫТИЯ:\n${evCtx || 'нет'}\nИНВЕНТАРЬ КЛУБА: ${invCtx || 'пусто'}\n\n` +
+    'Верни СТРОГО JSON: {"ask":"вопрос или null","question":true|false,"actions":[...]}\nТипы действий:\n' +
+    '- {"type":"task","event":N,"title":"что сделать","assignees":["Имя"],"due":"YYYY-MM-DDTHH:MM или null"} — поручение; пусто = кто возьмёт; несколько людей — всех в список.\n' +
+    '- {"type":"confirm","event":N,"people":["Имя"]} — попросить людей подтвердить участие (бот пришлёт им кнопку).\n' +
+    '- {"type":"gear","item":"вещь","holder":"у кого вещь теперь","owner":"чья вещь или null","returned":false} — учёт снаряжения («отдал Олегу палатку» → holder Олег).\n' +
+    '- {"type":"event","event":N,"changes":[{"field":"date|time|gatherTime|departureTime|assemblyPoint|arrivalPoint|location|returnInfo|program|rules|note","value":"..."}],"notify":true} — изменить событие (дата YYYY-MM-DD, время ЧЧ:ММ, program — массив строк).\n' +
+    '- {"type":"announce","event":N,"text":"текст"} — написать всем участникам события.\n' +
+    'Имена — в именительном падеже, как в списке участников. question=true — если это просто вопрос о событии, тогда actions пустой.\n\n' +
+    `ДИАЛОГ:\n${convo.join('\n')}`,
+  );
+  if (!out) return false;
+  const acts: any[] = Array.isArray(out.actions) ? out.actions : [];
+  const ask = typeof out.ask === 'string' && out.ask.trim() && out.ask !== 'null' ? out.ask.trim() : '';
+  if (!acts.length && !ask) return false;
+  const askBack = async (q: string) => {
+    await setSession(uid, 'ai_chat', { history: [...convo, `Ассистент: ${q}`].slice(-8) });
+    await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🤖 ${q}`, reply_markup: kb([[{ text: '❌ Отмена', callback_data: 'aino' }]]) });
+    return true;
+  };
+  if (!acts.length) return askBack(esc(ask));
+
+  const done: any[] = [];
+  const lines: string[] = [];
+  const problems: string[] = [];
+  const evOf = (n: any) => evs[Number(n) - 1] || (evs.length === 1 ? evs[0] : null);
+  for (const a of acts.slice(0, 8)) {
+    const type = String(a?.type || '');
+    if (type === 'gear') {
+      const item = String(a.item || '').trim().slice(0, 120);
+      if (!item) continue;
+      let holder: { id: number; name: string } | null = null;
+      if (a.holder) {
+        const pool = [...new Map((regs || []).filter((r: any) => Number(r.telegram_id) > 0).map((r: any) => [Number(r.telegram_id), { id: Number(r.telegram_id), name: String(r.name || '') }])).values()];
+        const hit = pickPeople([a.holder], pool);
+        if (hit.ok.length) holder = hit.ok[0];
+        else {
+          const { data: mm } = await supabase.from('members').select('telegram_id,first_name').ilike('first_name', `${String(a.holder).slice(0, Math.max(2, Math.min(4, String(a.holder).length - 1)))}%`).limit(5);
+          const cand = (mm || []).map((x: any) => ({ id: Number(x.telegram_id), name: String(x.first_name || '') })).filter((x) => nameMatch(x.name, a.holder));
+          if (cand.length === 1) holder = cand[0];
+        }
+      }
+      const holderName = holder?.name || (a.holder ? String(a.holder).slice(0, 60) : '');
+      done.push({ type, item, holderId: holder?.id || null, holderName, ownerName: a.owner ? String(a.owner).slice(0, 60) : null, returned: a.returned === true });
+      lines.push(`🎒 «${esc(item)}» — ${a.returned === true ? 'возвращено владельцу' : `теперь у <b>${esc(holderName || '—')}</b>`}${a.owner ? ` (чьё: ${esc(a.owner)})` : ''}`);
+      continue;
+    }
+    const ev: any = evOf(a.event);
+    if (!ev) { problems.push('Не понял, о каком событии речь.'); continue; }
+    const pool = poolOf(ev.id);
+    if (type === 'task') {
+      const title = String(a.title || '').trim().slice(0, 200);
+      if (!title) continue;
+      const who = pickPeople(a.assignees, pool);
+      problems.push(...who.bad);
+      const due = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(String(a.due || '')) ? new Date(`${a.due}:00+03:00`).toISOString() : null;
+      done.push({ type, evId: ev.id, evTitle: ev.title, title, people: who.ok, due });
+      lines.push(`📌 «${esc(title)}» → ${who.ok.length ? who.ok.map((p) => `<b>${esc(p.name)}</b>`).join(', ') : 'кто возьмёт'}${due ? ` · до ${esc(new Date(due).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Minsk' }))}` : ''} · ${esc(ev.title)}`);
+    } else if (type === 'confirm') {
+      const who = pickPeople(a.people, pool);
+      problems.push(...who.bad);
+      if (!who.ok.length) continue;
+      done.push({ type, evId: ev.id, evTitle: ev.title, people: who.ok });
+      lines.push(`✅ Подтвердить участие в «${esc(ev.title)}»: ${who.ok.map((p) => `<b>${esc(p.name)}</b>`).join(', ')} — сразу пришлю им кнопку`);
+    } else if (type === 'event') {
+      const changes = cleanChanges(ev, a.changes);
+      if (!changes.length) continue;
+      const notify = a.notify !== false;
+      done.push({ type, evId: ev.id, evTitle: ev.title, changes, notify });
+      lines.push(`🔄 «${esc(ev.title)}»:\n${changeLines(ev, changes)}${notify ? '\n   → разошлю участникам и в чат события' : ''}`);
+    } else if (type === 'announce') {
+      const t = String(a.text || '').trim().slice(0, 1500);
+      if (!t) continue;
+      done.push({ type, evId: ev.id, evTitle: ev.title, text: t });
+      lines.push(`📣 Всем участникам «${esc(ev.title)}»:\n<i>${esc(t)}</i>`);
+    }
+  }
+  if (problems.length) return askBack(`Уточни, пожалуйста:\n• ${problems.map(esc).join('\n• ')}`);
+  if (!done.length) return ask ? askBack(esc(ask)) : false;
+  await setSession(uid, 'ai_confirm', { actions: done, history: convo });
+  await tg('sendMessage', {
+    chat_id: chatId, parse_mode: 'HTML', disable_web_page_preview: true,
+    text: `🤖 <b>Понял так:</b>\n\n${lines.join('\n\n')}\n\nВыполнить?`,
+    reply_markup: kb([[{ text: '✅ Выполнить', callback_data: 'aiok' }], [{ text: '✏️ Поправить', callback_data: 'aifix' }, { text: '❌ Отмена', callback_data: 'aino' }]]),
+  });
+  return true;
+}
+
+async function insertTaskRows(rows: any[]) {
+  let ins = await supabase.from('tasks').insert(rows).select('id,taken_by');
+  if (ins.error && /column|schema cache/i.test(ins.error.message)) {
+    ins = await supabase.from('tasks').insert(rows.map(({ due_at, assigned_by, kind, target_id, helpers, ...base }: any) => base)).select('id,taken_by');
+  }
+  return ins;
+}
+
+/** Выполняем подтверждённое «Понял так». Каждая строка — итог одного действия. */
+async function executeAssistant(from: any, actions: any[]): Promise<string[]> {
+  const uid = Number(from.id);
+  const me = String(from.first_name || from.username || 'Организатор');
+  const res: string[] = [];
+  for (const a of actions) {
+    try {
+      if (a.type === 'task') {
+        const rows = (a.people.length ? a.people : [null]).map((p: any) => ({
+          event_id: a.evId, title: a.title, taken_by: p?.id || null, done: false, created_by: uid, assigned_by: p ? uid : null, due_at: a.due, helpers: [],
+        }));
+        const ins = await insertTaskRows(rows);
+        if (ins.error) { res.push(`⚠️ Задача «${esc(a.title)}» не создана: ${esc(ins.error.message)}`); continue; }
+        const dueTxt = a.due ? ` · до ${new Date(a.due).toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Minsk' })}` : '';
+        for (const p of a.people) if (p.id !== uid) {
+          await tg('sendMessage', { chat_id: p.id, parse_mode: 'HTML', text: `📌 <b>${esc(me)}</b> назначил тебе задачу на «${esc(a.evTitle)}»:\n\n${esc(a.title)}${esc(dueTxt)}\n\nОтметить «готово» — в карточке события, блок «Задачи».` }).catch(() => null);
+        }
+        const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', a.evId).eq('active', true).maybeSingle();
+        if ((eg as any)?.chat_id) {
+          await tg('sendMessage', { chat_id: (eg as any).chat_id, parse_mode: 'HTML', text: `📌 Задача${a.people.length ? ` для <b>${a.people.map((p: any) => esc(p.name)).join(', ')}</b>` : ' — кто возьмёт?'}: ${esc(a.title)}${esc(dueTxt)}\nПомочь может любой — кнопка «🙋 Помогу» в карточке события.` }).catch(() => null);
+        }
+        res.push(`📌 Задача «${esc(a.title)}» создана${a.people.length ? ` и отправлена: ${a.people.map((p: any) => esc(p.name)).join(', ')}` : ''}`);
+      } else if (a.type === 'confirm') {
+        const rows = a.people.map((p: any) => ({ event_id: a.evId, title: `Подтвердить участие: ${p.name}`, taken_by: uid, done: false, created_by: uid, assigned_by: uid, kind: 'confirm', target_id: p.id, helpers: [] }));
+        const ins = await supabase.from('tasks').insert(rows).select('id,target_id');
+        if (ins.error) { res.push('⚠️ Подтверждения не созданы — нужна миграция задач (колонки kind/target_id).'); continue; }
+        const sent: string[] = [];
+        const failed: string[] = [];
+        for (const row of (ins.data || []) as any[]) {
+          const p = a.people.find((x: any) => x.id === Number(row.target_id));
+          (await sendConfirmPing(Number(row.id), Number(row.target_id), me, a.evTitle) ? sent : failed).push(esc(p?.name || 'участник'));
+        }
+        res.push(`✅ Запросил подтверждение: ${sent.join(', ') || '—'}${failed.length ? `\n⚠️ Не дошло (не открывали бота): ${failed.join(', ')} — напиши им сам` : ''}`);
+      } else if (a.type === 'gear') {
+        const items = await loadInventory();
+        const low = a.item.toLowerCase();
+        const it = items.find((x: any) => String(x.title || '').toLowerCase() === low)
+          || items.find((x: any) => String(x.title || '').toLowerCase().includes(low) || low.includes(String(x.title || '').toLowerCase()));
+        if (it) {
+          if (a.returned) it.returned = true;
+          else { it.holderId = a.holderId; it.holderName = a.holderName || it.holderName; it.returned = false; }
+          if (a.ownerName && !it.ownerName) it.ownerName = a.ownerName;
+          it.updatedAt = new Date().toISOString();
+        } else {
+          items.push({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), title: a.item, kind: a.ownerName ? 'personal' : 'club', qty: 1, holderId: a.holderId, holderName: a.holderName || null, ownerName: a.ownerName, returned: a.returned, updatedAt: new Date().toISOString() });
+        }
+        await supabase.from('app_config').upsert({ key: 'club_inventory', value: JSON.stringify(items) }, { onConflict: 'key' });
+        if (a.holderId && a.holderId !== uid && !a.returned) {
+          await tg('sendMessage', { chat_id: a.holderId, parse_mode: 'HTML', text: `🎒 Записал: «${esc(a.item)}» теперь у тебя (отметил ${esc(me)}). Видно в профиле → «Снаряжение клуба».` }).catch(() => null);
+        }
+        res.push(`🎒 «${esc(a.item)}» — ${it ? 'обновил' : 'добавил'} в снаряжении клуба`);
+      } else if (a.type === 'event') {
+        const { data: before } = await supabase.from('events').select('*').eq('id', a.evId).maybeSingle();
+        const text = changeLines(before, a.changes);
+        const ok = await applyEventChanges(a.evId, a.changes);
+        if (!ok) { res.push(`⚠️ «${esc(a.evTitle)}» не обновилось`); continue; }
+        if (a.notify) {
+          const b = await broadcastEvent(a.evId, `🔄 <b>Изменения: «${esc(a.evTitle)}»</b>\n\n${text}\n\nКарточка события уже обновлена.`);
+          res.push(`🔄 «${esc(a.evTitle)}» обновлено · разослал ${b.dm} в личку${b.group ? ' + чат события' : ''}`);
+        } else res.push(`🔄 «${esc(a.evTitle)}» обновлено (без рассылки)`);
+      } else if (a.type === 'announce') {
+        const b = await broadcastEvent(a.evId, `📣 <b>${esc(a.evTitle)}</b>\n\n${esc(a.text)}\n\n— ${esc(me)}`);
+        res.push(`📣 Отправил: ${b.dm} в личку${b.group ? ' + чат события' : ''}`);
+      }
+    } catch (e) {
+      res.push(`⚠️ Не получилось: ${esc((e as Error).message).slice(0, 120)}`);
+    }
+  }
+  return res;
+}
+
 // --- Машины (участник-driven логистика) ---
 /** Карточка машины. Название события обязательно: у человека их может быть несколько. */
 function rideLine(r: any, eventTitle?: string): string {
@@ -2924,7 +3339,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(grpgo_|grpmaybe_|grpno_|verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
+      const OPEN_TO_ALL = /^(cfm_|grpgo_|grpmaybe_|grpno_|verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -3443,6 +3858,117 @@ export default async function handler(req: any, res: any) {
           if (chatId) await tg('sendMessage', { chat_id: chatId, reply_to_message_id: msgId, parse_mode: 'HTML', text: `❌ Вклад ${amount} BYN отклонён. Участнику написал.` });
           await tg('sendMessage', { chat_id: contributor, parse_mode: 'HTML',
             text: `🤔 Организатор сбора «<b>${title}</b>» не нашёл твой перевод на ${amount} BYN.\n\nЕсли ты переводил — напиши организатору или в поддержку, разберёмся.` });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /** ИИ-ассистент: «Понял так: …» → Выполнить / Поправить / Отмена. */
+      if (data === 'aiok' || data === 'aino' || data === 'aifix') {
+        const sess = await getSession(tgId);
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if (data === 'aino') {
+          await clearSession(tgId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Отменил' });
+          return res.status(200).json({ ok: true });
+        }
+        if (data === 'aifix') {
+          await setSession(tgId, 'ai_chat', { history: sess?.context?.history || [] });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await tg('sendMessage', { chat_id: chatId, text: '✏️ Напиши, что поправить — пересоберу.' });
+          return res.status(200).json({ ok: true });
+        }
+        if (sess?.state !== 'ai_confirm' || !Array.isArray(sess.context?.actions)) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это уже устарело — напиши заново', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await clearSession(tgId);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Выполняю…' });
+        const out = await executeAssistant(cq.from, sess.context.actions);
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', disable_web_page_preview: true, text: `✅ <b>Готово</b>\n\n${out.join('\n') || 'Нечего было делать.'}` });
+        return res.status(200).json({ ok: true });
+      }
+
+      /** Изменение, пойманное в чате события: костяк решает, применять ли. */
+      if (data.startsWith('chgy_') || data.startsWith('chgs_') || data.startsWith('chgn_')) {
+        const pid = data.slice(5);
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает организатор или костяк', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const props = await loadProposals();
+        const p = props[pid];
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if (!p || p.status !== 'pending') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, show_alert: true, text: p ? `Уже решено: ${p.status === 'rejected' ? 'отклонено' : 'применено'}${p.byName ? ` (${p.byName})` : ''}` : 'Предложение устарело' });
+          return res.status(200).json({ ok: true });
+        }
+        const byName = String(cq.from.first_name || cq.from.username || 'костяк');
+        if (data.startsWith('chgn_')) {
+          props[pid] = { ...p, status: 'rejected', byName };
+          await saveProposals(props);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ок, не трогаю' });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: before } = await supabase.from('events').select('*').eq('id', p.evId).maybeSingle();
+        const fresh = cleanChanges(before, p.changes);
+        if (!before || !fresh.length) {
+          props[pid] = { ...p, status: 'applied', byName };
+          await saveProposals(props);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'В событии уже так — менять нечего' });
+          return res.status(200).json({ ok: true });
+        }
+        const lines = changeLines(before, fresh);
+        const ok = await applyEventChanges(p.evId, fresh);
+        if (!ok) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Не получилось обновить событие', show_alert: true }); return res.status(200).json({ ok: true }); }
+        props[pid] = { ...p, status: 'applied', byName };
+        await saveProposals(props);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Применено ✅' });
+        let tail = 'Карточка события обновлена.';
+        if (data.startsWith('chgy_')) {
+          const b = await broadcastEvent(p.evId, `🔄 <b>Изменения: «${esc((before as any).title)}»</b>\n\n${lines}\n\nКарточка события уже обновлена.`);
+          tail = `Карточка обновлена, разослал ${b.dm} в личку${b.group ? ' + в чат события' : ''}.`;
+        }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ <b>Применено</b> — «${esc((before as any).title)}»\n${lines}\n\n${tail}` });
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * Ответ на «Пингануть» из задачи «Подтвердить участие». Жмёт сам
+       * человек (target_id): «Подтверждаю» закрывает задачу и ставит запись
+       * в confirmed, «Не еду» — закрывает задачу и предлагает освободить
+       * место. Кто пинговал — сразу узнаёт ответ.
+       */
+      if (data.startsWith('cfm_')) {
+        const [, idRaw, ans] = data.split('_');
+        const taskId = Number(idRaw);
+        const { data: t } = await supabase.from('tasks').select('id,event_id,title,taken_by,created_by,done,kind,target_id').eq('id', taskId).maybeSingle();
+        if (!t || Number((t as any).target_id) !== tgId) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Запрос устарел', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        const evId = String((t as any).event_id);
+        const { data: ev } = await supabase.from('events').select('id,title').eq('id', evId).maybeSingle();
+        const title = esc((ev as any)?.title || 'событие');
+        const who = esc(cq.from.first_name || cq.from.username || 'Участник');
+        const yes = ans === 'y';
+        const patch: any = { done: true, done_at: new Date().toISOString() };
+        const up = await supabase.from('tasks').update(patch).eq('id', taskId);
+        if (up.error) await supabase.from('tasks').update({ done: true }).eq('id', taskId);
+        if (yes) { try { await updateReg(evId, tgId, { status: 'confirmed' }); } catch { /* no-op */ } }
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: yes ? 'Подтвердил ✅' : 'Понял, передам' });
+        if (yes) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `🔥 Отлично, ты в деле на «${title}». Организатор уже знает.` });
+        } else {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `Жаль! Чтобы место ушло следующему — отменись в один клик:`, reply_markup: kb([[{ text: '❌ Отменить запись', callback_data: `regcancel_${evId}` }]]) });
+        }
+        const owners = new Set([Number((t as any).taken_by), Number((t as any).created_by)].filter((x) => x > 0 && x !== tgId));
+        for (const o of owners) {
+          try {
+            await tg('sendMessage', { chat_id: o, parse_mode: 'HTML', text: yes
+              ? `✅ <b>${who}</b> подтвердил участие в «${title}». Задача закрыта.`
+              : `❌ <b>${who}</b> ответил «Не еду» на «${title}». Задача закрыта — предложил ему отменить запись, чтобы место ушло следующему.` });
+          } catch { /* no-op */ }
         }
         return res.status(200).json({ ok: true });
       }
@@ -7180,6 +7706,33 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true });
     }
 
+    /**
+     * ФОТО В ЧАТЕ СОБЫТИЯ. Новый регламент, расписание, схему старта часто
+     * присылают картинкой (так было в чате Bizon Race) — текстом их не
+     * поймать. Смотрим фото ИИ-зрением и, если там оргизменение, спрашиваем
+     * костяк. Альбомы без подписи пропускаем — это обычно фото людей, а
+     * квота ИИ не бесконечная.
+     */
+    if (msg && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup') && msg.from && !msg.from.is_bot
+      && (Array.isArray(msg.photo) || /^image\//.test(String(msg.document?.mime_type || '')))) {
+      const caption = String(msg.caption || '').trim();
+      if (!msg.media_group_id || looksLikeChange(caption)) {
+        try {
+          const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', msg.chat.id).eq('active', true).maybeSingle();
+          const file = Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : msg.document;
+          if (gl && file?.file_id && Number(file.file_size || 0) < 8_000_000) {
+            const f = await tg('getFile', { file_id: file.file_id });
+            if (f?.ok && f.result?.file_path) {
+              const bin = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${f.result.file_path}`).then((r) => r.arrayBuffer());
+              await detectGroupChange(msg.chat.id, (gl as any).event_id, caption, msg.from,
+                { mime: Array.isArray(msg.photo) ? 'image/jpeg' : String(msg.document.mime_type), data: Buffer.from(bin).toString('base64') }, msg.message_id);
+            }
+          }
+        } catch { /* фото не разобрали — не страшно */ }
+      }
+      return res.status(200).json({ ok: true });
+    }
+
     if (msg && typeof msg.text === 'string') {
       const chatId = msg.chat.id;
       const text = msg.text.trim();
@@ -7526,6 +8079,12 @@ export default async function handler(req: any, res: any) {
               replied_to: msg.reply_to_message?.message_id || null,
             }, { onConflict: 'chat_id,message_id' });
           } catch { /* дубли по message_id — норм */ }
+        }
+
+        // Контролёр чата: «выезд переносим на 6:30», «новый регламент» →
+        // организатору и костяку «Применить?». Не блокирует остальное.
+        if (linkedEvent && msg.from?.id && !msg.from?.is_bot && looksLikeChange(text)) {
+          try { await detectGroupChange(chatId, (linkedEvent as any).id, text, msg.from, undefined, msg.message_id); } catch { /* ИИ недоступен */ }
         }
 
         // Триггеры для автоматических действий ИИ
@@ -8301,6 +8860,15 @@ export default async function handler(req: any, res: any) {
           '🆘 SOS', '🏠 Главная', '⚙️ Панель организатора', '🎒 Чек-лист',
           '🚀 Открыть FLINT', '⚙️ Организатору',
         ]);
+        // Диалог с ИИ-ассистентом: ответ на уточнение или правка «Понял так».
+        if (sess && (sess.state === 'ai_chat' || sess.state === 'ai_confirm')) {
+          if (MENU_BTNS.has(text)) await clearSession(msg.from.id);
+          else {
+            await tg('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => null);
+            if (await runAssistant(chatId, msg.from, text, sess.context?.history || [])) return res.status(200).json({ ok: true });
+            await clearSession(msg.from.id);
+          }
+        }
         /**
          * Ввод даты рождения. Стоит ПОСЛЕ MENU_BTNS: если человек передумал и
          * нажал кнопку меню, это не должно улететь в парсер даты и выдать
@@ -9510,6 +10078,15 @@ export default async function handler(req: any, res: any) {
           rest = rest.slice(cut).trimStart();
         }
         return res.status(200).json({ ok: true });
+      }
+
+      // 🤖 ИИ-ассистент организатора: «палатку отдал Олегу», «выезд в 6:30»,
+      // «Стасу купить еду к пятнице» — сам решает, куда это записать.
+      if (text.length > 3 && !text.startsWith('/')) {
+        try {
+          await tg('sendChatAction', { chat_id: chatId, action: 'typing' }).catch(() => null);
+          if (await runAssistant(chatId, msg.from, text)) return res.status(200).json({ ok: true });
+        } catch { /* ассистент недоступен — ответит консьерж */ }
       }
 
       // ⚡ ИИ-консьерж Flint: свободный вопрос → ответ из живых данных события.
