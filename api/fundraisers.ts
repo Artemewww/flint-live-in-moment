@@ -5,6 +5,10 @@ const db = createClient(process.env.SUPABASE_URL || '', process.env.SUPABASE_SER
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '';
 const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
 
+// Свежесть подписи: без auth_date перехваченная initData годна вечно (replay).
+// Окно 24ч — как в events.ts / register.ts / profile.ts / admin/events.ts.
+const INITDATA_MAX_AGE_SEC = 24 * 60 * 60;
+
 function verifyInitData(raw: string): { id: number } | null {
   try {
     if (!raw || !BOT_TOKEN) return null;
@@ -14,6 +18,8 @@ function verifyInitData(raw: string): { id: number } | null {
     const expected = crypto.createHmac('sha256', secret).update(data).digest('hex');
     const a = Buffer.from(expected), b = Buffer.from(hash);
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+    const authDate = Number(p.get('auth_date') || 0);
+    if (!authDate || (Date.now() / 1000 - authDate) > INITDATA_MAX_AGE_SEC) return null;
     const u = JSON.parse(p.get('user') || '{}'); return u?.id ? { id: Number(u.id) } : null;
   } catch { return null; }
 }
