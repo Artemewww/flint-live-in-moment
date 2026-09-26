@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic, getTelegramUser } from '../telegram';
 import GearShelf from './GearShelf';
+import ClubShelf from './ClubShelf';
 import Avatar from './Avatar';
 import FoodSelectionPanel from './FoodSelectionPanel';
 import CampingChecklist from './CampingChecklist';
@@ -20,7 +21,7 @@ import CampingChecklist from './CampingChecklist';
  * заметно медленнее). Настройки сохраняются через ?action=save_settings.
  */
 
-type Tab = 'overview' | 'events' | 'gear' | 'kb' | 'settings';
+type Tab = 'overview' | 'events' | 'gear' | 'chat' | 'kb' | 'settings';
 
 const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 function fmtDate(iso?: string | null): string {
@@ -94,76 +95,16 @@ function PointsHistory({ items }: { items: { id: number; points: number; reason:
 const DIET_RU: Record<string, string> = { omnivore: 'Всё ем', vegetarian: 'Вегетарианец', vegan: 'Веган' };
 
 
-/**
- * Имущество клуба и складчина. Реестр живёт одной JSON-записью в app_config и
- * до сих пор был виден ТОЛЬКО костяку в боте: участник не знал, что мангал уже
- * есть у клуба, а вещь, на которую он скидывался, вообще нигде не отмечена.
- * Читаем тот же источник, что и бот (/api/equipment?action=inventory), — двух
- * разных правд про один мангал быть не должно.
- */
-function ClubInventoryBlock() {
-  const [items, setItems] = useState<any[] | null>(null);
-  useEffect(() => {
-    // /api/equipment пускает только по серверному ключу — из Mini App он
-    // отвечал 401, и реестр всегда был «пуст». Тот же реестр отдаёт profile.
-    fetch('/api/profile', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'gear_circle', initData: getInitData() }) })
-      .then((r) => r.json())
-      .then((j) => setItems(Array.isArray(j?.club) ? j.club : []))
-      .catch(() => setItems([]));
-  }, []);
-
-  if (!items) return <p className="text-white/40 text-xs">Загружаю реестр…</p>;
-  if (!items.length) return <p className="text-white/40 text-xs">Реестр пуст.</p>;
-
-  const KIND: Record<string, { label: string; cls: string }> = {
-    club: { label: '🏕 клубное', cls: 'bg-brand/15 text-brand' },
-    shared: { label: '🤝 складчина', cls: 'bg-emerald-500/15 text-emerald-300' },
-    personal: { label: '👤 личное', cls: 'bg-white/10 text-white/60' },
-  };
-
-  return (
-    <div className="space-y-2">
-      {items.map((i: any) => {
-        const kind = KIND[i.kind] || KIND.club;
-        const contrib = Array.isArray(i.contributors) ? i.contributors : [];
-        return (
-          <div key={i.id} className="bg-white/[0.03] border border-white/10 rounded-xl p-3">
-            <div className="flex items-start justify-between gap-2 flex-wrap">
-              <span className="font-bold text-sm">
-                {i.title}{i.qty > 1 ? ` ×${i.qty}` : ''}
-              </span>
-              <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${kind.cls}`}>{kind.label}</span>
-            </div>
-            <div className="text-[10px] text-white/45 font-mono mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-              {i.ownerName && <span>владелец: {i.ownerName}</span>}
-              {i.returned
-                ? <span className="text-emerald-300">✅ возвращено владельцу</span>
-                : i.holderName && <span>на руках: {i.holderName}</span>}
-              {i.price && <span>{i.price} BYN{i.priceNote ? ` · ${i.priceNote}` : ''}</span>}
-            </div>
-            {/* Кто скинулся — видно поимённо: это и есть складчина, а не «общее». */}
-            {contrib.length > 0 && (
-              <div className="text-[10px] mt-1.5 flex flex-wrap gap-1.5">
-                {contrib.map((c: any, n: number) => (
-                  <span
-                    key={n}
-                    className={`px-1.5 py-0.5 rounded font-mono ${c.paid ? 'bg-emerald-500/15 text-emerald-300' : 'bg-amber-500/15 text-amber-300'}`}
-                  >
-                    {c.paid ? '✅' : '⏳'} {c.name}{c.amount ? ` · ${c.amount} BYN` : ''}
-                  </span>
-                ))}
-              </div>
-            )}
-            {i.note && <p className="text-[10px] text-white/50 leading-snug mt-1.5">{i.note}</p>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export default function ProfileScreen({ onClose, initialTab }: { onClose: () => void; initialTab?: Tab }) {
   const myPhoto = useMemo(() => getTelegramUser()?.photo_url || '', []);
+  /** Тап по событию в профиле открывает его карточку (App слушает flint:open-event). */
+  const openEvent = (eventId?: string) => {
+    if (!eventId) return;
+    haptic('success');
+    window.dispatchEvent(new CustomEvent('flint:open-event', { detail: eventId }));
+    onClose();
+  };
   const [tab, setTab] = useState<Tab>(initialTab || 'overview');
   // Чек-лист по умолчанию свёрнут: длинный список мешал видеть складчину.
   const [showChecklist, setShowChecklist] = useState(false);
@@ -348,6 +289,7 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
     { key: 'overview', label: 'Обзор', icon: Trophy },
     { key: 'events', label: 'События', icon: Calendar },
     { key: 'gear', label: 'Снаряжение', icon: Package },
+    { key: 'chat', label: notifications.length ? `Сообщения · ${notifications.length}` : 'Сообщения', icon: Bell },
     ...(canLead ? [{ key: 'kb' as Tab, label: 'База знаний', icon: BookOpen }] : []),
     { key: 'settings', label: 'Настройки', icon: SettingsIcon },
   ];
@@ -482,15 +424,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               {/* Своё снаряжение с фото и «что есть у круга» — сверху: это то,
                   за чем сюда приходят. Реестр клуба — ниже. */}
               <GearShelf />
-              <section className="space-y-2">
-                <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
-                  Имущество клуба и складчина
-                </h3>
-                <p className="text-[11px] text-white/50 leading-snug">
-                  Что у клуба уже есть, у кого лежит и кто на это скидывался.
-                </p>
-                <ClubInventoryBlock />
-              </section>
+              {/* Имущество клуба: у кого вещь, чья и кто вложился — с фото. */}
+              {p && <ClubShelf myId={p.telegramId} />}
 
               {/* Чек-лист на 131 пункт разворачивался прямо в списке и
                   занимал пол-экрана гармошкой. Он нужен раз перед выездом,
@@ -629,7 +564,7 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                   {nearest && (
                     <section className="space-y-2">
                       <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">Ближайшее событие</h3>
-                      <div className="rounded-2xl border border-brand/30 bg-brand/5 p-4 space-y-2">
+                      <div role="button" tabIndex={0} onClick={() => openEvent(nearest.eventId)} className="rounded-2xl border border-brand/30 bg-brand/5 p-4 space-y-2 cursor-pointer">
                         <div className="flex items-start justify-between gap-3">
                           <h4 className="font-display font-black uppercase leading-tight">{nearest.title}</h4>
                           {(() => {
@@ -653,10 +588,70 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                     </section>
                   )}
 
+                  {/* ПРИОРИТЕТ 4 — статистика и награды */}
+                  <section className="grid grid-cols-3 gap-2.5">
+                    {[
+                      { label: 'Посетил', value: p.attended, tone: 'text-white' },
+                      { label: 'Записан', value: p.signedUp, tone: 'text-white/70' },
+                      { label: 'Очки', value: p.points, tone: 'text-brand' },
+                    ].map((s) => (
+                      <div key={s.label} className="bg-white/5 border border-white/10 rounded-2xl p-3.5">
+                        <div className="text-white/40 text-[9px] uppercase font-mono tracking-widest">{s.label}</div>
+                        <div className={`font-display font-black text-2xl ${s.tone}`}>{s.value}</div>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section className="space-y-2">
+                    <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
+                      Награды ({achievements.filter((a) => a.unlocked).length}/{achievements.length})
+                    </h3>
+                    <div className="grid grid-cols-3 gap-2">
+                      {achievements.map((a) => {
+                        const Icon = a.icon;
+                        return (
+                          <div key={a.id} className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 text-center ${
+                            a.unlocked ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/5'
+                          }`}>
+                            <Icon className={`w-5 h-5 ${a.unlocked ? 'text-brand' : 'text-white/20'}`} />
+                            <div className={`text-[9px] font-bold uppercase tracking-wider ${a.unlocked ? 'text-brand' : 'text-white/25'}`}>{a.name}</div>
+                            <div className="text-[8px] text-white/35 leading-tight">{a.desc}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </section>
+
+                  {/* ПРИОРИТЕТ 5 — реф-ссылка */}
+                  {p.refLink && (
+                    <section className="bg-brand/5 border border-brand/20 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-brand text-[9px] uppercase font-mono font-bold tracking-widest flex items-center gap-1.5">
+                          <Users className="w-3.5 h-3.5" /> Твоя реф-ссылка
+                        </span>
+                        <span className="text-[10px] text-white/50 font-mono">Приглашено: <b className="text-brand">{p.referralsCount}</b></span>
+                      </div>
+                      <div className="flex gap-2">
+                        <input readOnly value={p.refLink} className="flex-1 bg-black/30 border border-white/10 rounded-lg p-2 text-white/80 text-[11px] font-mono truncate outline-none" />
+                        <button onClick={copyRef} className="shrink-0 bg-brand hover:bg-brand-hover text-black rounded-lg px-3 flex items-center justify-center cursor-pointer border-none" title="Копировать">
+                          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </section>
+                  )}
+                  {/* История баллов — внизу обзора: сначала то, что требует действия. */}
+                  <PointsHistory items={data?.pointsHistory || []} />
+                </>
+              )}
+
+              {/* ═══ СООБЩЕНИЯ ═══ Переписка с организаторами — отдельной
+                  вкладкой, как чат в банке, а не лентой посреди обзора. */}
+              {tab === 'chat' && (
+                <>
                   {/* ПРИОРИТЕТ 3 — уведомления */}
                   <section className="space-y-2">
                     <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40 flex items-center gap-1.5">
-                      <Bell className="w-3.5 h-3.5" /> Уведомления
+                      <Bell className="w-3.5 h-3.5" /> Переписка с организаторами
                     </h3>
                     {notifications.length === 0 ? (
                       <p className="text-[11px] text-white/35 font-mono bg-white/5 border border-white/10 rounded-2xl p-4">
@@ -729,59 +724,6 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                     </div>
                   </section>
 
-                  {/* ПРИОРИТЕТ 4 — статистика и награды */}
-                  <section className="grid grid-cols-3 gap-2.5">
-                    {[
-                      { label: 'Посетил', value: p.attended, tone: 'text-white' },
-                      { label: 'Записан', value: p.signedUp, tone: 'text-white/70' },
-                      { label: 'Очки', value: p.points, tone: 'text-brand' },
-                    ].map((s) => (
-                      <div key={s.label} className="bg-white/5 border border-white/10 rounded-2xl p-3.5">
-                        <div className="text-white/40 text-[9px] uppercase font-mono tracking-widest">{s.label}</div>
-                        <div className={`font-display font-black text-2xl ${s.tone}`}>{s.value}</div>
-                      </div>
-                    ))}
-                  </section>
-
-                  <section className="space-y-2">
-                    <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">
-                      Награды ({achievements.filter((a) => a.unlocked).length}/{achievements.length})
-                    </h3>
-                    <div className="grid grid-cols-3 gap-2">
-                      {achievements.map((a) => {
-                        const Icon = a.icon;
-                        return (
-                          <div key={a.id} className={`p-3 rounded-xl border flex flex-col items-center gap-1.5 text-center ${
-                            a.unlocked ? 'bg-brand/10 border-brand/30' : 'bg-white/5 border-white/5'
-                          }`}>
-                            <Icon className={`w-5 h-5 ${a.unlocked ? 'text-brand' : 'text-white/20'}`} />
-                            <div className={`text-[9px] font-bold uppercase tracking-wider ${a.unlocked ? 'text-brand' : 'text-white/25'}`}>{a.name}</div>
-                            <div className="text-[8px] text-white/35 leading-tight">{a.desc}</div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </section>
-
-                  {/* ПРИОРИТЕТ 5 — реф-ссылка */}
-                  {p.refLink && (
-                    <section className="bg-brand/5 border border-brand/20 rounded-2xl p-4 space-y-3">
-                      <div className="flex items-center justify-between">
-                        <span className="text-brand text-[9px] uppercase font-mono font-bold tracking-widest flex items-center gap-1.5">
-                          <Users className="w-3.5 h-3.5" /> Твоя реф-ссылка
-                        </span>
-                        <span className="text-[10px] text-white/50 font-mono">Приглашено: <b className="text-brand">{p.referralsCount}</b></span>
-                      </div>
-                      <div className="flex gap-2">
-                        <input readOnly value={p.refLink} className="flex-1 bg-black/30 border border-white/10 rounded-lg p-2 text-white/80 text-[11px] font-mono truncate outline-none" />
-                        <button onClick={copyRef} className="shrink-0 bg-brand hover:bg-brand-hover text-black rounded-lg px-3 flex items-center justify-center cursor-pointer border-none" title="Копировать">
-                          {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </section>
-                  )}
-                  {/* История баллов — внизу обзора: сначала то, что требует действия. */}
-                  <PointsHistory items={data?.pointsHistory || []} />
                 </>
               )}
 
@@ -798,7 +740,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                       </p>
                     )}
                     {upcoming.map((e) => (
-                      <div key={e.regId} className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2.5">
+                      <div key={e.regId} role="button" tabIndex={0} onClick={() => openEvent(e.eventId)}
+                        className="bg-white/5 border border-white/10 rounded-2xl p-4 space-y-2.5 cursor-pointer hover:border-brand/30 transition-colors">
                         <div className="flex items-start justify-between gap-3">
                           <h4 className="font-display font-black uppercase text-sm leading-tight">{e.title}</h4>
                           <span className="shrink-0 text-[9px] font-mono text-white/50">{fmtDate(e.date)}</span>
@@ -838,7 +781,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                       <p className="text-[11px] text-white/35 font-mono bg-white/5 border border-white/10 rounded-2xl p-4">Пока пусто.</p>
                     )}
                     {past.map((e) => (
-                      <div key={e.regId} className="bg-white/[0.03] border border-white/5 rounded-2xl p-3.5 flex items-center justify-between gap-3">
+                      <div key={e.regId} role="button" tabIndex={0} onClick={() => openEvent(e.eventId)}
+                        className="bg-white/[0.03] border border-white/5 rounded-2xl p-3.5 flex items-center justify-between gap-3 cursor-pointer hover:border-white/15">
                         <div className="min-w-0">
                           <div className="text-[13px] truncate">{e.title}</div>
                           <div className="text-[10px] text-white/35 font-mono">{fmtDate(e.date)}</div>
@@ -874,35 +818,17 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                     </section>
                   )}
 
-                  {/**
-                   * Снаряжение живёт ТОЛЬКО на своей вкладке.
-                   * Здесь стоял второй экземпляр той же панели — на экране
-                   * получалось два одинаковых блока «добавить снаряжение», и
-                   * было непонятно, какой из них настоящий. Оставляем короткую
-                   * сводку и ссылку на вкладку.
-                   */}
-                  <section className="space-y-2">
-                    <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40">Снаряжение</h3>
-                    <button
-                      type="button"
-                      onClick={() => setTab('gear')}
-                      className="w-full text-left bg-white/[0.03] border border-white/10 rounded-2xl p-4 cursor-pointer hover:bg-white/[0.06] transition-colors"
-                    >
-                      <span className="text-[12px] text-white/80 block">
-                        {(data.equipment || []).length > 0
-                          ? `Твоего снаряжения в списке: ${(data.equipment || []).length}`
-                          : 'Своё снаряжение ещё не заведено'}
-                      </span>
-                      <span className="text-[11px] text-white/45 block mt-1">
-                        Вкладка «Снаряжение» → складчина круга и твой список. Что отметишь — увидит организатор
-                        и ребята: не повезут второй такой же.
-                      </span>
-                    </button>
-                  </section>
+                </>
+              )}
 
+              {/* ═══ НАСТРОЙКИ ═══ */}
+              {tab === 'settings' && (
+                <>
+                  <SettingsTab profile={p} onSaved={load} />
+                  {/* Питание — это настройка человека («всё ем»), а не снаряжение. */}
                   <section className="space-y-2">
                     <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40 flex items-center gap-1.5">
-                      <UtensilsCrossed className="w-3.5 h-3.5" /> Питание
+                      <UtensilsCrossed className="w-3.5 h-3.5" /> Питание на событиях
                     </h3>
                     <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-1">
                       <div className="text-[10px] text-white/40 font-mono uppercase tracking-widest">Мои предпочтения</div>
@@ -929,9 +855,6 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                   </section>
                 </>
               )}
-
-              {/* ═══ НАСТРОЙКИ ═══ */}
-              {tab === 'settings' && <SettingsTab profile={p} onSaved={load} />}
             </>
           )}
         </div>

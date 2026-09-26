@@ -2859,7 +2859,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
+      const OPEN_TO_ALL = /^(grpgo_|grpmaybe_|grpno_|verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -3379,6 +3379,42 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: contributor, parse_mode: 'HTML',
             text: `🤔 Организатор сбора «<b>${title}</b>» не нашёл твой перевод на ${amount} BYN.\n\nЕсли ты переводил — напиши организатору или в поддержку, разберёмся.` });
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * «Едешь?» из чата события (приветствие нового участника и /перекличка).
+       * Кнопку жмёт сам человек — отмечаем ИМЕННО его (cq.from), поэтому одна
+       * кнопка работает для всех в чате. Не член клуба получает подсказку
+       * всплывашкой, а не сообщением в общий чат.
+       */
+      if (data.startsWith('grpgo_') || data.startsWith('grpmaybe_') || data.startsWith('grpno_')) {
+        const evId = data.slice(data.indexOf('_') + 1);
+        const kind = data.startsWith('grpgo_') ? 'go' : data.startsWith('grpno_') ? 'no' : 'maybe';
+        const { data: ev } = await supabase.from('events').select('id,title,date,status').eq('id', evId).maybeSingle();
+        if (!ev) { await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие не найдено', show_alert: true }); return res.status(200).json({ ok: true }); }
+        const who = esc(cq.from.first_name || cq.from.username || 'Участник');
+        if (kind === 'go') {
+          if (gateOn() && !(await isApproved(tgId))) {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, show_alert: true,
+              text: 'Записываться могут участники клуба. Открой бота в личке и подай заявку — костяк рассмотрит.' });
+            return res.status(200).json({ ok: true });
+          }
+          const r = await registerFromBot(cq.from, ev);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: r === 'ok' ? 'Записал ✅' : r === 'already' ? 'Ты уже в списке ✅' : 'Не получилось — попробуй в боте' });
+          if (r === 'ok' && chatId) {
+            const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true }).eq('event_id', evId).neq('status', 'cancelled');
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: `✅ ${who} едет на «${esc(ev.title)}». В списке: <b>${count || 1}</b>.` });
+          }
+          return res.status(200).json({ ok: true });
+        }
+        if (kind === 'no') {
+          const { data: reg } = await supabase.from('registrations').select('id,status').eq('event_id', evId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, show_alert: !!reg,
+            text: reg ? 'Ты записан. Чтобы сняться — открой событие в боте («Мои события» → «Отказаться»), чтобы место ушло следующему.' : 'Понял, отметил: не едешь.' });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Ок! Напомню ближе к дате 🙌' });
         return res.status(200).json({ ok: true });
       }
 
@@ -7031,6 +7067,52 @@ export default async function handler(req: any, res: any) {
       await tg('sendMessage', { chat_id: msg.chat.id, text: '✅ Телефон сохранён.', reply_markup: mainMenu() });
       return res.status(200).json({ ok: true });
     }
+    /**
+     * В ЧАТ СОБЫТИЯ ДОБАВИЛИ ЧЕЛОВЕКА.
+     * Многие не записываются через бота, а просто попадают в группу выезда —
+     * их добавляют друзья или они приходят по ссылке. Для системы такого
+     * человека не существовало: его нет в составе, бот не спрашивал, едет ли
+     * он, и организатор считал людей по памяти. Теперь бот узнаёт каждого
+     * вошедшего: записан — так и говорит; нет — спрашивает «Едешь?» кнопками.
+     */
+    if (msg && Array.isArray(msg.new_chat_members) && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup')) {
+      const chatId = msg.chat.id;
+      const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+      if (gl) {
+        const { data: ev } = await supabase.from('events').select('id,title,date,status').eq('id', (gl as any).event_id).maybeSingle();
+        const people = (msg.new_chat_members as any[]).filter((u) => u && !u.is_bot);
+        if (ev && people.length) {
+          const ids = people.map((u) => Number(u.id));
+          const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', (ev as any).id).in('telegram_id', ids).neq('status', 'cancelled');
+          const regSet = new Set((regs || []).map((r: any) => Number(r.telegram_id)));
+          const { data: mems } = await supabase.from('members').select('telegram_id,status,is_core').in('telegram_id', ids);
+          const memSet = new Set((mems || []).filter((m: any) => m.is_core || m.status === 'approved').map((m: any) => Number(m.telegram_id)));
+          const already = people.filter((u) => regSet.has(Number(u.id)));
+          const fresh = people.filter((u) => !regSet.has(Number(u.id)));
+          const nameOf = (u: any) => esc(u.first_name || u.username || 'Участник');
+          if (already.length) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
+              text: `👋 ${already.map(nameOf).join(', ')} — уже в списке едущих на «${esc((ev as any).title)}» ✅` });
+          }
+          if (fresh.length) {
+            const guests = fresh.filter((u) => !memSet.has(Number(u.id)));
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `👋 ${fresh.map(nameOf).join(', ')}, добро пожаловать в чат «${esc((ev as any).title)}»!\n\n` +
+                `Едешь? Отметься кнопкой — так ты появишься в составе, получишь бади, машину и все напоминания.` +
+                (guests.length ? `\n\n${guests.map(nameOf).join(', ')}: ты ещё не в клубе — сначала напиши боту в личку, это пара минут.` : ''),
+              reply_markup: kb([[
+                { text: '✅ Еду', callback_data: `grpgo_${(ev as any).id}` },
+                { text: '🤔 Думаю', callback_data: `grpmaybe_${(ev as any).id}` },
+                { text: '❌ Не еду', callback_data: `grpno_${(ev as any).id}` },
+              ]]),
+            });
+          }
+        }
+      }
+      return res.status(200).json({ ok: true });
+    }
+
     if (msg && typeof msg.text === 'string') {
       const chatId = msg.chat.id;
       const text = msg.text.trim();
@@ -7090,6 +7172,47 @@ export default async function handler(req: any, res: any) {
          * свободные места, КТО ОСТАЛСЯ БЕЗ МАШИНЫ, кто что везёт и что ещё
          * никто не взял. Раньше всё это собиралось вручную по переписке.
          */
+        /**
+         * /перекличка — «кто едет?» одним сообщением. Список записавшихся и
+         * кнопки «Еду / Не еду» для всех, кто в чате. Отдельно зовём тех, кто
+         * пишет в чате, но в список так и не попал — их видно по истории.
+         */
+        if (gcmd === '/перекличка' || gcmd === '/rollcall') {
+          const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link (это может костяк).' });
+            return res.status(200).json({ ok: true });
+          }
+          if (!(await isOrganizer(msg.from.id))) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Перекличку запускает организатор или костяк.' });
+            return res.status(200).json({ ok: true });
+          }
+          const evId = (gl as any).event_id;
+          const { data: ev } = await supabase.from('events').select('id,title,date').eq('id', evId).maybeSingle();
+          const { data: regs } = await supabase.from('registrations').select('telegram_id,name,guest_count').eq('event_id', evId).neq('status', 'cancelled');
+          const regIds = new Set((regs || []).map((r: any) => Number(r.telegram_id)));
+          const { data: talkers } = await supabase.from('group_messages').select('telegram_id,first_name,username').eq('chat_id', chatId).order('created_at', { ascending: false }).limit(300);
+          const seen = new Map<number, string>();
+          for (const t of talkers || []) {
+            const id = Number((t as any).telegram_id);
+            if (id > 0 && !regIds.has(id) && !seen.has(id)) seen.set(id, (t as any).first_name || (t as any).username || 'Участник');
+          }
+          const list = (regs || []).map((r: any, i: number) => `${i + 1}. ${esc(r.name || 'Участник')}${r.guest_count ? ` +${r.guest_count}` : ''}`).join('\n');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📋 <b>Перекличка: «${esc((ev as any)?.title || '')}»</b>\n\n` +
+              (list ? `Едут (${(regs || []).length}):\n${list}` : 'Пока никто не записан.') +
+              (seen.size ? `\n\n❓ Пишут в чате, но не отметились: ${[...seen.values()].slice(0, 15).map(esc).join(', ')} — вы едете?` : '') +
+              `\n\nОтметься кнопкой 👇`,
+            reply_markup: kb([[
+              { text: '✅ Еду', callback_data: `grpgo_${evId}` },
+              { text: '🤔 Думаю', callback_data: `grpmaybe_${evId}` },
+              { text: '❌ Не еду', callback_data: `grpno_${evId}` },
+            ]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         if (gcmd === '/сводка' || gcmd === '/summary' || gcmd === '/svodka') {
           const { data: gl } = await supabase
             .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();

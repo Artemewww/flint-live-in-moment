@@ -22,6 +22,8 @@ export interface EventParticipant {
   guests?: number;
   /** Ссылка на фото из Telegram (через прокси /api/events?action=avatar). */
   avatar?: string;
+  /** Что везёт на общее (отметил в анкете записи). */
+  brings?: string[];
 }
 
 /** Мой бади на событии: напарник, который держит меня в поле зрения. */

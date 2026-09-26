@@ -695,6 +695,106 @@ export default async function handler(req: any, res: any) {
      * Гейт спрашивает это на старте, чтобы не гонять по правилам, принятым с
      * другого устройства: localStorage привязан к браузеру, а кодекс — к человеку.
      */
+    /**
+     * ЗАДАЧИ СОБЫТИЯ — в моменте и на виду у всех.
+     * Раньше задачу можно было только «взять» самому из общего списка в
+     * профиле. Организатор не мог сказать «Стас — купить уголь до пятницы»,
+     * а остальные не видели, что горит. Теперь в карточке события: кто что
+     * делает, до какого срока, что просрочено. Назначенному — сообщение в
+     * бот, в чат события — короткое «📌 задача для …».
+     */
+    if (action === 'event_tasks' || action === 'event_task_add' || action === 'event_task_update') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+      const evId = String(body.eventId || '');
+      const { data: me } = await supabase.from('members').select('is_core,role').eq('telegram_id', user.id).maybeSingle();
+      const { data: ev } = await supabase.from('events').select('id,title,deputy_id').eq('id', evId).maybeSingle();
+      if (!ev) return res.status(200).json({ ok: false, error: 'Событие не найдено' });
+      const { data: regs } = await supabase.from('registrations').select('telegram_id,name').eq('event_id', evId).neq('status', 'cancelled');
+      const isLead = (me as any)?.is_core === true || ['owner', 'organizer'].includes((me as any)?.role) || Number((ev as any).deputy_id) === user.id;
+      const inEvent = (regs || []).some((r: any) => Number(r.telegram_id) === user.id);
+      if (!inEvent && !isLead) return res.status(200).json({ ok: false, error: 'Задачи видят участники события' });
+      const avatarOf = (id: number) => id > 0 && BOT_TOKEN ? `/api/events?action=avatar&u=${id}&s=${crypto.createHmac('sha256', BOT_TOKEN).update(`avatar:${id}`).digest('hex').slice(0, 16)}` : '';
+      const people = (regs || []).filter((r: any) => Number(r.telegram_id) > 0)
+        .map((r: any) => ({ id: Number(r.telegram_id), name: r.name || 'Участник', avatar: avatarOf(Number(r.telegram_id)) }));
+      const nameById = new Map(people.map((x) => [x.id, x.name]));
+      const notify = async (chatId: number, text: string) => {
+        if (!BOT_TOKEN || !chatId) return;
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+          });
+        } catch { /* уведомление — не повод ронять задачу */ }
+      };
+      const escT = (v: any) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const dueText = (iso?: string | null) => {
+        if (!iso) return '';
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? '' : d.toLocaleString('ru-RU', { day: 'numeric', month: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Minsk' });
+      };
+
+      if (action === 'event_task_add') {
+        const title = String(body.title || '').trim().slice(0, 200);
+        if (!title) return res.status(200).json({ ok: false, error: 'Что нужно сделать?' });
+        const assignee = Number(body.assignee) || null;
+        if (assignee && !nameById.has(assignee)) return res.status(200).json({ ok: false, error: 'Назначить можно только участнику события' });
+        const due = body.dueAt && !Number.isNaN(new Date(body.dueAt).getTime()) ? new Date(body.dueAt).toISOString() : null;
+        const row: any = { event_id: evId, title, taken_by: assignee, done: false, created_by: user.id, assigned_by: assignee ? user.id : null, due_at: due };
+        let ins = await supabase.from('tasks').insert(row).select('id').single();
+        if (ins.error && /due_at|assigned_by|column/i.test(ins.error.message)) {
+          // Миграция 2026-09-27-task-deadlines.sql не накатана — без срока.
+          const { due_at, assigned_by, ...core } = row;
+          ins = await supabase.from('tasks').insert(core).select('id').single();
+        }
+        if (ins.error) return res.status(200).json({ ok: false, error: ins.error.message });
+        const who = nameById.get(user.id) || 'Организатор';
+        if (assignee && assignee !== user.id) {
+          await notify(assignee, `📌 <b>${escT(who)}</b> назначил тебе задачу на «${escT((ev as any).title)}»:\n\n${escT(title)}${due ? `\n⏰ до ${escT(dueText(due))}` : ''}\n\nОтметить «готово» — в карточке события, блок «Задачи».`);
+        }
+        const { data: eg } = await supabase.from('event_groups').select('chat_id').eq('event_id', evId).eq('active', true).maybeSingle();
+        if ((eg as any)?.chat_id) {
+          await notify(Number((eg as any).chat_id), `📌 Задача${assignee ? ` для <b>${escT(nameById.get(assignee))}</b>` : ' — кто возьмёт?'}: ${escT(title)}${due ? ` · до ${escT(dueText(due))}` : ''}`);
+        }
+      }
+
+      if (action === 'event_task_update') {
+        const taskId = Number(body.taskId);
+        const op = String(body.op || '');
+        const { data: t } = await supabase.from('tasks').select('id,event_id,taken_by,done,title,created_by').eq('id', taskId).maybeSingle();
+        if (!t || String((t as any).event_id) !== evId) return res.status(200).json({ ok: false, error: 'Задача не найдена' });
+        const owner = Number((t as any).taken_by) || 0;
+        if (op === 'take') {
+          if (owner && owner !== user.id) return res.status(200).json({ ok: false, error: 'Задачу уже взял другой' });
+          await supabase.from('tasks').update({ taken_by: user.id }).eq('id', taskId);
+        } else if (op === 'drop') {
+          if (owner !== user.id && !isLead) return res.status(200).json({ ok: false, error: 'Это не твоя задача' });
+          await supabase.from('tasks').update({ taken_by: null }).eq('id', taskId);
+        } else if (op === 'done' || op === 'undo') {
+          if (owner && owner !== user.id && !isLead) return res.status(200).json({ ok: false, error: 'Закрыть может тот, кто взял, или организатор' });
+          const patch: any = op === 'done' ? { done: true, taken_by: owner || user.id, done_at: new Date().toISOString() } : { done: false, done_at: null };
+          const up = await supabase.from('tasks').update(patch).eq('id', taskId);
+          if (up.error && /done_at|column/i.test(up.error.message)) { delete patch.done_at; await supabase.from('tasks').update(patch).eq('id', taskId); }
+          const creator = Number((t as any).created_by) || 0;
+          if (op === 'done' && creator && creator !== user.id) {
+            await notify(creator, `✅ <b>${escT(nameById.get(user.id) || 'Участник')}</b> выполнил задачу «${escT((t as any).title)}» (${escT((ev as any).title)}).`);
+          }
+        } else if (op === 'delete') {
+          if (!isLead && Number((t as any).created_by) !== user.id) return res.status(200).json({ ok: false, error: 'Удалить может автор или организатор' });
+          await supabase.from('tasks').delete().eq('id', taskId);
+        } else return res.status(200).json({ ok: false, error: 'bad-op' });
+      }
+
+      let q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,due_at,created_at').eq('event_id', evId).order('done').order('created_at');
+      if (q.error) q = await supabase.from('tasks').select('id,title,taken_by,done,created_by,created_at').eq('event_id', evId).order('done').order('created_at') as any;
+      const tasks = (q.data || []).map((t: any) => ({
+        id: t.id, title: t.title, done: !!t.done, dueAt: t.due_at || null,
+        assignee: t.taken_by ? { id: Number(t.taken_by), name: nameById.get(Number(t.taken_by)) || 'Участник', avatar: avatarOf(Number(t.taken_by)) } : null,
+        mine: Number(t.taken_by) === user.id, canManage: isLead || Number(t.created_by) === user.id,
+      }));
+      return res.status(200).json({ ok: true, tasks, people, isLead, me: user.id });
+    }
+
     if (action === 'rules_state') {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
@@ -931,13 +1031,81 @@ export default async function handler(req: any, res: any) {
         const { data: inv } = await supabase.from('app_config').select('value').eq('key', 'club_inventory').maybeSingle();
         let club: any[] = [];
         try { club = JSON.parse(String((inv as any)?.value || '[]')); } catch { club = []; }
+        // Люди клуба с фото — для «у кого сейчас», «чья» и «кто вложился».
+        const { data: ppl } = await supabase.from('members').select('telegram_id,first_name,username,status,is_core').or('status.eq.approved,is_core.eq.true').limit(400);
+        const people = (ppl || []).map((m: any) => ({ id: Number(m.telegram_id), name: m.first_name || (m.username ? `@${m.username}` : 'Участник'), username: m.username || '', avatar: avatarOf(Number(m.telegram_id)) }));
+        const pById = new Map(people.map((x) => [x.id, x]));
+        const person = (id: any, name?: any) => {
+          const n = Number(id) || 0; const p = n ? pById.get(n) : null;
+          return p || (name ? { id: n || null, name: String(name), username: '', avatar: n ? avatarOf(n) : '' } : null);
+        };
+        club = club.map((it: any) => ({
+          ...it,
+          holder: person(it.holderId, it.holderName),
+          owner: person(it.ownerId, it.ownerName),
+          contributors: (Array.isArray(it.contributors) ? it.contributors : []).map((c: any) => ({ ...c, avatar: c.tgId ? avatarOf(Number(c.tgId)) : '' })),
+          mine: Number(it.holderId) === user.id || Number(it.ownerId) === user.id,
+        }));
         return res.status(200).json({
+          people,
           shared: (shared || []).map((g: any) => {
             const o: any = byId.get(Number(g.telegram_id)) || {};
             return { ...shapeGear(g), owner: { name: o.first_name || (o.username ? `@${o.username}` : 'Участник'), username: o.username || '', avatar: avatarOf(Number(g.telegram_id)) } };
           }),
           club,
         });
+      }
+      /**
+       * Вещь клуба / чужая вещь у меня на руках. «Олег передал мне ракетку,
+       * сетку и три мяча» раньше жило только в памяти. Теперь участник сам
+       * отмечает: что, чьё, у кого сейчас и кто на неё скидывался. Реестр тот
+       * же, что видит бот (app_config.club_inventory). Править запись может
+       * тот, у кого вещь, её владелец или костяк.
+       */
+      if (action === 'gear_club_save' || action === 'gear_club_delete') {
+        const KEY = 'club_inventory';
+        const { data: inv } = await supabase.from('app_config').select('value').eq('key', KEY).maybeSingle();
+        let items: any[] = [];
+        try { items = JSON.parse(String((inv as any)?.value || '[]')); } catch { items = []; }
+        const isCoreMe = (me as any).is_core === true;
+        const canEdit = (it: any) => isCoreMe || Number(it.holderId) === user.id || Number(it.ownerId) === user.id;
+        if (action === 'gear_club_delete') {
+          const i = items.findIndex((x: any) => x.id === String(body.id));
+          if (i < 0) return res.status(404).json({ error: 'Вещь не найдена' });
+          if (!canEdit(items[i])) return res.status(403).json({ error: 'Убрать может тот, у кого вещь, владелец или костяк' });
+          items.splice(i, 1);
+        } else {
+          const g = body.item || {};
+          const title = String(g.title || '').trim().slice(0, 120);
+          if (!title) return res.status(400).json({ error: 'Назови вещь' });
+          const nameOf = async (id: number) => {
+            if (!id) return null;
+            const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', id).maybeSingle();
+            return (m as any)?.first_name || ((m as any)?.username ? `@${(m as any).username}` : null);
+          };
+          const holderId = Number(g.holderId) || user.id;
+          const ownerId = Number(g.ownerId) || null;
+          const prev = g.id ? items.find((x: any) => x.id === String(g.id)) : null;
+          if (prev && !canEdit(prev)) return res.status(403).json({ error: 'Править может тот, у кого вещь, владелец или костяк' });
+          const item = {
+            ...(prev || {}),
+            id: prev?.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            title,
+            kind: ['club', 'shared', 'personal'].includes(g.kind) ? g.kind : (ownerId && ownerId !== user.id ? 'personal' : 'club'),
+            qty: Math.max(1, Math.min(99, Number(g.qty) || 1)),
+            holderId, holderName: await nameOf(holderId),
+            ownerId, ownerName: ownerId ? await nameOf(ownerId) : (g.ownerName ? String(g.ownerName).slice(0, 60) : null),
+            contributors: (Array.isArray(g.contributors) ? g.contributors : []).slice(0, 20).map((c: any) => ({
+              name: String(c?.name || '').slice(0, 60), tgId: Number(c?.tgId) || null, amount: Number(c?.amount) || null, paid: c?.paid === true,
+            })).filter((c: any) => c.name),
+            note: g.note ? String(g.note).slice(0, 200) : null,
+            returned: false,
+            updatedAt: new Date().toISOString(),
+          };
+          if (prev) items[items.indexOf(prev)] = item; else items.push(item);
+        }
+        await supabase.from('app_config').upsert({ key: KEY, value: JSON.stringify(items) }, { onConflict: 'key' });
+        return res.status(200).json({ ok: true });
       }
       return res.status(400).json({ error: 'Unknown gear action' });
     }

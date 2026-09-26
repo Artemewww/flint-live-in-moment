@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
-import { HeroGallery, IncludedBlock, FaqBlock, TripBlock } from './EventShowcase';
+import EventTasks from './EventTasks';
+import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock, WhoBrings } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 , UserPlus} from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
 import { haptic } from '../telegram';
@@ -525,7 +526,7 @@ export default function EventDetailModal({
               {isRegistered && (
                 <button
                   type="button"
-                  onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('openProfileTab', { detail: { tab: 'overview' } })); }}
+                  onClick={() => document.getElementById('sect-tasks')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
                   className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
                 >
                   <span className="text-base leading-none">📋</span>
@@ -722,6 +723,11 @@ export default function EventDetailModal({
                   <Check className="w-4 h-4" /> Твоё участие
                 </span>
 
+                {/* Карта точки — только записавшимся: место видят участники. */}
+                {event.format !== 'online' && (
+                  <YandexMapBlock lat={event.coordinates?.lat || Number(extractCoords(event.location || '')?.lat) || undefined} lng={event.coordinates?.lng || Number(extractCoords(event.location || '')?.lon) || undefined} place={prettyPlace(event.location)} />
+                )}
+
                 {/* Кнопка «Позвать своих» убрана: то же действие уже живёт
                     иконкой у крестика наверху. Две кнопки под одно действие на
                     одной странице — это не забота, а сомнение в том, что
@@ -888,6 +894,9 @@ export default function EventDetailModal({
               </div>
             )}
 
+            {/* Задачи события: кто что делает и к какому сроку — всем записавшимся. */}
+            {isRegistered && <EventTasks eventId={event.id} />}
+
             {/* Программа подня́та выше логистики: человек сначала решает,
                 идёт ли он на ЭТО, и только потом — как добираться. Раньше
                 она лежала под составом и описанием, и до неё доскроливали
@@ -1043,6 +1052,14 @@ export default function EventDetailModal({
 
             <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
             <TripBlock trip={extras.trip} />
+            {/* Общее снаряжение: кто что везёт — видно всем, распределяет бот. */}
+            <WhoBrings needs={extras.needs || []} people={roster} />
+            {extras.costNote && (
+              <div className="rounded-2xl border border-white/10 bg-white/[.03] p-4">
+                <span className="block text-[10px] font-mono uppercase tracking-widest text-white/40">💳 Как с деньгами</span>
+                <p className="mt-1 text-sm text-white/80">{extras.costNote}</p>
+              </div>
+            )}
 
             <div id="sect-gear" className="scroll-mt-4" />
             {/* Что взять с собой. Для онлайн-события блок бессмысленен: человек

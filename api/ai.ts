@@ -546,6 +546,10 @@ export default async function handler(req: any, res: any) {
          `- notIncluded: 0–5 пунктов «что НЕ входит» (напр. «перелёт», «личные расходы»);\n` +
          `- faq: 2–5 вопросов, которые участники реально зададут ИМЕННО про это событие, с короткими ответами ` +
          `(«можно без опыта?», «что если дождь?»). Не выдумывай факты — если ответ зависит от организатора, так и скажи;\n` +
+         `- costModel: как делим деньги — 'self' (каждый платит сам: кино, кафе), 'pool' (общий взнос/аренда делится), ` +
+         `'food_share' (скидываемся на общий стол, выезды с готовкой), 'bring_own' (каждый везёт своё);\n` +
+         `- costNote: одна фраза-пояснение про деньги (напр. «баня 300 BYN на всех, продукты ≈25 BYN/чел»), без выдуманных сумм — пусто, если не ясно;\n` +
+         `- needs: 0–8 вещей, которые нужны НА ВСЕХ и которые кто-то должен привезти (мангал, котёл, тент, колонка, веники…). Для кино/кафе — пустой список;\n` +
          `- trip: ТОЛЬКО для scale='expedition' — { docs: что с документами/визой, flights: как добираемся, budget: бюджет на человека одной строкой }, иначе пустые строки.`;
       const p = await genJSON(ai, apiKey, sys, {
         type: Type.OBJECT,
@@ -583,6 +587,9 @@ export default async function handler(req: any, res: any) {
           notIncluded: { type: Type.ARRAY, items: { type: Type.STRING } },
           faq: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { q: { type: Type.STRING }, a: { type: Type.STRING } } } },
           trip: { type: Type.OBJECT, properties: { docs: { type: Type.STRING }, flights: { type: Type.STRING }, budget: { type: Type.STRING } } },
+          costModel: { type: Type.STRING, enum: ['self', 'pool', 'food_share', 'bring_own'] },
+          costNote: { type: Type.STRING },
+          needs: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
         required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
       });
@@ -636,6 +643,9 @@ export default async function handler(req: any, res: any) {
         included: (Array.isArray(p.included) ? p.included : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
         notIncluded: (Array.isArray(p.notIncluded) ? p.notIncluded : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
         faq: (Array.isArray(p.faq) ? p.faq : []).filter((f: any) => f && f.q && f.a).map((f: any) => ({ q: String(f.q).slice(0, 160), a: String(f.a).slice(0, 600) })).slice(0, 6),
+        costModel: ['self', 'pool', 'food_share', 'bring_own'].includes(p.costModel) ? p.costModel : '',
+        costNote: String(p.costNote || '').slice(0, 200),
+        needs: (Array.isArray(p.needs) ? p.needs : []).map((x: any) => String(x).slice(0, 60)).filter(Boolean).slice(0, 10),
         trip: p.scale === 'expedition' && p.trip ? { docs: String(p.trip.docs || ''), flights: String(p.trip.flights || ''), budget: String(p.trip.budget || '') } : null,
       };
       /**

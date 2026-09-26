@@ -5,6 +5,8 @@
 import { getInitData } from './telegram';
 
 export interface RegisterPayload {
+  /** Не участвует в общем столе (costModel = food_share). */
+  food_optout?: boolean;
   eventId: string;
   eventTitle: string;
   name: string;

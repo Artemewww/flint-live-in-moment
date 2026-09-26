@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrganizerPicker from './OrganizerPicker';
 import EventExtrasEditor from './EventExtrasEditor';
+import { makeShareCard } from '../shareCard';
 import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
@@ -977,6 +978,10 @@ function adminFetch(input: string, init?: RequestInit): Promise<Response> {
   return fetch(input, { ...init, headers });
 }
 const SESSION_TTL = 12 * 60 * 60 * 1000;
+/** Место для карточки шеринга: без координат и хвостов в скобках. */
+function prettyPlaceShort(loc?: string): string {
+  return String(loc || '').replace(/\(?-?\d{1,3}\.\d+\s*,\s*-?\d{1,3}\.\d+\)?/g, '').replace(/\s{2,}/g, ' ').replace(/[,\s·]+$/, '').trim();
+}
 
 /**
  * Кнопка «Войти через Telegram» (официальный Login Widget) для обычного
@@ -5088,10 +5093,11 @@ function EditEventModal({ event, onClose, onSave }: {
   onClose: () => void;
   onSave: (event: CommunityEvent) => void;
 }) {
-  const [generatingCover, setGeneratingCover] = useState(false);
   // Правка программы промптом + пересчёт при смене даты (правки из PDF 16.07).
   const [progPrompt, setProgPrompt] = useState('');
   const [progBusy, setProgBusy] = useState(false);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareNote, setShareNote] = useState('');
   const [formData, setFormData] = useState({
     title: event.title,
     description: event.description,
@@ -5118,7 +5124,8 @@ function EditEventModal({ event, onClose, onSave }: {
     logistics: (event.logistics || {}) as Record<string, any>,
     paymentDetails: (event.paymentDetails || {}) as Record<string, any>,
     houseQualities: (event.houseQualities || []) as HouseQuality[],
-    notifications: ((event as any).notifications || {}) as Record<string, any>
+    notifications: ((event as any).notifications || {}) as Record<string, any>,
+    deputyId: (event.deputyId || null) as number | null,
   });
 
   /**
@@ -5198,22 +5205,29 @@ function EditEventModal({ event, onClose, onSave }: {
       logistics: formData.logistics,
       paymentDetails: formData.paymentDetails,
       houseQualities: formData.houseQualities,
-      notifications: formData.notifications
+      notifications: formData.notifications,
+      deputyId: formData.deputyId || undefined,
     });
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="edit-event-modal">
-      <div className="absolute inset-0 bg-black/95" onClick={onClose} />
+    /* Правка события — во весь экран, а не в окошке шириной с телефон:
+       полей десятки, и в узком контейнере со скроллом в 60% высоты их было
+       неудобно править. Шапка с «Сохранить» всегда на виду. */
+    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0E0E0E]" id="edit-event-modal">
+      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-[#121212]/95 px-4 py-3 backdrop-blur sm:px-8">
+        <button onClick={onClose} className="shrink-0 rounded-full border-none bg-white/10 p-2 text-white cursor-pointer" aria-label="Закрыть"><X className="w-5 h-5" /></button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-white/40">Редактирование</p>
+          <h3 className="truncate font-bold text-base uppercase sm:text-lg">{formData.title || event.title}</h3>
+        </div>
+        <button onClick={handleSave} className="shrink-0 rounded-xl border-none bg-brand px-5 py-2.5 text-xs font-black uppercase text-black cursor-pointer hover:bg-brand-hover">Сохранить</button>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4"
-      >
-        <h3 className="font-bold text-lg uppercase">Редактировать: {event.title}</h3>
+      <div className="flex-1 overflow-y-auto">
+        <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-24 sm:px-8">
+          <OrganizerPicker value={formData.deputyId} onChange={(id) => setFormData({ ...formData, deputyId: id })} />
 
-        <div className="space-y-3 max-h-[60vh] overflow-y-auto">
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
               Название *
@@ -5355,40 +5369,28 @@ function EditEventModal({ event, onClose, onSave }: {
             )}
           </div>
 
-          <div className="mt-2">
-            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">Вертикальная афиша для Telegram</label>
+          <div className="mt-2 space-y-2">
+            <label className="text-[10px] text-white/40 uppercase font-mono block">Картинка для шеринга (превью ссылки и бот)</label>
+            {/* Превью, которое видят при пересылке ссылки: фото, логотип
+                FLINT слева сверху, дата и название фирменным шрифтом. */}
+            <button
+              type="button"
+              disabled={shareBusy || !formData.title}
+              onClick={async () => {
+                setShareBusy(true); setShareNote('');
+                try {
+                  const url = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
+                  setFormData((f) => ({ ...f, telegramImage: url }));
+                  setShareNote('Готово — не забудь «Сохранить».');
+                } catch (e) { setShareNote(`Не получилось: ${(e as Error).message}`); }
+                finally { setShareBusy(false); }
+              }}
+              className="w-full rounded-xl border border-brand/40 bg-brand/10 py-2.5 text-xs font-black uppercase text-brand cursor-pointer disabled:opacity-50"
+            >{shareBusy ? 'Рисую карточку…' : '✨ Сделать превью с логотипом и датой'}</button>
+            {shareNote && <p className="text-[10px] text-brand">{shareNote}</p>}
             <ImageUploadField value={formData.telegramImage || ''} onChange={(url) => setFormData({...formData, telegramImage: url})} />
-            <p className="text-[9px] text-white/30 mt-1">Вертикальная картинка (афиша) для рассылок в Telegram. Если не задана — используется основная.</p>
+            <p className="text-[9px] text-white/30">Её показывает Telegram, когда пересылают ссылку, и бот, когда присылает событие. Можно загрузить свою афишу вместо сгенерированной.</p>
           </div>
-
-          {/* AI-генерация обложки с лоадером */}
-          <button
-            type="button"
-            disabled={!formData.title.trim() || generatingCover}
-            onClick={async () => {
-              setGeneratingCover(true);
-              try {
-                const url = await aiGenerateImage(formData.title, formData.description);
-                if (url) setFormData({...formData, image: url});
-                else alert('ИИ не смог сгенерировать обложку. Попробуй позже или загрузи свою.');
-              } catch (e) {
-                console.error('AI generate_image error:', e);
-                alert('Ошибка генерации: ' + (e as Error).message);
-              } finally {
-                setGeneratingCover(false);
-              }
-            }}
-            className="w-full bg-brand/10 border border-brand/40 text-brand font-bold text-sm py-2 rounded-xl cursor-pointer hover:bg-brand/20 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
-          >
-            {generatingCover ? (
-              <>
-                <span className="w-4 h-4 border-2 border-brand/30 border-t-brand rounded-full animate-spin" />
-                Генерация…
-              </>
-            ) : (
-              '🎨 Сгенерировать обложку'
-            )}
-          </button>
 
           <div>
             <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
@@ -5405,19 +5407,8 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <QualityChips selected={formData.houseQualities} onChange={(q) => setFormData({...formData, houseQualities: q})} />
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Участники
-              </label>
-              <input
-                type="number"
-                value={formData.participantsCount}
-                onChange={(e) => setFormData({...formData, participantsCount: parseInt(e.target.value)})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              />
-            </div>
-
+          {/* «Участники» руками не правятся: число считается по записям. */}
+          <div>
             <div>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
                 Максимум мест
@@ -5593,23 +5584,22 @@ function EditEventModal({ event, onClose, onSave }: {
               <option value="closed">Завершено</option>
             </select>
           </div>
+          <div className="flex gap-2 pt-2">
+            <button
+              onClick={handleSave}
+              className="flex-1 bg-brand hover:bg-brand-hover text-black py-3.5 rounded-xl text-xs font-black uppercase border-none cursor-pointer"
+            >
+              Сохранить
+            </button>
+            <button
+              onClick={onClose}
+              className="flex-1 border border-white/10 bg-transparent py-3.5 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer"
+            >
+              Отмена
+            </button>
+          </div>
         </div>
-
-        <div className="flex gap-2 pt-2">
-          <button
-            onClick={handleSave}
-            className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase"
-          >
-            Сохранить
-          </button>
-          <button
-            onClick={onClose}
-            className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60"
-          >
-            Отмена
-          </button>
-        </div>
-      </motion.div>
+      </div>
     </div>
   );
 }
@@ -5771,6 +5761,9 @@ function AddEventModal({ onClose, onAdd }: {
     if (d.notIncluded?.length) extra.notIncluded = d.notIncluded;
     if (d.faq?.length) extra.faq = d.faq;
     if (d.trip) extra.trip = d.trip;
+    if (d.costModel) extra.costModel = d.costModel;
+    if (d.costNote) extra.costNote = d.costNote;
+    if (d.needs?.length) extra.needs = d.needs;
     if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));
 
@@ -5801,8 +5794,16 @@ function AddEventModal({ onClose, onAdd }: {
     }
   };
 
-  const handleAdd = () => {
-    if (!formData.title || !formData.date || !organizerId) return;
+  const [creating, setCreating] = useState(false);
+  const handleAdd = async () => {
+    if (!formData.title || !formData.date || !organizerId || creating) return;
+    setCreating(true);
+    // Карточка для шеринга собирается сама: без неё пересланная ссылка
+    // выглядит голой. Не получилось (нет обложки/сети) — событие всё равно создаём.
+    let shareUrl = '';
+    try {
+      shareUrl = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
+    } catch { /* без карточки */ }
 
     const newEvent: CommunityEvent = {
       id: `event-${Date.now()}`,
@@ -5838,7 +5839,9 @@ function AddEventModal({ onClose, onAdd }: {
       travelTime: formData.travelTime,
       notifications: { reminder7d: true, reminder3d: true, reminder1d: true, reminder3h: true, reminder1h: true, ...formData.notifications },
       deputyId: organizerId,
+      ...(shareUrl ? { telegramImage: shareUrl } : {}),
     };
+    setCreating(false);
     onAdd(newEvent);
   };
 
@@ -5863,7 +5866,7 @@ function AddEventModal({ onClose, onAdd }: {
       <motion.div
         initial={{ opacity: 0, scale: 0.95 }}
         animate={{ opacity: 1, scale: 1 }}
-        className="bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
+        className="form-stable bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
       >
         <h3 className="font-bold text-lg uppercase">Новое мероприятие</h3>
 
@@ -6041,8 +6044,8 @@ function AddEventModal({ onClose, onAdd }: {
 
         {/* КНОПКИ */}
         <div className="flex gap-2 pt-2">
-          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
-            ✅ Создать
+          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId || creating} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
+            {creating ? "Создаю…" : "✅ Создать"}
           </button>
           <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">
             Отмена
