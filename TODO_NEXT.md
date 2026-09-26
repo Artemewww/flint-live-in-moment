@@ -195,7 +195,8 @@ TODO_NEXT.md             # ✅ Этот файл (обновлён)
 - [x] Код задеплоен через GitHub Integration (auto-deploy)
 - [ ] `ADMIN_TOKEN` установлен в Vercel Environment Variables
 - [ ] Миграции `club_assets` и `support_messages` накатаны в Supabase
-- [ ] **Миграция `2026-09-25-buddy-pairs.sql` накатана** (иначе бади не покажутся)
+- [x] **Миграция `2026-09-25-buddy-pairs.sql` накатана** — 26.09.2026
+- [x] Миграция `2026-member-gender.sql` накатана (+ страховочные `birthday date`, `phone text`) — 26.09.2026
 - [ ] Проверена работа Smart Hype в production (прогресс-бар, milestone-уведомления)
 
 ---
