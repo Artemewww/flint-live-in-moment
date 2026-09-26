@@ -256,7 +256,7 @@ export default function App() {
     return name.trim().charAt(0).toUpperCase() || '?';
   }, []);
   /** С какой вкладки открыть профиль (deep-link ?checklist ведёт в «Снаряжение»). */
-  const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'kb' | 'settings'>('overview');
+  const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'chat' | 'kb' | 'settings'>('overview');
   /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
   const musicPlaying = useMusicPlayer().playing;
   /**
@@ -330,6 +330,17 @@ export default function App() {
     window.addEventListener('flint:events-refetch', bump);
     return () => window.removeEventListener('flint:events-refetch', bump);
   }, []);
+
+  // Тап по событию в профиле → открываем его карточку.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = String((e as CustomEvent).detail || '');
+      const ev = events.find((x) => x.id === id);
+      if (ev) { setShowUserStats(false); setActiveDetailEvent(ev); }
+    };
+    window.addEventListener('flint:open-event', open);
+    return () => window.removeEventListener('flint:open-event', open);
+  }, [events]);
 
   // Загружаем события из API (Supabase) или fallback на JSON.
   // Афиша закрыта на сервере: шлём initData участника и реф-код приглашения.

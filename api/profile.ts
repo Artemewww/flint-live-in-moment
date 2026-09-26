@@ -931,13 +931,81 @@ export default async function handler(req: any, res: any) {
         const { data: inv } = await supabase.from('app_config').select('value').eq('key', 'club_inventory').maybeSingle();
         let club: any[] = [];
         try { club = JSON.parse(String((inv as any)?.value || '[]')); } catch { club = []; }
+        // Люди клуба с фото — для «у кого сейчас», «чья» и «кто вложился».
+        const { data: ppl } = await supabase.from('members').select('telegram_id,first_name,username,status,is_core').or('status.eq.approved,is_core.eq.true').limit(400);
+        const people = (ppl || []).map((m: any) => ({ id: Number(m.telegram_id), name: m.first_name || (m.username ? `@${m.username}` : 'Участник'), username: m.username || '', avatar: avatarOf(Number(m.telegram_id)) }));
+        const pById = new Map(people.map((x) => [x.id, x]));
+        const person = (id: any, name?: any) => {
+          const n = Number(id) || 0; const p = n ? pById.get(n) : null;
+          return p || (name ? { id: n || null, name: String(name), username: '', avatar: n ? avatarOf(n) : '' } : null);
+        };
+        club = club.map((it: any) => ({
+          ...it,
+          holder: person(it.holderId, it.holderName),
+          owner: person(it.ownerId, it.ownerName),
+          contributors: (Array.isArray(it.contributors) ? it.contributors : []).map((c: any) => ({ ...c, avatar: c.tgId ? avatarOf(Number(c.tgId)) : '' })),
+          mine: Number(it.holderId) === user.id || Number(it.ownerId) === user.id,
+        }));
         return res.status(200).json({
+          people,
           shared: (shared || []).map((g: any) => {
             const o: any = byId.get(Number(g.telegram_id)) || {};
             return { ...shapeGear(g), owner: { name: o.first_name || (o.username ? `@${o.username}` : 'Участник'), username: o.username || '', avatar: avatarOf(Number(g.telegram_id)) } };
           }),
           club,
         });
+      }
+      /**
+       * Вещь клуба / чужая вещь у меня на руках. «Олег передал мне ракетку,
+       * сетку и три мяча» раньше жило только в памяти. Теперь участник сам
+       * отмечает: что, чьё, у кого сейчас и кто на неё скидывался. Реестр тот
+       * же, что видит бот (app_config.club_inventory). Править запись может
+       * тот, у кого вещь, её владелец или костяк.
+       */
+      if (action === 'gear_club_save' || action === 'gear_club_delete') {
+        const KEY = 'club_inventory';
+        const { data: inv } = await supabase.from('app_config').select('value').eq('key', KEY).maybeSingle();
+        let items: any[] = [];
+        try { items = JSON.parse(String((inv as any)?.value || '[]')); } catch { items = []; }
+        const isCoreMe = (me as any).is_core === true;
+        const canEdit = (it: any) => isCoreMe || Number(it.holderId) === user.id || Number(it.ownerId) === user.id;
+        if (action === 'gear_club_delete') {
+          const i = items.findIndex((x: any) => x.id === String(body.id));
+          if (i < 0) return res.status(404).json({ error: 'Вещь не найдена' });
+          if (!canEdit(items[i])) return res.status(403).json({ error: 'Убрать может тот, у кого вещь, владелец или костяк' });
+          items.splice(i, 1);
+        } else {
+          const g = body.item || {};
+          const title = String(g.title || '').trim().slice(0, 120);
+          if (!title) return res.status(400).json({ error: 'Назови вещь' });
+          const nameOf = async (id: number) => {
+            if (!id) return null;
+            const { data: m } = await supabase.from('members').select('first_name,username').eq('telegram_id', id).maybeSingle();
+            return (m as any)?.first_name || ((m as any)?.username ? `@${(m as any).username}` : null);
+          };
+          const holderId = Number(g.holderId) || user.id;
+          const ownerId = Number(g.ownerId) || null;
+          const prev = g.id ? items.find((x: any) => x.id === String(g.id)) : null;
+          if (prev && !canEdit(prev)) return res.status(403).json({ error: 'Править может тот, у кого вещь, владелец или костяк' });
+          const item = {
+            ...(prev || {}),
+            id: prev?.id || Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            title,
+            kind: ['club', 'shared', 'personal'].includes(g.kind) ? g.kind : (ownerId && ownerId !== user.id ? 'personal' : 'club'),
+            qty: Math.max(1, Math.min(99, Number(g.qty) || 1)),
+            holderId, holderName: await nameOf(holderId),
+            ownerId, ownerName: ownerId ? await nameOf(ownerId) : (g.ownerName ? String(g.ownerName).slice(0, 60) : null),
+            contributors: (Array.isArray(g.contributors) ? g.contributors : []).slice(0, 20).map((c: any) => ({
+              name: String(c?.name || '').slice(0, 60), tgId: Number(c?.tgId) || null, amount: Number(c?.amount) || null, paid: c?.paid === true,
+            })).filter((c: any) => c.name),
+            note: g.note ? String(g.note).slice(0, 200) : null,
+            returned: false,
+            updatedAt: new Date().toISOString(),
+          };
+          if (prev) items[items.indexOf(prev)] = item; else items.push(item);
+        }
+        await supabase.from('app_config').upsert({ key: KEY, value: JSON.stringify(items) }, { onConflict: 'key' });
+        return res.status(200).json({ ok: true });
       }
       return res.status(400).json({ error: 'Unknown gear action' });
     }
