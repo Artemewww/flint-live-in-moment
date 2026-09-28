@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Avatar from './Avatar';
 import EventTasks from './EventTasks';
+import EventContributions from './EventContributions';
 import { HeroGallery, IncludedBlock, FaqBlock, TripBlock, YandexMapBlock, WhoBrings } from './EventShowcase';
 import { motion } from 'motion/react';
 import {
@@ -896,6 +897,11 @@ export default function EventDetailModal({
 
             {/* Задачи события: кто что делает и к какому сроку — всем записавшимся. */}
             {isRegistered && <EventTasks eventId={event.id} />}
+
+            {/* Поступки события: «кто что сделал». Организатор подтверждает —
+                только тогда эпизод идёт в репутацию и приносит баллы. Кому что
+               visible, решает сервер: участник видит лишь свои подтверждённые. */}
+            {(isRegistered || isClubMember) && <EventContributions eventId={event.id} />}
 
             {/* Программа подня́та выше логистики: человек сначала решает,
                 идёт ли он на ЭТО, и только потом — как добираться. Раньше

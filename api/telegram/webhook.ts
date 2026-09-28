@@ -491,6 +491,51 @@ async function maybeDigestChat(chatId: number, force = false, daysBack = 0): Pro
 
   const decisions = Array.isArray((parsed as any).decisions) ? (parsed as any).decisions.slice(0, 5) : [];
 
+  /**
+   * ПОСТУПКИ. Достаём из той же переписки, что уже разобрали выше — отдельный
+   * вызов модели не нужен, квота free-тира не тратится. Найденное копится
+   * «кандидатами» (pending) и уходит ОРГАНИЗАТОРУ события на подтверждение:
+   * без его слова ни репутация, ни баллы не меняются.
+   *
+   * Почему не пишем сразу в репутацию: модель склонна к лести и путает
+   * обещание («я возьму») с фактом. Цена ошибки — репутация живого человека.
+   */
+  let contributions: any[] = [];
+  try {
+    const saved = await extractContributions(evId, chatId, rows as unknown as ContribMsg[]);
+    if (saved > 0) contributions = await loadPending(evId);
+  } catch (e: any) {
+    console.warn('[contributions] разбор не удался:', e?.message || e);
+  }
+
+  if (contributions.length) {
+    // Шлём ОРГАНИЗАТОРУ события, а не всему костяку: организаторов много,
+    // и грузить каждого чужими выездами нельзя. Нет организатора — молчим,
+    // в админке эпизоды всё равно видны.
+    try {
+      const { data: evRow } = await supabase.from('events').select('title,deputy_id').eq('id', evId).maybeSingle();
+      const orgId = Number((evRow as any)?.deputy_id || 0);
+      if (orgId > 0) {
+        const nameById = new Map<number, string>();
+        for (const [name, id] of nameToId.entries()) if (!nameById.has(id)) nameById.set(id, name);
+        const list = contributions
+          .map((c: any) => contributionLine(c, nameById.get(Number(c.subject_id)) || `ID ${c.subject_id}`))
+          .join('\n');
+        await tg('sendMessage', {
+          chat_id: orgId, parse_mode: 'HTML', disable_web_page_preview: true,
+          text:
+            `🎖 <b>Поступки на «${esc(String((evRow as any)?.title || 'событии'))}»</b>\n\n` +
+            `${list}\n\n` +
+            `<i>Нашёл в переписке чата. Подтверди, что так и было — тогда поступок попадёт ` +
+            `в репутацию человека и принесёт баллы. Или отклони, если ИИ понял неверно.</i>`,
+          reply_markup: kb([[{ text: '🎖 Разобрать поступки', callback_data: `ctbl_${evId}` }]]),
+        });
+      }
+    } catch (e: any) {
+      console.warn('[contributions] уведомление организатору не ушло:', e?.message || e);
+    }
+  }
+
   if (notes.length) {
     await tg('sendMessage', {
       chat_id: chatId, parse_mode: 'HTML',
@@ -674,7 +719,8 @@ async function geminiJSON(prompt: string, image?: { mime: string; data: string }
   // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
   // замолкаем на весь день. gemini-2.5-flash для новых ключей отдаёт 404.
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
-    'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+    'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
   const attempt = async (model: string, key: string): Promise<any | null> => {
     const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
@@ -717,7 +763,8 @@ async function geminiText(prompt: string): Promise<string> {
   // поэтому очередь длиннее: исчерпали одну — идём к следующей, а не
   // замолкаем на весь день. gemini-2.5-flash для новых ключей отдаёт 404.
   const models = [process.env.GEMINI_MODEL, 'gemini-flash-latest', 'gemini-3-flash-preview',
-    'gemini-flash-lite-latest', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
+    'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-flash-lite-latest',
+    'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(Boolean) as string[];
   let sawQuotaError = false;
   const attempt = async (model: string, fast: boolean, key: string): Promise<string> => {
     const body: any = { contents: [{ parts: [{ text: prompt }] }] };
@@ -2267,6 +2314,254 @@ function kbMenu() {
     ...Object.entries(KB_SECTIONS).map(([k, v]) => [{ text: v.title, callback_data: `kb_${k}` }]),
     [{ text: '⬅️ В меню', callback_data: 'home' }],
   ]);
+}
+
+/* ═════════════════════ ПОСТУПКИ С СОБЫТИЙ («кто что сделал») ═══════════════
+ * Дублировано из api/_lib/contributions.ts — Vercel НЕ бандлит папки на «_» в
+ * рантайм serverless-функции (MODULE_NOT_FOUND на каждом апдейте вебхука, тот
+ * же фикс, что для reputation, group-ban и camping-checklist). Правь ОБА файла:
+ * там же описана модель и главное правило (ИИ ничего не начисляет сам, решает
+ * организатор события).
+ *
+ * КОРОТКО. Читаем переписку чата → модель достаёт эпизоды → кладём кандидатами
+ * (pending) → организатор подтверждает в боте или в админке → только тогда
+ * сигнал уходит в репутацию и начисляются баллы.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Что может найти ИИ: ТОЛЬКО зелёные сигналы. Репутация не портится доносом модели. */
+const CONTRIB_KINDS: Record<string, { points: number; hint: string }> = {
+  role_done:     { points: 10, hint: 'Взял роль и довёл до конца: видеооператор, повар, водитель, ответственный за закупку' },
+  helped:        { points: 10, hint: 'Помог другим физически или делом: вытащил, подвёз, починил, делился едой и вещами' },
+  calm_conflict: { points: 12, hint: 'Погасил конфликт или разрулил сложную ситуацию, удержал всех в спокойствии' },
+  staff_done:    { points: 12, hint: 'Отработал помощником организатора: координировал, считал деньги, держал безопасность' },
+  growth:        { points: 10, hint: 'Явный рост: справился с тем, что раньше не получалось, вышел за свой предел' },
+  driver:        { points: 8,  hint: 'Вёз людей на своей машине на событие или с события' },
+  brought:       { points: 8,  hint: 'Привёл в клуб нового человека, и тот вписался' },
+  paid_on_time:  { points: 6,  hint: 'Внёс взнос вовремя и без напоминаний' },
+};
+/** Ниже порога не показываем: лучше пропустить поступок, чем выдумать. */
+const CONTRIB_MIN_CONF = 0.7;
+/** На трёх репликах выводов не делаем — нет данных. */
+const CONTRIB_MIN_MSGS = 8;
+
+type ContribMsg = { telegram_id: number; first_name: string; text: string; message_id?: number };
+
+/** Промпт. Держим рядом с CONTRIB_KINDS, чтобы словарь и валидация не разъехались. */
+function contribPrompt(transcript: string): string {
+  const kinds = Object.entries(CONTRIB_KINDS).map(([code, v]) => `  "${code}" — ${v.hint}`).join('\n');
+  return (
+    'Ты разбираешь переписку похода клуба FLINT и находишь ЛИЧНЫЕ ПОСТУПКИ участников.\n' +
+    'Верни СТРОГО JSON:\n' +
+    '{"contributions":[{"who":"имя как в чате","kind":"код","title":"что сделал, до 80 знаков","quote":"цитата из чата","confidence":0.9}]}\n\n' +
+    'ДОПУСТИМЫЕ КОДЫ (только они, ничего другого):\n' + kinds + '\n\n' +
+    'ГЛАВНОЕ ПРАВИЛО — ФАКТ, А НЕ ОБЕЩАНИЕ.\n' +
+    'Поступок есть только там, где человек что-то УЖЕ СДЕЛАЛ или делает прямо сейчас.\n' +
+    '«Я возьму», «могу помочь», «давайте скинемся», «я готов» — это НЕ поступок, пропускай.\n' +
+    '«Привёз», «снял», «разрулил», «вложил», «забрал», «приготовил», «довёз» — это поступок.\n\n' +
+    'ЧТО СЧИТАТЬ ПОСТУПКОМ:\n' +
+    '- Организатор собрал людей, придумал выезд, привёз инвентарь, закрыл вопрос деньгами — role_done.\n' +
+    '- Кто-то помог другому разрешить проблему, поделился едой, выручил на месте — helped.\n' +
+    '- Разрулил сложную ситуацию, в которой другие растерялись или спорили — calm_conflict.\n' +
+    '- Человек вышел за свой обычный уровень, справился с тем, что раньше не мог — growth.\n\n' +
+    'ПРАВИЛА ЦИТАТЫ (обязательно):\n' +
+    '- quote — ДОСЛОВНАЯ фраза из переписки, по которой видно, что это правда.\n' +
+    '- Если подтверждения в переписке нет — не добавляй эпизод вообще. Не додумывай.\n\n' +
+    'ПРАВИЛА ИМЕНИ:\n' +
+    '- who — имя ровно так, как оно подписано в переписке ниже. Люди пишут про третьих лиц\n' +
+    '  («спасибо Ане за видео») — это тоже поступок Ани, и who должно быть её именем.\n\n' +
+    'ПОЛЯ: title — коротко и по-человечески, без канцелярита. confidence — 0.7..1.0.\n' +
+    'Если поступков нет — пустой массив. ЛУЧШЕ ПРОПУСТИТЬ, ЧЕМ ВЫДУМАТЬ.\n' +
+    'Пиши по-русски.\n\nПЕРЕПИСКА:\n' + transcript
+  );
+}
+
+/**
+ * КЛЮЧ ИМЕНИ для сравнения: «Ане» -> «аня», «@Alex_Flint_By» -> «alex».
+ * Держать в синхроне с api/_lib/contributions.ts.
+ */
+function contribNameKey(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/^@/, '')
+    .split(/\s+/)[0]
+    .replace(/[^a-zа-я0-9_]/g, '');
+}
+
+/**
+ * ТРАНСЛИТ. У Артёма в Telegram «ARTDEMENTIEV.BY» (латиница), а модель зовёт его
+ * «Артем» (кириллица) — без транслита они не совпадут НИКОГДА.
+ */
+function contribTranslit(s: string): string {
+  const map: Record<string, string> = {
+    а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ж: 'zh', з: 'z', и: 'i',
+    й: 'y', к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's',
+    т: 't', у: 'u', ф: 'f', х: 'h', ц: 'c', ч: 'ch', ш: 'sh', щ: 'sch',
+    ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+  };
+  return String(s || '').toLowerCase().split('').map((ch) => map[ch] ?? ch).join('').replace(/[^a-z0-9]/g, '');
+}
+
+/** Обе формы имени: как есть и в транслите. */
+function contribNameForms(s: string): string[] {
+  const k = contribNameKey(s);
+  const t = contribTranslit(k);
+  return [...new Set([k, t].filter((x) => x.length >= 2))];
+}
+
+/** Совпадение только при ОДНОЗНАЧНОСТИ: двое «Александров» — никого не отмечаем. */
+function contribMatchPerson(name: string, pool: Array<{ id: number; name: string }>): { id: number | null; ambiguous: boolean } {
+  const forms = contribNameForms(name);
+  if (!forms.length) return { id: null, ambiguous: false };
+  const exact = pool.filter((p) => {
+    const pf = contribNameForms(p.name);
+    return forms.some((f) => pf.includes(f));
+  });
+  if (exact.length === 1) return { id: exact[0].id, ambiguous: false };
+  if (exact.length > 1) return { id: null, ambiguous: true };
+  const near = pool.filter((p) => {
+    const pf = contribNameForms(p.name);
+    return forms.some((f) => pf.some((q) => {
+      const n = 3;
+      return f.length >= n && q.length >= n && f.slice(0, n) === q.slice(0, n);
+    }));
+  });
+  const uniq = [...new Map(near.map((p) => [p.id, p])).values()];
+  return { id: uniq.length === 1 ? uniq[0].id : null, ambiguous: uniq.length > 1 };
+}
+
+/**
+ * Достать поступки из переписки и записать кандидатами.
+ * Возвращает число сохранённых, чтобы вызывающий решал, уведомлять ли организатора.
+ */
+async function extractContributions(eventId: string, chatId: number, messages: ContribMsg[]): Promise<number> {
+  const rows = messages.filter((m) => Number(m.telegram_id) > 0 && String(m.text || '').trim().length > 15).slice(-150);
+  if (rows.length < CONTRIB_MIN_MSGS) return 0;
+
+  // Таблицы может не быть, пока не применена миграция 2026-09-28-contributions.
+  // Проверяем заранее и тихо выходим: иначе каждый разбор чата будет писать
+  // ошибку в лог, а функция — считать, что что-то сломалось.
+  const probe = await supabase.from('event_contributions').select('id').limit(1);
+  if (probe.error) return 0;
+
+  const transcript = rows
+    .map((m) => `${m.message_id ? `#${m.message_id} ` : ''}${m.first_name || 'кто-то'}: ${String(m.text).replace(/\s+/g, ' ').trim().slice(0, 250)}`)
+    .join('\n').slice(0, 14000);
+
+  const raw = await geminiJSON(contribPrompt(transcript));
+  if (!raw || !Array.isArray(raw.contributions)) return 0;
+
+  const pool = [...new Map(rows.map((m) => [Number(m.telegram_id), String(m.first_name || '')])).entries()]
+    .map(([id, name]) => ({ id, name })).filter((p) => p.name);
+
+  // Ссылку на сообщение ищем по дословной цитате: она же доказательство для
+  // организатора. Не нашли — сохраняем без ссылки, терять поступок нельзя.
+  const findMsgId = (quote: string): number | null => {
+    const q = String(quote).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (q.length < 8) return null;
+    for (const m of rows) {
+      if (String(m.text).toLowerCase().replace(/\s+/g, ' ').includes(q.slice(0, 40))) return m.message_id || null;
+    }
+    return null;
+  };
+
+  let saved = 0;
+  for (const c of raw.contributions.slice(0, 24)) {
+    const kind = String(c?.kind || '').trim();
+    if (!CONTRIB_KINDS[kind]) continue; // красное и выдуманное — мимо
+    const title = String(c?.title || '').trim().slice(0, 120);
+    const conf = Number(c?.confidence);
+    if (title.length < 5 || !Number.isFinite(conf) || conf < CONTRIB_MIN_CONF) continue;
+    const hit = contribMatchPerson(String(c?.who || ''), pool);
+    if (!hit.id) continue;
+
+    const { error } = await supabase.from('event_contributions').insert({
+      event_id: eventId, subject_id: hit.id, kind, title,
+      quote: String(c?.quote || '').trim().slice(0, 300),
+      confidence: Math.min(1, conf), chat_id: chatId,
+      message_id: findMsgId(String(c?.quote || '')), status: 'pending',
+    });
+    // 23505 = этот эпизод уже находили в прошлый разбор. Не ошибка.
+    if (!error) saved++;
+  }
+  return saved;
+}
+
+/** Эпизоды, ждущие организатора. Пустой массив, если таблицы ещё нет. */
+async function loadPending(eventId: string): Promise<any[]> {
+  const { data, error } = await supabase.from('event_contributions').select('*')
+    .eq('event_id', eventId).eq('status', 'pending')
+    .order('confidence', { ascending: false }).limit(12);
+  if (error) return [];
+  return data || [];
+}
+
+/** Строка для сообщения: эмодзи берём из общего словаря сигналов. */
+function contributionLine(c: any, subjectName: string): string {
+  const def = CONTRIB_KINDS[c.kind];
+  const emoji = REP_SIGNALS[c.kind]?.emoji || '🎖';
+  return `${emoji} <b>${subjectName}</b> — ${c.title}${def ? ` (+${def.points})` : ''}`;
+}
+
+/**
+ * ПОДТВЕРЖДЕНИЕ — единственное место, где поступок становится репутацией.
+ * Сигнал пишем как «organizer»: он там был и отвечает за слово. Источник «ai»
+ * весит в 3 раза меньше — ровно чтобы пометка парсера не значила ничего без
+ * человека.
+ */
+async function confirmContribution(id: number, byId: number): Promise<{ ok: boolean; error?: string; points?: number; already?: boolean }> {
+  const { data: row } = await supabase.from('event_contributions')
+    .select('id,event_id,subject_id,kind,title,status,points_awarded').eq('id', id).maybeSingle();
+  if (!row) return { ok: false, error: 'not-found' };
+  const c = row as any;
+  if (c.status === 'confirmed') return { ok: true, already: true, points: Number(c.points_awarded) || 0 };
+  // Себе поступок не подтверждают: иначе человек находит добрые дела про себя.
+  if (Number(c.subject_id) === Number(byId)) return { ok: false, error: 'self' };
+  const def = CONTRIB_KINDS[c.kind];
+  if (!def) return { ok: false, error: 'unknown-kind' };
+
+  const sigDef = REP_SIGNALS[c.kind];
+  if (sigDef) {
+    const { error: sigErr } = await supabase.from('reputation_events').insert({
+      subject_id: Number(c.subject_id), author_id: byId, event_id: String(c.event_id),
+      kind: c.kind, polarity: sigDef.polarity, weight: sigDef.weight,
+      source: 'organizer', note: String(c.title).slice(0, 1000),
+    });
+    if (sigErr && !/duplicate key|23505/i.test(sigErr.message)) return { ok: false, error: sigErr.message };
+  }
+
+  // Баллы. Минимум 5: поступок не может весить меньше, чем просто приехать.
+  const points = Math.max(5, Number(def.points) || 5);
+  const { data: m } = await supabase.from('members').select('points').eq('telegram_id', Number(c.subject_id)).maybeSingle();
+  if (m) {
+    await supabase.from('members').update({ points: Number((m as any).points || 0) + points }).eq('telegram_id', Number(c.subject_id));
+    try {
+      await supabase.from('points_log').insert({
+        telegram_id: Number(c.subject_id), event_id: c.event_id,
+        reason: 'contribution', points, description: `Поступок на событии: ${c.title}`,
+      });
+    } catch { /* журнала может не быть до миграции */ }
+  }
+
+  await supabase.from('event_contributions').update({
+    status: 'confirmed', reviewed_by: byId, reviewed_at: new Date().toISOString(), points_awarded: points,
+  }).eq('id', id);
+
+  return { ok: true, points };
+}
+
+/**
+ * ОТКЛОНЕНИЕ. Строку НЕ удаляем: при следующем разборе тех же сообщений она
+ * удержит эпизод от повторного появления, и организатора не спросят дважды.
+ */
+async function rejectContribution(id: number, byId: number): Promise<{ ok: boolean; error?: string }> {
+  const { data: row } = await supabase.from('event_contributions').select('id,status').eq('id', id).maybeSingle();
+  if (!row) return { ok: false, error: 'not-found' };
+  if ((row as any).status === 'confirmed') return { ok: false, error: 'already-confirmed' };
+  const { error } = await supabase.from('event_contributions')
+    .update({ status: 'rejected', reviewed_by: byId, reviewed_at: new Date().toISOString() }).eq('id', id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
 }
 
 /* ═════════════════════════ РЕПУТАЦИЯ УЧАСТНИКА ═════════════════════════════
@@ -3859,6 +4154,104 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: contributor, parse_mode: 'HTML',
             text: `🤔 Организатор сбора «<b>${title}</b>» не нашёл твой перевод на ${amount} BYN.\n\nЕсли ты переводил — напиши организатору или в поддержку, разберёмся.` });
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * ПОСТУПКИ: подтверждение эпизода организатором события.
+       *
+       * Подтверждает ТОЛЬКО организатор этого события (events.deputy_id) —
+       * он там был и отвечает за свои слова. Костяк намеренно не привлекается:
+       * организаторов много, и грузить каждого чужими выездами нельзя.
+       *
+       * `ctbl_<eventId>`  — открыть список найденных эпизодов по одному.
+       * `ctby_<id>`       — подтвердить: сигнал в репутацию + баллы.
+       * `ctbn_<id>`       — отклонить: модель поняла неверно.
+       */
+      if (data.startsWith('ctbl_') || data.startsWith('ctby_') || data.startsWith('ctbn_')) {
+        const evIdForContrib = data.startsWith('ctbl_') ? data.slice(5) : '';
+
+        // Кто вправе решать: организатор события. Костяк — только как аварийный
+        // выход, чтобы эпизоды не зависли, если организатора удалили из клуба.
+        const canReview = async (eventId: string): Promise<boolean> => {
+          const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', eventId).maybeSingle();
+          if (Number((ev as any)?.deputy_id || 0) === tgId) return true;
+          return false;
+        };
+
+        if (data.startsWith('ctbl_')) {
+          if (!(await canReview(evIdForContrib))) {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Разбирает организатор события', show_alert: true });
+            return res.status(200).json({ ok: true });
+          }
+          const items = await loadPending(evIdForContrib);
+          if (!items.length) {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Всё разобрано 👍' });
+            return res.status(200).json({ ok: true });
+          }
+          const { data: evT } = await supabase.from('events').select('title').eq('id', evIdForContrib).maybeSingle();
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: `Поступков: ${items.length}` });
+          // Показываем по одному: у каждого своя кнопка, и человек читает
+          // цитату, а не жмёт «подтвердить всё» не глядя.
+          for (const c of items.slice(0, 6)) {
+            const { data: m } = await supabase.from('members')
+              .select('first_name,last_name,username').eq('telegram_id', Number(c.subject_id)).maybeSingle();
+            const nm = m
+              ? ([ (m as any).first_name, (m as any).last_name ].filter(Boolean).join(' ') || `@${(m as any).username}`)
+              : `ID ${c.subject_id}`;
+            const link = c.chat_id && c.message_id && String(c.chat_id).startsWith('-100')
+              ? `\n<a href="https://t.me/c/${String(c.chat_id).slice(4)}/${c.message_id}">💬 Открыть сообщение</a>`
+              : '';
+            await tg('sendMessage', {
+              chat_id: tgId, parse_mode: 'HTML', disable_web_page_preview: true,
+              text:
+                `${contributionLine(c, String(nm))}\n` +
+                (c.quote ? `\n<i>«${esc(String(c.quote))}»</i>` : '') + link,
+              reply_markup: kb([[
+                { text: '✅ Так и было', callback_data: `ctby_${c.id}` },
+                { text: '❌ Не было', callback_data: `ctbn_${c.id}` },
+              ]]),
+            });
+          }
+          if (items.length > 6) {
+            await tg('sendMessage', { chat_id: tgId, parse_mode: 'HTML',
+              text: `…и ещё ${items.length - 6}. Остальные — в админке события (скоро).` });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
+        const contribId = Number(data.slice(5));
+        const { data: cr } = await supabase.from('event_contributions')
+          .select('id,event_id,subject_id,kind,title,status').eq('id', contribId).maybeSingle();
+        if (!cr) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Эпизод не найден', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        if (!(await canReview(String((cr as any).event_id)))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает организатор события', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+
+        if (data.startsWith('ctby_')) {
+          const r = await confirmContribution(contribId, tgId);
+          if (!r.ok) {
+            const why = r.error === 'self' ? 'Себе поступок подтвердить нельзя' : r.error === 'already-confirmed' ? 'Уже подтверждён' : 'Не получилось';
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: why, show_alert: true });
+            return res.status(200).json({ ok: true });
+          }
+          if (chatId && msgId) await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }).catch(() => null);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: r.already ? 'Уже подтверждён' : `Записал 🎖 +${r.points}` });
+          // Поступок уходит человеку: без этого он не понимает, откуда баллы.
+          await tg('sendMessage', {
+            chat_id: Number((cr as any).subject_id), parse_mode: 'HTML',
+            text: `🎖 <b>Тебе записали поступок</b>\n\n${esc(String((cr as any).title))}\n\n+${r.points} баллов. Организатор подтвердил, что так и было. Спасибо, что вывозишь!`,
+          }).catch(() => null);
+          return res.status(200).json({ ok: true });
+        }
+
+        const rj = await rejectContribution(contribId, tgId);
+        if (chatId && msgId) await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }).catch(() => null);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: rj.ok ? 'Отклонил' : 'Уже обработан' });
         return res.status(200).json({ ok: true });
       }
 
@@ -7967,6 +8360,55 @@ export default async function handler(req: any, res: any) {
             });
           } else if (out === 'ничего нового') {
             await tg('sendMessage', { chat_id: chatId, text: '✅ Прочитал — нового к записи нет.' });
+          }
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * /поступки — отдельный вход именно за эпизодами «кто что сделал».
+         * Раньше организатор мог только ждать часовой дайджест или звать
+         * /разбор (который читает всё подряд). После выезда хочется быстро
+         * спросить «ну что там, кто чем отличился» — теперь это одна команда.
+         */
+        if (gcmd === '/поступки' || gcmd === '/postupki') {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link.' });
+            return res.status(200).json({ ok: true });
+          }
+          const evId = String((gl as any).event_id);
+          await tg('sendMessage', { chat_id: chatId, text: '🎖 Смотрю переписку, ищу, кто чем отличился…' });
+          const { data: msgs } = await supabase
+            .from('group_messages').select('telegram_id,first_name,text,message_id')
+            .eq('chat_id', chatId).order('created_at', { ascending: true }).limit(200);
+          let saved = 0;
+          try { saved = await extractContributions(evId, chatId, (msgs || []) as ContribMsg[]); }
+          catch (e: any) { console.warn('[contributions] /поступки:', e?.message || e); }
+
+          const { data: ev } = await supabase.from('events').select('title,deputy_id').eq('id', evId).maybeSingle();
+          const orgId = Number((ev as any)?.deputy_id || 0);
+          if (!saved) {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: '✅ Новых поступков не нашёл. Либо всё уже разобрано, либо ИИ-ключ не отвечает сейчас — попробуй позже.',
+            });
+            return res.status(200).json({ ok: true });
+          }
+          const items = await loadPending(evId);
+          const nameById = new Map<number, string>();
+          for (const m of (msgs || []) as any[]) if (m.first_name) nameById.set(Number(m.telegram_id), String(m.first_name));
+          const list = items.map((c: any) => contributionLine(c, nameById.get(Number(c.subject_id)) || `ID ${c.subject_id}`)).join('\n');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML', disable_web_page_preview: true,
+            text: `🎖 <b>Нашёл в переписке</b>\n\n${list}\n\n<i>Подтверждает организатор события — открой личку с ботом.</i>`,
+          });
+          if (orgId > 0) {
+            await tg('sendMessage', {
+              chat_id: orgId, parse_mode: 'HTML', disable_web_page_preview: true,
+              text: `🎖 <b>Поступки на «${esc(String((ev as any)?.title || 'событии'))}»</b>\n\n${list}`,
+              reply_markup: kb([[{ text: '🎖 Разобрать поступки', callback_data: `ctbl_${evId}` }]]),
+            });
           }
           return res.status(200).json({ ok: true });
         }

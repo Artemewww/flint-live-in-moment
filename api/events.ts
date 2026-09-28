@@ -656,6 +656,181 @@ function validSession(value: string): boolean {
   return safeEq(mac, crypto.createHmac('sha256', ADMIN_SECRET).update(String(exp)).digest('hex'));
 }
 
+/* ═════════════════ ПОСТУПКИ С СОБЫТИЙ («кто что сделал») ═══════════════════
+ * Дублировано из api/_lib/contributions.ts НАМЕРЕННО: общий api/_lib/ роняет
+ * функции на Vercel в рантайме (MODULE_NOT_FOUND, тот же фикс, что для
+ * reputation/group-ban — см. комментарий в начале файла). Правь ОБА файла.
+ *
+ * Здесь только ПОДТВЕРЖДЕНИЕ и ОТКЛОНЕНИЕ: сам разбор переписки живёт в вебхуке,
+ * потому что только он видит сообщения. Этот файл обслуживает админку.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Что может подтвердить организатор: ТОЛЬКО зелёные сигналы. */
+const CONTRIB_KINDS: Record<string, { points: number; hint: string }> = {
+  role_done:     { points: 10, hint: 'Взял роль и довёл до конца' },
+  helped:        { points: 10, hint: 'Помог другим делом: вытащил, подвёз, починил, делился' },
+  calm_conflict: { points: 12, hint: 'Погасил конфликт или разрулил сложную ситуацию' },
+  staff_done:    { points: 12, hint: 'Отработал помощником организатора' },
+  growth:        { points: 10, hint: 'Вышел за свой предел, справился с новым' },
+  driver:        { points: 8,  hint: 'Вёз людей на своей машине' },
+  brought:       { points: 8,  hint: 'Привёл в клуб нового человека' },
+  paid_on_time:  { points: 6,  hint: 'Внёс взнос вовремя и без напоминаний' },
+};
+
+/**
+ * ПОДТВЕРЖДЕНИЕ — единственное место, где поступок становится репутацией.
+ * Сигнал пишем как «organizer»: он там был и отвечает за слово. Источник «ai»
+ * весит в 3 раза меньше — ровно чтобы пометка парсера не значила ничего без
+ * человека.
+ */
+async function confirmContribution(id: number, byId: number): Promise<{ ok: boolean; error?: string; points?: number; already?: boolean }> {
+  const { data: row } = await supabase.from('event_contributions')
+    .select('id,event_id,subject_id,kind,title,status,points_awarded').eq('id', id).maybeSingle();
+  if (!row) return { ok: false, error: 'not-found' };
+  const c = row as any;
+  if (c.status === 'confirmed') return { ok: true, already: true, points: Number(c.points_awarded) || 0 };
+  if (Number(c.subject_id) === Number(byId)) return { ok: false, error: 'self' };
+  const def = CONTRIB_KINDS[c.kind];
+  if (!def) return { ok: false, error: 'unknown-kind' };
+
+  // Вес сигнала — те же значения, что в REP_SIGNALS вебхука и в reputation.ts.
+  const weight = def.points >= 12 ? 10 : def.points >= 10 ? 9 : def.points >= 8 ? 6 : 5;
+  const { error: sigErr } = await supabase.from('reputation_events').insert({
+    subject_id: Number(c.subject_id), author_id: byId, event_id: String(c.event_id),
+    kind: c.kind, polarity: 1, weight, source: 'organizer', note: String(c.title).slice(0, 1000),
+  });
+  if (sigErr && !/duplicate key|23505/i.test(sigErr.message)) return { ok: false, error: sigErr.message };
+
+  // Баллы. Минимум 5: поступок не может весить меньше, чем просто приехать.
+  const points = Math.max(5, Number(def.points) || 5);
+  const { data: m } = await supabase.from('members').select('points').eq('telegram_id', Number(c.subject_id)).maybeSingle();
+  if (m) {
+    await supabase.from('members').update({ points: Number((m as any).points || 0) + points }).eq('telegram_id', Number(c.subject_id));
+    try {
+      await supabase.from('points_log').insert({
+        telegram_id: Number(c.subject_id), event_id: c.event_id,
+        reason: 'contribution', points, description: `Поступок на событии: ${c.title}`,
+      });
+    } catch { /* журнала может не быть до миграции */ }
+  }
+
+  await supabase.from('event_contributions').update({
+    status: 'confirmed', reviewed_by: byId, reviewed_at: new Date().toISOString(), points_awarded: points,
+  }).eq('id', id);
+
+  return { ok: true, points };
+}
+
+/**
+ * ОТКЛОНЕНИЕ. Строку НЕ удаляем: при следующем разборе тех же сообщений она
+ * удержит эпизод от повторного появления, и организатора не спросят дважды.
+ */
+async function rejectContribution(id: number, byId: number): Promise<{ ok: boolean; error?: string }> {
+  const { data: row } = await supabase.from('event_contributions').select('id,status').eq('id', id).maybeSingle();
+  if (!row) return { ok: false, error: 'not-found' };
+  if ((row as any).status === 'confirmed') return { ok: false, error: 'already-confirmed' };
+  const { error } = await supabase.from('event_contributions')
+    .update({ status: 'rejected', reviewed_by: byId, reviewed_at: new Date().toISOString() }).eq('id', id);
+  if (error) return { ok: false, error: error.message };
+  return { ok: true };
+}
+
+/**
+ * ПОСТУПКИ СОБЫТИЯ — «кто что сделал».
+ *
+ * GET  ?action=contributions&id=<eventId>   → список эпизодов (pending + история)
+ * POST ?action=contribution_review          → { contributionId, decision, initData }
+ *
+ * ПОДТВЕРЖДАЕТ ОРГАНИЗАТОР события (events.deputy_id), а не весь костяк: он там
+ * был и отвечает за свои слова. Организаторов много, и дёргать каждого чужими
+ * выездами нельзя. Костяк видит всё, но решает не он.
+ *
+ * Эпизод, найденный ИИ, до подтверждения НЕ влияет ни на репутацию, ни на баллы:
+ * модель ошибается и льстит, а цена ошибки — репутация живого человека.
+ */
+async function handleContributions(req: any, res: any) {
+  if (!isAdmin(req)) {
+    const user = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
+    if (!user) return deny(res);
+    const eventId0 = String(req.query?.id || '');
+    if (!eventId0) return res.status(400).json({ error: 'missing_id' });
+    // Участник видит ТОЛЬКО свои подтверждённые поступки (лента в профиле).
+    // Красное и чужие основания ему не показываем — как и решено в reputation.ts.
+    const { data, error } = await supabase
+      .from('event_contributions')
+      .select('id,event_id,kind,title,quote,status,points_awarded,created_at')
+      .eq('event_id', eventId0)
+      .eq('subject_id', user.id)
+      .eq('status', 'confirmed')
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) return res.status(200).json({ items: [], scope: 'self' });
+    return res.status(200).json({ items: data || [], scope: 'self' });
+  }
+
+  const eventId = String(req.query?.id || '');
+  if (!eventId) return res.status(400).json({ error: 'missing_id' });
+  const { data: rows, error: rowsErr } = await supabase
+    .from('event_contributions')
+    .select('*')
+    .eq('event_id', eventId)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (rowsErr) return res.status(200).json({ items: [], pending: 0 });
+  const items = rows || [];
+
+  // Имена подтягиваем одним запросом: в списке нужен человек, а не telegram_id.
+  const ids = [...new Set(items.map((x: any) => Number(x.subject_id)).filter(Boolean))];
+  const nameById = new Map<number, string>();
+  if (ids.length) {
+    const { data: mem } = await supabase
+      .from('members').select('telegram_id,first_name,last_name,username').in('telegram_id', ids);
+    for (const m of mem || []) {
+      const full = [m.first_name, m.last_name].filter(Boolean).join(' ') || (m.username ? `@${m.username}` : '');
+      if (full) nameById.set(Number((m as any).telegram_id), full);
+    }
+  }
+  return res.status(200).json({
+    items: items.map((x: any) => ({ ...x, subjectName: nameById.get(Number(x.subject_id)) || `ID ${x.subject_id}` })),
+    pending: items.filter((x: any) => x.status === 'pending').length,
+  });
+}
+
+async function handleContributionReview(req: any, res: any) {
+  const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+  const id = Number(body.contributionId);
+  const decision = String(body.decision || '');
+  if (!id || !['confirm', 'reject'].includes(decision)) return res.status(400).json({ error: 'bad_request' });
+
+  const { data: row } = await supabase
+    .from('event_contributions').select('event_id').eq('id', id).maybeSingle();
+  if (!row) return res.status(404).json({ error: 'not_found' });
+
+  // Кто решает: организатор события с Telegram-подписью либо админ-панель.
+  let byId = 0;
+  if (isAdmin(req)) {
+    // В админку заходит костяк — подставляем организатора события, чтобы в
+    // истории было видно, что решение принято от его лица.
+    const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', (row as any).event_id).maybeSingle();
+    byId = Number((ev as any)?.deputy_id || 0);
+    if (!byId) return res.status(400).json({ error: 'event_has_no_organizer' });
+  } else {
+    const user = verifyInitData(String(body.initData || ''), BOT_TOKEN);
+    if (!user) return deny(res);
+    const { data: ev } = await supabase.from('events').select('deputy_id').eq('id', (row as any).event_id).maybeSingle();
+    if (Number((ev as any)?.deputy_id || 0) !== Number(user.id)) {
+      return res.status(403).json({ error: 'organizer_only' });
+    }
+    byId = Number(user.id);
+  }
+
+  const r = decision === 'confirm'
+    ? await confirmContribution(id, byId)
+    : await rejectContribution(id, byId);
+  if (!r.ok) return res.status(400).json({ error: r.error || 'failed' });
+  return res.status(200).json({ ok: true, points: (r as any).points || 0 });
+}
+
 /** Пускать ли запрос: заголовок (крон, curl) или подписанная кука (браузер). */
 function isAdmin(req: any): boolean {
   if (!ADMIN_SECRET) return false;
@@ -688,6 +863,10 @@ export default async function handler(req: any, res: any) {
     if (req.query?.action === 'media_list') return await handleMediaList(req, res);
     if (req.query?.action === 'media') return await handleMedia(req, res);
     if (req.query?.action === 'avatar') return await handleAvatar(req, res);
+    // Поступки события: «кто что сделал». Организатор подтверждает — только
+    // тогда эпизод идёт в репутацию и приносит баллы.
+    if (req.query?.action === 'contributions') return await handleContributions(req, res);
+    if (req.query?.action === 'contribution_review') return await handleContributionReview(req, res);
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
     // отдавался публично, а затем пускал по одному реф-коду — так не-член видел
