@@ -305,18 +305,47 @@ export default function App() {
   /** Открыть анкету вступления на экране «Только для участников». */
   const [showApplyForm, setShowApplyForm] = useState(false);
   /**
-   * Человек пришёл по ссылке-приглашению (код в URL/start_param или уже
-   * сохранён шлюзом). Ему анкету показываем сразу: он не «случайный прохожий»,
-   * его позвал участник, и лишний экран здесь — потерянный человек.
+   * Код пригласившего из ВСЕХ источников, где он может лежать, — и сразу
+   * сохраняем его в localStorage.
+   *
+   * Раньше код читался только из `?ref=` и `localStorage`, а из Telegram
+   * start_param — лишь проверкой «чем-то похоже на ref_». Из-за этого человек,
+   * открывший приглашение через мини-приложение (`?startapp=ref_<code>` или
+   * кнопку бота «Заполнить анкету»), попадал в онбординг БЕЗ кода: атрибуция
+   * пригласившего терялась, а после анкеты он всё равно оставался не-членом.
+   * Теперь код вытаскивается регуляркой из любой формы ссылки и сохраняется,
+   * чтобы пережить переходы внутри приложения.
+   */
+  const refFromLink = React.useMemo(() => {
+    const normalize = (raw: string) => {
+      const s = String(raw || '');
+      // ref_<code>, ?ref=<code>, ?startapp=ref_<code>, start=ref_<code>_ev_<id>
+      const m = s.match(/(?:^|[?&_=\/])ref[_-]?([a-zA-Z0-9]{4,32})/);
+      return m ? m[1] : '';
+    };
+    try {
+      const p = new URLSearchParams(window.location.search);
+      const code = normalize(p.get('ref') || '') || normalize(p.get('start') || '') || normalize(getStartParam());
+      if (code) {
+        try { localStorage.setItem('flint_ref', code); } catch { /* приватный режим */ }
+        return code;
+      }
+      return localStorage.getItem('flint_ref') || '';
+    } catch { return ''; }
+  }, []);
+
+  /**
+   * Человек пришёл по ссылке-приглашению. Ему анкету показываем сразу: он не
+   * «случайный прохожий», его позвал участник, и лишний экран здесь —
+   * потерянный человек. `?apply=1` — кнопка «Подать заявку» из бота.
    */
   const invitedByRef = React.useMemo(() => {
     try {
       const p = new URLSearchParams(window.location.search);
       if (p.get('ref') || p.get('apply') === '1') return true;
-      if (localStorage.getItem('flint_ref')) return true;
-    } catch { /* нет window/localStorage */ }
-    return /(?:^|_)ref_/.test(getStartParam());
-  }, []);
+    } catch { /* нет window */ }
+    return !!refFromLink;
+  }, [refFromLink]);
 
   // Находим ближайшее мероприятие для баннера
   const nextEvent = events
@@ -348,7 +377,7 @@ export default function App() {
   // Афиша закрыта на сервере: шлём initData участника и реф-код приглашения.
   // На 403 фолбэки НЕ используем — иначе статический JSON обходил бы гейт.
   useEffect(() => {
-    const ref = (() => { try { return localStorage.getItem('flint_ref') || ''; } catch { return ''; } })();
+    const ref = refFromLink;
     setEventsLoading(true);
     setEventsError(false);
     fetch(`/api/events${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`, {
@@ -385,7 +414,11 @@ export default function App() {
           .catch(() => { setEventsError(true); setEventsLoading(false); });
       });
     // Перезапрашиваем после прохождения гейта и по событию рефетча (логин админа).
-  }, [gatePassed, eventsReloadTick]);
+    // refFromLink в зависимостях обязателен: код приглашения появляется из
+    // start_param уже после первого рендера, и без него афиша запрашивалась бы
+    // «анонимно» — сервер вернул бы 403 и человек видел бы экран «только для
+    // участников» вместо анкеты по приглашению.
+  }, [gatePassed, eventsReloadTick, refFromLink]);
 
   // Deep-link `?ev=<id>` из бота: кнопка «Заполнить анкету» открывает Mini App
   // сразу на нужном событии. Бот своей записи больше не ведёт — все этапы здесь.
@@ -838,8 +871,9 @@ export default function App() {
      * костяк решал вслепую.
      */
     if (showApplyForm || invitedByRef) {
-      let ref: string | undefined;
-      try { ref = new URLSearchParams(window.location.search).get('ref') || localStorage.getItem('flint_ref') || undefined; } catch { ref = undefined; }
+      // Код пригласившего берём из уже разобранного источника: он сохранён в
+      // localStorage, поэтому переживает переход «бот → мини-приложение».
+      const ref: string | undefined = refFromLink || undefined;
       return (
         <ClubOnboarding
           refCode={ref}

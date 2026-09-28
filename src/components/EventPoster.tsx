@@ -9,7 +9,13 @@ interface EventPosterProps {
 
 export default function EventPoster({ event, onClose }: EventPosterProps) {
   const shareText = `🎯 ${event.title}\n\n📅 ${event.dateLabel}\n⏰ ${event.time}\n📍 ${event.location}\n\n🔥 Присоединяйся к живому кругу!\n\n#LiveInMoment #ЖивиВМоменте`;
-  const telegramShareUrl = `https://t.me/share/url?url=${encodeURIComponent(window.location.origin)}&text=${encodeURIComponent(shareText)}`;
+  /**
+   * Шерим СТРАНИЦУ СОБЫТИЯ, а не главную: у неё есть og-разметка (афиша
+   * 1200×630, название, дата, место), и в пересылке друг видит карточку
+   * события, а не голый домен сайта.
+   */
+  const shareLink = `${window.location.origin}/e/${encodeURIComponent(event.id)}`;
+  const telegramShareUrl = `https://t.me/share/url?url=${encodeURIComponent(shareLink)}&text=${encodeURIComponent(shareText)}`;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" id="event-poster-root">

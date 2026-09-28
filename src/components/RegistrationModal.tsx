@@ -283,6 +283,34 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
     );
   };
 
+  /**
+   * Ошибки по КОНКРЕТНЫМ полям — для красной обводки и подписи под полем.
+   * Раньше была одна строка-баннер внизу формы: человек жал «Продолжить»,
+   * читал «укажите категорию участника» и шёл искать это поле глазами по
+   * длинной анкете. Теперь поле подсвечено на месте.
+   * Правило простое: проверяем ровно те же условия, что и handleSubmit.
+   */
+  const fieldErrs: Record<string, string | undefined> = {
+    fullName: !fullName.trim() ? 'Пожалуйста, введите Ваше имя' : undefined,
+    phone: !phone.trim() ? 'Пожалуйста, укажите телефон для связи' : undefined,
+    inviter: !isMember && !inviter.trim() ? 'Обязательно укажите резидента или код' : undefined,
+    accessCode: isClosedEvent && !accessCode.trim() ? 'Введите код доступа к закрытому событию' : undefined,
+    transport: needRides && formData.transportMode === null ? 'Выберите, как добираетесь' : undefined,
+    carBrand: (formData.transportMode === 'car' || formData.transportMode === 'carsharing')
+      && !formData.carBrand.trim() && !formData.transportDetails.trim() ? 'Укажите марку авто' : undefined,
+    hasLicense: needLicense && formData.hasLicense === null ? 'Ответьте про права — это нужно для авто' : undefined,
+    foodOptOut: costModel === 'food_share' && foodOptOut === null ? 'Скидываетесь или едете со своей едой?' : undefined,
+    category: formData.category === null ? 'Укажите категорию участника' : undefined,
+    consent: !consentGiven ? 'Нужно согласие на обработку данных' : undefined,
+  };
+  /** Красная рамка у input'а: одна функция, чтобы стиль был единым. */
+  const errBorder = (key: string, base: string) =>
+    `${base} ${fieldErrs[key] ? '!border-rose-500/70 !bg-rose-500/5' : ''}`;
+  /** Подпись под полем — показывается только когда поле реально не заполнено. */
+  const FieldErr = ({ k }: { k: string }) => (fieldErrs[k]
+    ? <p className="text-[10px] text-rose-400 leading-snug mt-1.5">{fieldErrs[k]}</p>
+    : null);
+
   // Copy referral link to share with friends
   const handleCopyLink = () => {
     const cleanNick = tgUsername.replace(/^@/, '');
@@ -413,10 +441,11 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         value={fullName}
                         onChange={(e) => setFullName(e.target.value)}
                         placeholder="Например, Александр"
-                        className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-sans"
+                        className={errBorder('fullName', 'w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-sans')}
                         required
                         disabled={isSubmitting}
                       />
+                      <FieldErr k="fullName" />
                     </div>
 
                     {/* Кто пригласил — спрашиваем ОДИН раз, при вступлении.
@@ -434,10 +463,11 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                           value={inviter}
                           onChange={(e) => setInviter(e.target.value)}
                           placeholder="Обязательно укажите резидента"
-                          className="w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
+                          className={errBorder('inviter', 'w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono')}
                           required
                           disabled={isSubmitting}
                         />
+                        <FieldErr k="inviter" />
                       </div>
                     )}
 
@@ -452,9 +482,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                           onChange={(e) => setAccessCode(e.target.value)}
                           placeholder="Кодовое слово из приглашения"
                           autoComplete="off"
-                          className="w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
+                          className={errBorder('accessCode', 'w-full px-4 py-3 rounded-xl border border-[#E6FD3A]/30 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono')}
                           disabled={isSubmitting}
                         />
+                        <FieldErr k="accessCode" />
                       </div>
                     )}
 
@@ -467,25 +498,27 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                         value={phone}
                         onChange={(e) => setPhone(e.target.value)}
                         placeholder="+375 (29) 111-22-33"
-                        className="w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono"
+                        className={errBorder('phone', 'w-full px-4 py-3 rounded-xl border border-white/10 focus:border-brand focus:ring-1 focus:ring-brand/35 outline-none text-xs transition-all bg-[#161616] text-white font-mono')}
                         disabled={isSubmitting}
                       />
+                      <FieldErr k="phone" />
                     </div>
 
                     {/* Транспорт — только если до места нужно добираться. */}
                     {needRides && (
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                    <div className={`bg-white/5 border rounded-xl p-4 space-y-3 ${fieldErrs.transport ? 'border-rose-500/60 bg-rose-500/5' : 'border-white/10'}`}>
                       <label className="text-xs text-white/60 flex items-center gap-2">
-                        <Truck className="w-4 h-4 text-brand" />
+                        <Truck className={`w-4 h-4 ${fieldErrs.transport ? 'text-rose-400' : 'text-brand'}`} />
                         Как добираетесь? <span className="text-brand">*</span>
                       </label>
+                      <FieldErr k="transport" />
 
                       {/* Права — только для событий с арендой авто/квадроциклов. */}
                       {needLicense && (<>
                       <label className="block text-[10px] font-mono font-bold uppercase tracking-wider text-white/50">
                         🎫 Есть ли водительские права? <span className="text-brand">*</span>
                       </label>
-                      <div className="flex gap-2">
+                      <div className={`flex gap-2 rounded-lg ${fieldErrs.hasLicense ? 'ring-1 ring-rose-500/60 p-1' : ''}`}>
                         {([
                           { v: 'yes' as const, l: '✅ Есть' },
                           { v: 'no' as const, l: '❌ Нет' },
@@ -497,20 +530,23 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                             className={`flex-1 py-2.5 px-3 rounded-lg text-xs font-bold transition-all ${
                               formData.hasLicense === v
                                 ? 'bg-brand text-black'
-                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                                : fieldErrs.hasLicense
+                                  ? 'bg-rose-500/10 text-white/70 hover:bg-rose-500/20'
+                                  : 'bg-white/10 text-white/60 hover:bg-white/20'
                             }`}
                           >
                             {l}
                           </button>
                         ))}
                       </div>
+                      <FieldErr k="hasLicense" />
                       <p className="text-[10px] text-white/40 italic">
                         Для событий с квадроциклами и арендой авто — права обязательны. Покажем организатору, кто может вести.
                       </p>
 
                       </>)}
 
-                      <div className="space-y-2">
+                      <div className={`space-y-2 rounded-lg ${fieldErrs.transport ? 'ring-1 ring-rose-500/50 p-1.5' : ''}`}>
                         {([
                           { mode: 'car' as const, label: '🚗 На своём авто' },
                           { mode: 'carsharing' as const, label: '🚙 На каршеринге' },
@@ -524,7 +560,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                             className={`w-full py-2.5 px-3 rounded-lg text-xs font-bold text-left transition-all ${
                               (formData as any).transportMode === mode
                                 ? 'bg-brand text-black'
-                                : 'bg-white/10 text-white/60 hover:bg-white/20'
+                                : fieldErrs.transport
+                                  ? 'bg-rose-500/10 text-white/70 hover:bg-rose-500/20'
+                                  : 'bg-white/10 text-white/60 hover:bg-white/20'
                             }`}
                           >
                             {label}
@@ -540,13 +578,16 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       {((formData as any).transportMode === 'car' || (formData as any).transportMode === 'carsharing') && (
                         <div className="space-y-3 pl-2">
                           <div className="grid grid-cols-2 gap-2">
-                            <input
-                              type="text"
-                              value={(formData as any).carBrand || ''}
-                              onChange={(e) => setFormData({...formData, carBrand: e.target.value} as any)}
-                              className="w-full bg-white/5 border border-white/10 rounded-xl p-2 text-white text-xs"
-                              placeholder="Марка (Kia Rio) *"
-                            />
+                            <div>
+                              <input
+                                type="text"
+                                value={(formData as any).carBrand || ''}
+                                onChange={(e) => setFormData({...formData, carBrand: e.target.value} as any)}
+                                className={`w-full rounded-xl p-2 text-white text-xs border ${fieldErrs.carBrand ? 'bg-rose-500/5 border-rose-500/70' : 'bg-white/5 border-white/10'}`}
+                                placeholder="Марка (Kia Rio) *"
+                              />
+                              <FieldErr k="carBrand" />
+                            </div>
                             <input
                               type="text"
                               value={(formData as any).carColor || ''}
@@ -589,16 +630,19 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                     )}
 
                     {/* Категория участника */}
-                    <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+                    <div className={`bg-white/5 border rounded-xl p-4 space-y-3 ${fieldErrs.category ? 'border-rose-500/60 bg-rose-500/5' : 'border-white/10'}`}>
                       <label className="text-xs text-white/60 block">Категория участника *</label>
-                      <div className="flex gap-2">
+                      <FieldErr k="category" />
+                      <div className={`flex gap-2 rounded-lg ${fieldErrs.category ? 'ring-1 ring-rose-500/50 p-1' : ''}`}>
                         <button
                           type="button"
                           onClick={() => setFormData({...formData, category: 'male'} as any)}
                           className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                             formData.category === 'male'
                               ? 'bg-brand text-black'
-                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                              : fieldErrs.category
+                                ? 'bg-rose-500/10 text-white/70 hover:bg-rose-500/20'
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
                           }`}
                         >
                           Мужчина
@@ -609,7 +653,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                           className={`flex-1 py-2 rounded-lg text-xs font-bold transition-all ${
                             formData.category === 'female'
                               ? 'bg-brand text-black'
-                              : 'bg-white/10 text-white/60 hover:bg-white/20'
+                              : fieldErrs.category
+                                ? 'bg-rose-500/10 text-white/70 hover:bg-rose-500/20'
+                                : 'bg-white/10 text-white/60 hover:bg-white/20'
                           }`}
                         >
                           Женщина
@@ -686,10 +732,11 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                       {costModel === 'food_share' && (
                         <>
                           <p className="text-[13px] text-white/85">Общий стол: продукты покупаем вместе и делим поровну на тех, кто в общем котле.</p>
-                          <div className="grid grid-cols-2 gap-2">
-                            <button type="button" onClick={() => setFoodOptOut(false)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === false ? 'bg-brand text-black' : 'bg-white/10 text-white/70'}`}>🍲 Я в общем котле</button>
-                            <button type="button" onClick={() => setFoodOptOut(true)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === true ? 'bg-brand text-black' : 'bg-white/10 text-white/70'}`}>🥪 Еду со своей едой</button>
+                          <div className={`grid grid-cols-2 gap-2 rounded-lg ${fieldErrs.foodOptOut ? 'ring-1 ring-rose-500/60 p-1' : ''}`}>
+                            <button type="button" onClick={() => setFoodOptOut(false)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === false ? 'bg-brand text-black' : fieldErrs.foodOptOut ? 'bg-rose-500/10 text-white/70' : 'bg-white/10 text-white/70'}`}>🍲 Я в общем котле</button>
+                            <button type="button" onClick={() => setFoodOptOut(true)} className={`py-2.5 rounded-lg text-xs font-bold ${foodOptOut === true ? 'bg-brand text-black' : fieldErrs.foodOptOut ? 'bg-rose-500/10 text-white/70' : 'bg-white/10 text-white/70'}`}>🥪 Еду со своей едой</button>
                           </div>
+                          <FieldErr k="foodOptOut" />
                         </>
                       )}
                       {lg.costNote && <p className="text-[11px] text-white/50">{lg.costNote}</p>}
@@ -717,13 +764,13 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                     )}
 
                     {/* Согласие на обработку персональных данных */}
-                    <div className="bg-rose-500/5 border border-rose-500/20 rounded-xl p-4 space-y-2">
+                    <div className={`bg-rose-500/5 border rounded-xl p-4 space-y-2 ${fieldErrs.consent ? 'border-rose-500/70' : 'border-rose-500/20'}`}>
                       <label className="flex items-start gap-3 cursor-pointer">
                         <input
                           type="checkbox"
                           checked={consentGiven}
                           onChange={(e) => setConsentGiven(e.target.checked)}
-                          className="mt-0.5 rounded"
+                          className={`mt-0.5 rounded ${fieldErrs.consent ? 'outline outline-2 outline-rose-500/70' : ''}`}
                           required
                         />
                         <span className="text-xs text-white/70 leading-relaxed">
@@ -732,6 +779,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
                           {' '}и даю согласие на участие в мероприятии
                         </span>
                       </label>
+                      <FieldErr k="consent" />
                     </div>
 
                     {error && (

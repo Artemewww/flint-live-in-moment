@@ -314,18 +314,28 @@ export default function EventDetailModal({
         {/* Пригласить друга — иконкой рядом с крестиком.
             Отдельная плитка «Позвать» занимала целую клетку бенто-сетки, а в
             блоке «Твоё участие» жила ВТОРАЯ кнопка с тем же действием. Одно
-            действие — один элемент, и тот в углу, где ему и место. */}
+            действие — один элемент, и тот в углу, где ему и место.
+
+            Ссылка ведёт на СТРАНИЦУ СОБЫТИЯ `/e/<id>`, а не на бота. Раньше
+            здесь был `?start=ev_<id>`: Telegram открывал превью бота — белое
+            окно с кнопкой «START», без афиши, даты и описания. У `/e/<id>`
+            есть og-разметка (картинка 1200×630, название, дата, место) — её и
+            видят друзья в пересылке, а кнопка на странице уже ведёт в бота. */}
         <button
           type="button"
           onClick={() => {
-            const link = `https://t.me/${(import.meta as any).env?.VITE_BOT_USERNAME || 'campsflint_bot'}?start=ev_${event.id}`;
+            let ref = '';
+            try { ref = localStorage.getItem('flint_ref') || ''; } catch { /* приватный режим */ }
+            const link = `${window.location.origin}/e/${event.id}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
             const text = `Еду на «${event.title}» с FLINT. Присоединяйся!`;
             const tgApp = (window as any).Telegram?.WebApp;
+            // t.me/share/url не передаёт `startapp`/бота — только url+text, зато
+            // разворачивает превью ссылки: то, что нужно для афиши.
             const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
             haptic('success');
             if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
             else if (navigator.share) navigator.share({ text: `${text} ${link}` }).catch(() => {});
-            else { navigator.clipboard?.writeText(link); alert('Ссылка на событие скопирована'); }
+            else { navigator.clipboard?.writeText(`${text} ${link}`); alert(`Ссылка скопирована — отправь её другу:\n${link}`); }
           }}
           className="absolute top-4 right-[4.25rem] z-30 p-2.5 rounded-full bg-black/60 border border-white/10 hover:border-brand/40 text-white/70 hover:text-[#E6FD3A] hover:scale-105 transition-all outline-none cursor-pointer"
           title="Пригласить друга"

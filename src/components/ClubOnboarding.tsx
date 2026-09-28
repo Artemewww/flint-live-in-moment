@@ -1,5 +1,5 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { ArrowLeft, ArrowRight, Check, Loader2, Camera, Plus } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Loader2, Camera, Plus, AlertCircle } from 'lucide-react';
 import { CLUB_RULES, ClubRule, RULES_VERSION, RULES_MAP_KEY, fullAcceptedMap } from '../data/clubRules';
 import { getInitData, haptic } from '../telegram';
 import { submitClubApplication } from '../api';
@@ -175,7 +175,7 @@ function Scene({ name }: { name: SceneName }) {
 /* ══════════════════════════ ЧИПЫ ВЫБОРА ════════════════════════════════ */
 
 function Chips({
-  options, value, onChange, multi = false, allowCustom = true, placeholder = 'Своё…',
+  options, value, onChange, multi = false, allowCustom = true, placeholder = 'Своё…', error = false,
 }: {
   options: string[];
   value: string[];
@@ -183,6 +183,8 @@ function Chips({
   multi?: boolean;
   allowCustom?: boolean;
   placeholder?: string;
+  /** Незаполненное обязательное поле — красная обводка, как у input'ов. */
+  error?: boolean;
 }) {
   const [custom, setCustom] = useState('');
   const toggle = (opt: string) => {
@@ -199,7 +201,7 @@ function Chips({
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap gap-1.5">
+      <div className={`flex flex-wrap gap-1.5 rounded-xl ${error ? 'ring-1 ring-rose-500/60 p-1.5 -m-1.5' : ''}`}>
         {[...options, ...value.filter((v) => !options.includes(v))].map((opt) => {
           const on = value.includes(opt);
           return (
@@ -210,7 +212,9 @@ function Chips({
               className={`px-3 py-2 rounded-xl text-[12px] font-medium border cursor-pointer transition-all ${
                 on
                   ? 'bg-brand text-black border-brand'
-                  : 'bg-white/5 text-white/70 border-white/10 hover:border-white/25'
+                  : error
+                    ? 'bg-rose-500/5 text-white/70 border-rose-500/40 hover:border-rose-400'
+                    : 'bg-white/5 text-white/70 border-white/10 hover:border-white/25'
               }`}
             >
               {opt}
@@ -225,11 +229,15 @@ function Chips({
             onChange={(e) => setCustom(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }}
             placeholder={placeholder}
-            className="flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-[13px] text-white placeholder:text-white/25 outline-none focus:border-brand/60"
+            className={`flex-1 border rounded-xl px-3 py-2 text-[13px] text-white placeholder:text-white/25 outline-none ${
+              error ? 'bg-rose-500/5 border-rose-500/50 focus:border-rose-400' : 'bg-white/5 border-white/10 focus:border-brand/60'
+            }`}
           />
           <button
             type="button" onClick={addCustom} disabled={!custom.trim()}
-            className="px-3 rounded-xl bg-white/5 border border-white/10 text-white/60 cursor-pointer disabled:opacity-30"
+            className={`px-3 rounded-xl border text-white/60 cursor-pointer disabled:opacity-30 ${
+              error ? 'bg-rose-500/5 border-rose-500/40' : 'bg-white/5 border-white/10'
+            }`}
             aria-label="Добавить своё"
           >
             <Plus className="w-4 h-4" />
@@ -238,6 +246,46 @@ function Chips({
       )}
     </div>
   );
+}
+
+/* ══════════════════════════ ОБЯЗАТЕЛЬНЫЕ ПОЛЯ ═══════════════════════════
+ * Анкету присылали полупустой: «Имя, телефон — дальше пропущу». Костяк решал
+ * вслепую, а логистика (пол, день рождения, транспорт, снаряжение) оставалась
+ * без данных. Поэтому все поля анкеты обязательны — и подсвечиваются КРАСНЫМ
+ * с подписью под каждым: человек видит, ЧТО именно и ГДЕ дозаполнить, а не
+ * одно общее «заполните анкету» под кнопкой.
+ */
+
+/** Одно поле анкеты: заголовок, сам контрол, и подпись с ошибкой под ним. */
+function Field({
+  label, required = true, error, hint, children,
+}: {
+  label: string;
+  required?: boolean;
+  error?: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <span className={`text-[10px] font-mono uppercase tracking-widest ${error ? 'text-rose-300' : 'text-white/35'}`}>
+        {label}{required && <span className={error ? 'text-rose-400' : 'text-white/40'}> *</span>}
+      </span>
+      {children}
+      {error
+        ? <p className="text-[11px] text-rose-400 leading-snug">{error}</p>
+        : hint ? <p className="text-[10.5px] text-white/30 leading-snug">{hint}</p> : null}
+    </div>
+  );
+}
+
+/** Стиль текстового поля: красная рамка и подложка, когда поле не заполнено. */
+function inputClass(error?: string): string {
+  return `w-full rounded-xl px-3.5 py-3 text-[14px] outline-none placeholder:text-white/25 transition-colors ${
+    error
+      ? 'bg-rose-500/5 border border-rose-500/60 focus:border-rose-400'
+      : 'bg-white/5 border border-white/10 focus:border-brand/60'
+  }`;
 }
 
 /* ══════════════════════════ ОНБОРДИНГ ══════════════════════════════════ */
@@ -300,6 +348,15 @@ export default function ClubOnboarding({
   const [usePhoto, setUsePhoto] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  /**
+   * Ошибки по КАЖДОМУ полю: ключ — имя поля, значение — текст под полем.
+   * Раньше была одна строка «Имя и телефон обязательны» под кнопкой, и человек
+   * не понимал, какие ещё поля пустые и где они. Теперь пустое поле подсвечено
+   * красным прямо на месте, а под ним написано, что именно вписать.
+   */
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
+  /** Поля, которые вообще трогались: до первого нажатия «Дальше» не кричим. */
+  const [touched, setTouched] = useState(false);
 
   const step = steps[idx];
   const isLast = idx === steps.length - 1;
@@ -310,13 +367,66 @@ export default function ClubOnboarding({
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
   };
 
-  const submit = async () => {
-    if (!firstName.trim() || !phone.trim()) {
-      setError('Имя и телефон обязательны — без них не связаться.');
-      const aboutIdx = steps.findIndex((s) => s.kind === 'form' && s.id === 'about');
-      if (aboutIdx >= 0) go(aboutIdx);
-      return;
+  /**
+   * Проверка ОДНОГО шага анкеты. Возвращает объект ошибок по полям.
+   *
+   * Обязательны ВСЕ поля: полупустая анкета («только имя и телефон») не давала
+   * ни пола для расселения, ни дня рождения для поздравлений, ни транспорта и
+   * снаряжения для логистики — костяк решал по имени вслепую, а круг страдал
+   * от неверно собранной логистики. Проверка на клиенте: сервер такую анкету
+   * уже принял бы, поэтому не даём её отправить.
+   */
+  const validateStep = (id: FormId): Record<string, string> => {
+    const e: Record<string, string> = {};
+    if (id === 'about') {
+      if (!firstName.trim()) e.firstName = 'Как тебя звать? Без имени не записать в круг.';
+      if (!lastName.trim()) e.lastName = 'Укажи фамилию — по ней тебя найдут в списке.';
+      const digits = phone.replace(/\D/g, '');
+      if (!phone.trim()) e.phone = 'Телефон нужен для связи по логистике.';
+      else if (digits.length < 7) e.phone = 'Похоже на опечатку: в телефоне меньше 7 цифр.';
+      if (!gender.length) e.gender = 'Выбери пол — по нему расселяем по палаткам.';
+      if (!birthday) e.birthday = 'Укажи дату рождения — клуб поздравляет своих.';
+      else {
+        const year = Number(birthday.slice(0, 4));
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday) || year < 1930 || year > new Date().getFullYear() - 14) {
+          e.birthday = 'Проверь дату: она должна быть настоящей и не «из будущего».';
+        }
+      }
     }
+    if (id === 'work' && !occupation.length) e.occupation = 'Отметь хотя бы одну сферу — или впиши свою.';
+    if (id === 'activity' && !activities.length) e.activities = 'Отметь, что тебе близко — по этому зовём на события.';
+    if (id === 'gear') {
+      if (!transport.length) e.transport = 'Выбери, как добираешься — это половина логистики.';
+      if (transport[0] === 'Своё авто' && !seats.trim()) e.seats = 'Сколько мест можешь взять? Если никого — напиши 0.';
+      if (!gear.length) e.gear = 'Отметь, чем можешь поделиться. Если пока нечем — выбери «Ничего пока нет».';
+    }
+    if (id === 'final') {
+      if (why.trim().length < 10) e.why = 'Напиши хотя бы пару слов: что ищешь в клубе и что готов приносить.';
+    }
+    return e;
+  };
+
+  /** Ошибки, которые показываем: до первого «Дальше» — только свои, потом все. */
+  const visibleErrors = (id: FormId): Record<string, string> =>
+    touched ? validateStep(id) : fieldErrors;
+
+  const submit = async () => {
+    setTouched(true);
+    // Проверяем ВСЕ шаги анкеты разом и ведём к первому незаполненному: так
+    // человек не упирается в «отправляю» с пустым полем на пропущенном экране.
+    const formIds = steps.filter((s) => s.kind === 'form').map((s) => (s as any).id as FormId);
+    for (const id of formIds) {
+      const errs = validateStep(id);
+      if (Object.keys(errs).length) {
+        setFieldErrors(errs);
+        setError('Анкета не отправлена: заполни подсвеченные поля.');
+        const badIdx = steps.findIndex((s) => s.kind === 'form' && (s as any).id === id);
+        if (badIdx >= 0) go(badIdx);
+        haptic('error');
+        return;
+      }
+    }
+    setFieldErrors({});
     setSending(true);
     setError('');
     const map = fullAcceptedMap();
@@ -351,6 +461,18 @@ export default function ClubOnboarding({
 
   const next = () => {
     if (step.kind === 'rule') setAccepted((cur) => ({ ...cur, [step.rule.key]: step.rule.v }));
+    // Анкету без пустых полей дальше не пускаем: подсвечиваем и объясняем.
+    if (step.kind === 'form') {
+      const errs = validateStep(step.id);
+      setTouched(true);
+      setFieldErrors(errs);
+      if (Object.keys(errs).length) {
+        setError('Заполни подсвеченные поля — они обязательны.');
+        haptic('error');
+        return;
+      }
+      setError('');
+    }
     haptic('success');
     if (isLast) { submit(); return; }
     go(idx + 1);
@@ -434,64 +556,78 @@ export default function ClubOnboarding({
             </ul>
           )}
 
-          {step.kind === 'form' && (
+          {step.kind === 'form' && (() => {
+            const errs = visibleErrors(step.id);
+            return (
             <>
               <p className="text-[12.5px] text-white/50 leading-snug">{step.hint}</p>
-
               {step.id === 'about' && (
                 <div className="space-y-3">
-                  <input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="Имя *"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 placeholder:text-white/25" />
-                  <input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Фамилия"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 placeholder:text-white/25" />
-                  <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Телефон *"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 placeholder:text-white/25" />
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/35">Пол · для расселения по палаткам</span>
-                    <Chips options={['Мужчина', 'Женщина']} value={gender} onChange={setGender} allowCustom={false} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/35">Дата рождения · клуб поздравляет своих</span>
+                  <Field label="Имя" error={errs.firstName}>
+                    <input value={firstName} onChange={(e) => setFirstName(e.target.value)}
+                      placeholder="Например, Александр" className={inputClass(errs.firstName)} />
+                  </Field>
+                  <Field label="Фамилия" error={errs.lastName}>
+                    <input value={lastName} onChange={(e) => setLastName(e.target.value)}
+                      placeholder="Как в паспорте" className={inputClass(errs.lastName)} />
+                  </Field>
+                  <Field label="Телефон" error={errs.phone} hint="Telegram бывает закрыт настройками — по телефону найдём в день выезда.">
+                    <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel"
+                      placeholder="+375 (29) 111-22-33" className={inputClass(errs.phone)} />
+                  </Field>
+                  <Field label="Пол · для расселения по палаткам" error={errs.gender}>
+                    <Chips options={['Мужчина', 'Женщина']} value={gender} onChange={setGender}
+                      allowCustom={false} error={!!errs.gender} />
+                  </Field>
+                  <Field label="Дата рождения · клуб поздравляет своих" error={errs.birthday}>
                     <input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)}
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 [color-scheme:dark]" />
-                  </div>
+                      className={`${inputClass(errs.birthday)} [color-scheme:dark]`} />
+                  </Field>
                 </div>
               )}
 
               {step.id === 'work' && (
-                <Chips options={OCCUPATIONS} value={occupation} onChange={setOccupation} multi placeholder="Своя сфера…" />
+                <Field label="Чем занимаешься" error={errs.occupation}>
+                  <Chips options={OCCUPATIONS} value={occupation} onChange={setOccupation}
+                    multi placeholder="Своя сфера…" error={!!errs.occupation} />
+                </Field>
               )}
 
               {step.id === 'activity' && (
-                <Chips options={ACTIVITIES} value={activities} onChange={setActivities} multi placeholder="Что-то ещё…" />
+                <Field label="Что тебе близко" error={errs.activities}>
+                  <Chips options={ACTIVITIES} value={activities} onChange={setActivities}
+                    multi placeholder="Что-то ещё…" error={!!errs.activities} />
+                </Field>
               )}
 
               {step.id === 'gear' && (
                 <div className="space-y-4">
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/35">Транспорт</span>
-                    <Chips options={TRANSPORT} value={transport} onChange={setTransport} allowCustom={false} />
+                  <Field label="Транспорт" error={errs.transport}>
+                    <Chips options={TRANSPORT} value={transport} onChange={setTransport}
+                      allowCustom={false} error={!!errs.transport} />
                     {transport[0] === 'Своё авто' && (
-                      <input value={seats} onChange={(e) => setSeats(e.target.value.replace(/\D/g, '').slice(0, 2))}
-                        inputMode="numeric" placeholder="Сколько мест могу взять"
-                        className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 placeholder:text-white/25" />
+                      <div className="pt-1.5">
+                        <input value={seats} onChange={(e) => setSeats(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                          inputMode="numeric" placeholder="Сколько мест могу взять (0 — никого)"
+                          className={inputClass(errs.seats)} />
+                        {errs.seats && <p className="text-[11px] text-rose-400 leading-snug mt-1.5">{errs.seats}</p>}
+                      </div>
                     )}
-                  </div>
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/35">Чем можешь поделиться</span>
-                    <Chips options={GEAR} value={gear} onChange={setGear} multi placeholder="Своё снаряжение…" />
-                  </div>
+                  </Field>
+                  <Field label="Чем можешь поделиться" error={errs.gear}>
+                    <Chips options={GEAR} value={gear} onChange={setGear}
+                      multi placeholder="Своё снаряжение…" error={!!errs.gear} />
+                  </Field>
                 </div>
               )}
 
               {step.id === 'final' && (
                 <div className="space-y-4">
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-mono uppercase tracking-widest text-white/35">Зачем тебе клуб</span>
+                  <Field label="Зачем тебе клуб" error={errs.why}>
                     <textarea value={why} onChange={(e) => setWhy(e.target.value)} rows={4}
                       placeholder="Что ищешь и что готов приносить кругу"
-                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3.5 py-3 text-[14px] outline-none focus:border-brand/60 placeholder:text-white/25 resize-none" />
-                  </div>
+                      className={`${inputClass(errs.why)} resize-none`} />
+                  </Field>
                   <button
                     type="button" onClick={() => { setUsePhoto((v) => !v); haptic('success'); }}
                     className={`w-full flex items-center gap-3 px-3.5 py-3 rounded-xl border cursor-pointer text-left transition-all ${
@@ -509,9 +645,15 @@ export default function ClubOnboarding({
                 </div>
               )}
             </>
-          )}
+            );
+          })()}
 
-          {error && <p className="text-[12px] text-rose-400 leading-snug">{error}</p>}
+          {error && (
+            <p className="flex items-start gap-2 text-[12px] text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded-xl px-3 py-2.5 leading-snug">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-px" />
+              <span>{error}</span>
+            </p>
+          )}
         </div>
       </div>
 
@@ -537,6 +679,11 @@ export default function ClubOnboarding({
           {step.kind === 'rule' && (
             <p className="text-[10px] text-white/30 text-center mt-2 leading-snug">
               Принятые правила запоминаются — при записи на события их не спросят заново.
+            </p>
+          )}
+          {step.kind === 'form' && (
+            <p className="text-[10px] text-white/30 text-center mt-2 leading-snug">
+              Все поля анкеты обязательны — по ним собирают круг и логистику.
             </p>
           )}
         </div>
