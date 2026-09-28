@@ -18,6 +18,8 @@ import SnapModal from './SnapModal';
 import { getEventGuide } from '../eventGuide';
 import { LogisticsPanel } from './LogisticsPanel';
 import { EventRules } from './EventRules';
+import ChallengeProgress from './ChallengeProgress';
+import ChallengeStories from './ChallengeStories';
 
 /**
  * Настоящий ли это чат события.
@@ -242,6 +244,8 @@ export default function EventDetailModal({
   const [promoActive, setPromoActive] = useState(false);
   /** Открыта ли «всплывашка» «Снять фото/видео» из кнопок под баннером. */
   const [showSnap, setShowSnap] = useState(false);
+  /** Фокус сторис: тап по точке в таблице прогресса открывает кружок этого дня. */
+  const [storyFocus, setStoryFocus] = useState<{ telegramId: number; date: string } | null>(null);
   const medicalNote = String(logi.medical || '').trim();
   const isDetox = !!logi.detox;
   const isNoSignal = !!logi.nosignal;
@@ -429,7 +433,7 @@ export default function EventDetailModal({
                 три-четыре строки. Всё, ради чего человек открыл карточку,
                 должно попадать в первый экран, а не уезжать под скролл. */}
             <div className="grid grid-cols-3 gap-2">
-              {event.logistics?.routeUrl && (
+              {event.logistics?.routeUrl && !isChallenge && (
                 <a
                   href={event.logistics.routeUrl}
                   target="_blank"
@@ -440,7 +444,9 @@ export default function EventDetailModal({
                   {event.logistics.routeLabel || 'Маршрут'}
                 </a>
               )}
-              {/* Live-галерея события: существующая точка media_<id> в Mini App. */}
+              {/* Live-галерея события: существующая точка media_<id> в Mini App.
+                  ДЛЯ ЧЕЛЛЕНДЖА скрываем: кружки участников — в ChallengeStories. */}
+              {!isChallenge && (
               <a
                 href={`/api/events?action=gallery&id=${encodeURIComponent(event.id)}`}
                 target="_blank"
@@ -460,7 +466,10 @@ export default function EventDetailModal({
                         ].filter(Boolean).join(' · ')}
                 </span>
               </a>
-              {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки. */}
+              )}
+              {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки.
+                  ДЛЯ ЧЕЛЛЕНДЖА скрываем: отчёты идут в чат, не в галерею. */}
+              {!isChallenge && (
               <button
                 type="button"
                 onClick={() => setShowSnap(true)}
@@ -472,24 +481,34 @@ export default function EventDetailModal({
                   снять или из галереи
                 </span>
               </button>
-              {/* Чат события и бот — переехали сюда из нижней панели: там они
-                  занимали постоянную полосу экрана, хотя нужны разово. */}
+              )}
+              {/* Чат события: для челленджа — ГЛАВНАЯ зелёная кнопка (пусть горит),
+                  для остальных — обычная нейтральная. */}
               {isRealChatUrl(event.telegramBotUrl) && (
                 <a
                   href={event.telegramBotUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+                  className={`flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider rounded-xl px-2 py-3 transition-all text-center leading-tight ${
+                    isChallenge
+                      ? 'bg-brand text-black hover:bg-brand-hover shadow-lg shadow-brand/30'
+                      : 'text-white/70 border border-white/15 hover:bg-white/10'
+                  }`}
                 >
                   <span className="text-base leading-none">💬</span>
                   Чат события
+                  {isChallenge && (
+                    <span className="text-[9px] font-normal text-black/70 normal-case tracking-normal">
+                      отправь кружок сюда
+                    </span>
+                  )}
                 </a>
               )}
               {/* Навигация по самой странице: событие длинное, и до программы,
                   подготовки или голосования люди просто не доскроливали.
                   Плитка показывается, только если за ней реально что-то есть —
                   ведущая в пустоту хуже отсутствующей. */}
-              {Boolean((event.logistics as any)?.prep || event.locationDetails) && (
+              {Boolean((event.logistics as any)?.prep || event.locationDetails) && !isChallenge && (
                 <button
                   type="button"
                   onClick={() => document.getElementById('sect-prep')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -509,7 +528,7 @@ export default function EventDetailModal({
                   Что взять
                 </button>
               )}
-              {Boolean(event.programVoting?.enabled) && (
+              {Boolean(event.programVoting?.enabled) && !isChallenge && (
                 <button
                   type="button"
                   onClick={() => document.getElementById('sect-vote')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -519,7 +538,7 @@ export default function EventDetailModal({
                   Голосование
                 </button>
               )}
-              {isRegistered && (event.myBuddies?.length || 0) > 0 && (
+              {isRegistered && (event.myBuddies?.length || 0) > 0 && !isChallenge && (
                 <button
                   type="button"
                   onClick={() => document.getElementById('sect-my')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -530,8 +549,9 @@ export default function EventDetailModal({
                 </button>
               )}
               {/* Снаряжение и задачи живут в кабинете, а нужны ровно здесь.
-                  Открываем вкладку событием, без перезагрузки приложения. */}
-              {isRegistered && (
+                  Открываем вкладку событием, без перезагрузки приложения.
+                  ДЛЯ ЧЕЛЛЕНДЖА скрываем: там нет ни задач, ни снаряжения. */}
+              {isRegistered && !isChallenge && (
                 <button
                   type="button"
                   onClick={() => document.getElementById('sect-tasks')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
@@ -541,7 +561,7 @@ export default function EventDetailModal({
                   Задачи
                 </button>
               )}
-              {isRegistered && (
+              {isRegistered && !isChallenge && (
                 <button
                   type="button"
                   onClick={() => { onClose(); window.dispatchEvent(new CustomEvent('openProfileTab', { detail: { tab: 'gear' } })); }}
@@ -559,8 +579,9 @@ export default function EventDetailModal({
           </div>
 
           {/* Живая лента фото/видео события — каждый poll обновляется, как в сторис.
-              Фото шлют в бота (media_upload), здесь они сразу появляются и сохраняются в истории. */}
-          <LiveMedia eventId={event.id} />
+              Фото шлют в бота (media_upload), здесь они сразу появляются и сохраняются в истории.
+              ДЛЯ ЧЕЛЛЕНДЖА НЕ ПОКАЗЫВАЕМ: кружки живут в Telegram (file_id), лента — в ChallengeStories. */}
+          {!isChallenge && <LiveMedia eventId={event.id} />}
 
           {/* Grid of Essential Parameters. На мобильном узкие отступы — больше места контенту. */}
           <div className="p-4 sm:p-6 space-y-6">
@@ -577,6 +598,10 @@ export default function EventDetailModal({
                 сетки и оставлять дыру рядом.
                 grid-flow-dense досыпает узкие плитки в свободные клетки справа
                 от даты, поэтому порядок в разметке менять не пришлось. */}
+            {/* Бенто-параметры (дата/время, локация, взнос, места) — для
+                челленджа скрываем: там нет ни локации, ни даты-времени-проведения,
+                ни взноса. Вместо него — блок «Как засчитывается день» ниже. */}
+            {!isChallenge && (
             <div className="grid grid-cols-2 grid-flow-row-dense gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-start
                             [&>div]:p-3 sm:[&>div]:p-4 [&>div]:min-w-0 [&>div]:overflow-hidden
                             [&>div>div]:min-w-0 [&>div>div]:break-words [&>div]:gap-2 sm:[&>div]:gap-3">
@@ -718,14 +743,16 @@ export default function EventDetailModal({
                 </div>
               </div>
             </div>
+            )}
 
             <div id="sect-my" className="scroll-mt-4" />
             {/* Твоё участие: где и во сколько выезд — записавшимся.
                 Дословная жалоба: «Я уже вроде записалась. Как мне теперь
                 найти, с кем я, где и во сколько выезд?». Точка сбора и время
                 лежали в logistics, редактировались в админке и уходили в бота,
-                но в карточке на сайте не показывались НИКОГДА. */}
-            {isRegistered && (
+                но в карточке на сайте не показывались НИКОГДА.
+                ДЛЯ ЧЕЛЛЕНДЖА скрываем: нет ни сбора, ни выезда, ни точки. */}
+            {isRegistered && !isChallenge && (
               <div className="bg-brand/5 border border-brand/20 rounded-2xl p-4 space-y-3">
                 <span className="text-brand uppercase text-[9px] tracking-wider font-bold flex items-center gap-2">
                   <Check className="w-4 h-4" /> Твоё участие
@@ -918,9 +945,9 @@ export default function EventDetailModal({
                 </span>
                 <ol className="space-y-2.5">
                   {[
-                    { n: '1', t: 'Встань до 06:00', d: 'Время подъёма видно на видео — это единственное доказательство, которое мы принимаем.' },
-                    { n: '2', t: 'Сними видео-кружок прямо на месте подъёма', d: 'Кружок (круглое видео) снимается одним касанием: «скрепка» → «кружок». Не фото и не пересланное видео.' },
-                    { n: '3', t: 'Отправь его в чат челленджа', d: 'Бот сам увидит кружок, засчитает день, посчитает серию и начислит баллы.' },
+                    { n: '1', t: 'Сделай результат за день', d: '5 км, потянулся, брусья, пресс — выбери сам. Главное, чтобы был РЕЗУЛЬТАТ, а не просто подъём. Время подъёма не важно.' },
+                    { n: '2', t: 'Добавь любое действие по желанию', d: 'Хочешь — медитация, чтение, закаливание. Что считаешь нужным для себя сегодня.' },
+                    { n: '3', t: 'Отправь отчёт в чат челленджа', d: 'Кружок (видео) или текст — бот засчитает день, посчитает серию и начислит баллы. Кружок покажи в движении: процесс не важен, важен факт.' },
                   ].map((s) => (
                     <li key={s.n} className="flex gap-3">
                       <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-400 text-[10px] font-black text-black">{s.n}</span>
@@ -932,22 +959,44 @@ export default function EventDetailModal({
                   ))}
                 </ol>
                 <p className="border-t border-white/10 pt-3 text-[11px] leading-5 text-white/50">
-                  Пропустил утро — серия обнуляется, но день из истории не исчезает. Ничего страшного: ценно не «идеально», а то, что ты возвращаешься завтра.
+                  Пропустил день — серия обнуляется, но день из истории не исчезает. Ценно не «идеально», а то, что ты возвращаешься завтра.
                 </p>
               </div>
             )}
 
+            {/* ЛЕНТА СТОРИС: кружки участников, как в Instagram. Тап по
+                аватару → полноэкранный просмотр. Источник — file_id из Telegram,
+                в Supabase сами видео не храним. */}
+            {isChallenge && (
+              <ChallengeStories
+                event={event}
+                focus={storyFocus}
+                onCloseFocus={() => setStoryFocus(null)}
+              />
+            )}
+
+            {/* ТАБЛИЦА ПРОГРЕССА: аватар + полоса из 92 точек по месяцам.
+                Тап по залитой точке → сторис этого дня. */}
+            {isChallenge && (
+              <ChallengeProgress
+                event={event}
+                onOpenStory={(telegramId, date) => setStoryFocus({ telegramId, date })}
+              />
+            )}
+
             {/* Поступки события: «кто что сделал». Организатор подтверждает —
                 только тогда эпизод идёт в репутацию и приносит баллы. Кому что
-               visible, решает сервер: участник видит лишь свои подтверждённые. */}
-            {(isRegistered || isClubMember) && <EventContributions eventId={event.id} />}
+               visible, решает сервер: участник видит лишь свои подтверждённые.
+               ДЛЯ ЧЕЛЛЕНДЖА скрываем: там прогресс идёт по дням (ChallengeProgress). */}
+            {!isChallenge && (isRegistered || isClubMember) && <EventContributions eventId={event.id} />}
 
             {/* Программа подня́та выше логистики: человек сначала решает,
                 идёт ли он на ЭТО, и только потом — как добираться. Раньше
                 она лежала под составом и описанием, и до неё доскроливали
                 не все. */}
-            {/* Программа по времени */}
-            {guide.program.length > 0 && (
+            {/* Программа по времени — для челленджа скрываем: там не программа,
+                а условия «как засчитывается день» (блок ниже). */}
+            {!isChallenge && guide.program.length > 0 && (
               <div className="bg-white/5 border border-white/10 p-4 rounded-2xl space-y-3">
                 <span className="text-brand text-[10px] tracking-widest font-mono block uppercase font-bold flex items-center gap-2">
                   <Clock className="w-3.5 h-3.5" /> Программа
@@ -1029,8 +1078,9 @@ export default function EventDetailModal({
                 действительно решает споры. */}
             <EventRules />
 
-            {/* Кто уже едет: состав, а не только цифра */}
-            {roster.length > 0 && (
+            {/* Кто уже едет: состав, а не только цифра.
+                Для челленджа скрываем: состав по дням виден в ChallengeProgress. */}
+            {!isChallenge && roster.length > 0 && (
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 space-y-3">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="text-white/40 uppercase text-[9px] tracking-wider flex items-center gap-2">
@@ -1063,8 +1113,9 @@ export default function EventDetailModal({
               </div>
             )}
 
-            {/* Погода на даты (open-meteo) */}
-            <WeatherBlock event={event} />
+            {/* Погода на даты (open-meteo) — для челленджа скрываем: он офлайн,
+                по всему миру, погода не влияет на результат. */}
+            {!isChallenge && <WeatherBlock event={event} />}
 
             {/* «Под вопросом» — честно предупреждаем до того, как человек запишется */}
             {event.statusReason && (
@@ -1090,13 +1141,16 @@ export default function EventDetailModal({
               </div>
             </div>
 
-            {/* Comprehensive Description */}
+            {/* Comprehensive Description — для челленджа скрываем: там условия,
+                а не сценарий (блок «Как засчитывается день» выше). */}
+            {!isChallenge && (
             <div className="space-y-2">
               <span className="text-white/40 text-[10px] tracking-widest font-mono block uppercase">ПОДРОБНЫЙ СЦЕНАРИЙ И СМЫСЛ ВСТРЕЧИ</span>
               <p className="font-sans text-sm text-white/80 leading-relaxed whitespace-pre-wrap">
                 {event.description}
               </p>
             </div>
+            )}
 
             <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
             <TripBlock trip={extras.trip} />
@@ -1305,6 +1359,9 @@ export default function EventDetailModal({
                   <Send className="w-4 h-4 shrink-0" />
                 </a>
               )}
+              {/* «ТГ-Бот флинта» для челленджа скрываем: человек уже здесь,
+                  отчёт он шлёт в чат, а не в личку бота. */}
+              {!isChallenge && (
               <a
                 href={`https://t.me/campsflint_bot?start=event_${event.id}`}
                 target="_blank"
@@ -1314,6 +1371,7 @@ export default function EventDetailModal({
                 ТГ-Бот флинта
                 <Send className="w-4 h-4 text-black shrink-0" />
               </a>
+              )}
             </div>
           ) : (
             /* Open for Registration */

@@ -823,6 +823,133 @@ async function handleCheckins(req: any, res: any) {
 }
 
 /**
+ * ПРОГРЕСС ЧЕЛЛЕНДЖА ПО УЧАСТНИКАМ — для таблицы в карточке события.
+ *
+ * GET ?action=checkins_grouped&id=<eventId>
+ *   → { participants: [{ telegram_id, name, avatar, days: [{date, time}] }] }
+ *
+ * Группирует чек-ины по telegram_id, подтягивает имя и аватар из members.
+ * Приватность: участники видны всем, кто открыл событие (как «Кто уже едет»).
+ * Аватары и кружки НЕ храним — только метаданные; видео лежит в Telegram.
+ */
+async function handleCheckinsGrouped(req: any, res: any) {
+  const eventId = String(req.query?.id || '');
+  if (!eventId) return res.status(400).json({ error: 'missing_id' });
+
+  const { data: rows, error } = await supabase
+    .from('app_config')
+    .select('key,value')
+    .ilike('key', `challenge_checkin:${eventId}:%`)
+    .limit(20000);
+  if (error) return res.status(200).json({ participants: [] });
+
+  // Собираем дни по человеку: { tgId: [{date, time}] }
+  const byUser = new Map<number, { date: string; time?: string }[]>();
+  for (const r of rows || []) {
+    const parts = String((r as any).key).split(':');
+    const tgId = Number(parts[2]);
+    const date = String(parts[3] || '');
+    if (!tgId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    let parsed: any = null;
+    try { parsed = typeof (r as any).value === 'string' ? JSON.parse((r as any).value) : (r as any).value; } catch { parsed = null; }
+    if (!byUser.has(tgId)) byUser.set(tgId, []);
+    byUser.get(tgId)!.push({ date, time: parsed?.time || undefined });
+  }
+  if (!byUser.size) return res.status(200).json({ participants: [] });
+
+  // Имена одним запросом по telegram_id (в members: first_name/last_name/username).
+  const ids = Array.from(byUser.keys());
+  const { data: members } = await supabase
+    .from('members')
+    .select('telegram_id,first_name,last_name,username')
+    .in('telegram_id', ids)
+    .limit(500);
+  const meta = new Map<number, { name: string }>();
+  for (const m of members || []) {
+    const full = [m.first_name, m.last_name].filter(Boolean).join(' ') || (m.username ? `@${m.username}` : '');
+    meta.set(Number((m as any).telegram_id), { name: full || 'Участник' });
+  }
+
+  const participants = ids.map((tgId) => ({
+    telegram_id: tgId,
+    name: meta.get(tgId)?.name || 'Участник',
+    days: (byUser.get(tgId) || []).sort((a, b) => (a.date < b.date ? -1 : 1)),
+  }));
+
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ participants });
+}
+
+/**
+ * СТОРИС ЧЕЛЛЕНДЖА — лента кружков участников.
+ *
+ * GET ?action=stories&id=<eventId>
+ *   → { stories: [{ telegram_id, name, avatar, date, time, file_id, type, text }] }
+ *
+ * Хранение: кружок лежит в Telegram (file_id), прокси /api/events?action=media&fid=
+ * отдаёт файл. В Supabase — только метаданные, чтобы 92 × N участников
+ * не забивали память. Текстовые отчёты без видео отдаются с text.
+ */
+async function handleStories(req: any, res: any) {
+  const eventId = String(req.query?.id || '');
+  if (!eventId) return res.status(400).json({ error: 'missing_id' });
+
+  const { data: rows, error } = await supabase
+    .from('app_config')
+    .select('key,value')
+    .ilike('key', `challenge_checkin:${eventId}:%`)
+    .limit(20000);
+  if (error) return res.status(200).json({ stories: [] });
+
+  const items: Array<{ telegram_id: number; date: string; time?: string; file_id?: string; type?: string; text?: string }> = [];
+  for (const r of rows || []) {
+    const parts = String((r as any).key).split(':');
+    const tgId = Number(parts[2]);
+    const date = String(parts[3] || '');
+    if (!tgId || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    let parsed: any = null;
+    try { parsed = typeof (r as any).value === 'string' ? JSON.parse((r as any).value) : (r as any).value; } catch { parsed = null; }
+    items.push({
+      telegram_id: tgId,
+      date,
+      time: parsed?.time || undefined,
+      file_id: parsed?.file_id || undefined,
+      type: parsed?.type || undefined,
+      text: parsed?.text || undefined,
+    });
+  }
+  if (!items.length) return res.status(200).json({ stories: [] });
+
+  // Имена (в members: first_name/last_name/username).
+  const ids = Array.from(new Set(items.map((i) => i.telegram_id)));
+  const { data: members } = await supabase
+    .from('members')
+    .select('telegram_id,first_name,last_name,username')
+    .in('telegram_id', ids)
+    .limit(500);
+  const meta = new Map<number, { name: string }>();
+  for (const m of members || []) {
+    const full = [m.first_name, m.last_name].filter(Boolean).join(' ') || (m.username ? `@${m.username}` : '');
+    meta.set(Number((m as any).telegram_id), { name: full || 'Участник' });
+  }
+
+  const stories = items
+    .map((i) => ({
+      telegram_id: i.telegram_id,
+      name: meta.get(i.telegram_id)?.name || 'Участник',
+      date: i.date,
+      time: i.time,
+      file_id: i.file_id,
+      type: i.type,
+      text: i.text,
+    }))
+    .sort((a, b) => (a.date < b.date ? 1 : -1)); // новые сверху
+
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ stories });
+}
+
+/**
  * ПОСТУПКИ СОБЫТИЯ — «кто что сделал».
  *
  * GET  ?action=contributions&id=<eventId>   → список эпизодов (pending + история)
@@ -956,6 +1083,8 @@ export default async function handler(req: any, res: any) {
     if (req.query?.action === 'contribution_review') return await handleContributionReview(req, res);
     // Чек-ины челленджа: дни и время подъёма. Публично — без имён.
     if (req.query?.action === 'checkins') return await handleCheckins(req, res);
+    if (req.query?.action === 'checkins_grouped') return await handleCheckinsGrouped(req, res);
+    if (req.query?.action === 'stories') return await handleStories(req, res);
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
     // отдавался публично, а затем пускал по одному реф-коду — так не-член видел

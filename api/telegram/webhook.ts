@@ -8213,7 +8213,7 @@ export default async function handler(req: any, res: any) {
                 text: `⚡️ <b>Чек-ин принят, ${firstName}!</b>
 
 ` +
-                      `🌅 Время подъёма: <b>${timeStr}</b>
+                      `⏱ Время отчёта: <b>${timeStr}</b>
 ` +
                       `🔥 День подряд: <b>${streak}</b>
 ` +
@@ -8224,6 +8224,76 @@ export default async function handler(req: any, res: any) {
         }
       } catch (err) {
         console.warn('[challenge_checkin] failed to process:', err);
+      }
+    }
+
+    /**
+     * ТЕКСТОВЫЙ ОТЧЁТ В ЧАТЕ ЧЕЛЛЕНДЖА — равноправная альтернатива кружку.
+     * Участник не обязан снимать видео: «5 км + пресс + брусья» — тоже отчёт.
+     * Принимаем обычный текст (не команды, не ответы бота) в привязанном
+     * челлендж-чате. Баллы и серия — как у кружка.
+     */
+    if (msg && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup') && msg.from && !msg.from.is_bot
+      && typeof msg.text === 'string' && msg.text.trim() && !msg.text.trim().startsWith('/')) {
+      try {
+        const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', msg.chat.id).eq('active', true).maybeSingle();
+        if (gl && (gl as any).event_id) {
+          const evId = String((gl as any).event_id);
+          const { data: ev } = await supabase.from('events').select('id, notifications').eq('id', evId).maybeSingle();
+          const notifs = ((ev as any)?.notifications || {}) as Record<string, any>;
+          const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
+
+          if (isChallenge) {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const tgId = Number(msg.from.id);
+            const checkinKey = `challenge_checkin:${evId}:${tgId}:${todayStr}`;
+
+            // Уже отчитался сегодня (кружком или текстом)? Тогда не дублируем.
+            const { data: existing } = await supabase.from('app_config').select('value').eq('key', checkinKey).maybeSingle();
+            if (!existing) {
+              const reportText = msg.text.trim().slice(0, 500);
+              const now = new Date();
+              const timeStr = now.toLocaleTimeString('ru-RU', { timeZone: 'Europe/Minsk', hour: '2-digit', minute: '2-digit' });
+
+              await supabase.from('app_config').upsert({
+                key: checkinKey,
+                value: {
+                  telegram_id: tgId,
+                  name: msg.from.first_name || msg.from.username,
+                  event_id: evId,
+                  date: todayStr,
+                  time: timeStr,
+                  type: 'text',
+                  text: reportText,
+                  // file_id нет — в сторис покажем карточку с текстом.
+                }
+              });
+
+              // Начисляем +10 баллов, как за кружок.
+              const newPoints = await awardPoints(tgId, 10);
+
+              // Стрик: сколько дней подряд есть чек-ины.
+              const { data: allUserCheckins } = await supabase
+                .from('app_config')
+                .select('key')
+                .ilike('key', `challenge_checkin:${evId}:${tgId}:%`);
+              const streak = (allUserCheckins || []).length;
+
+              const firstName = esc(msg.from.first_name || msg.from.username || 'Участник');
+              await tg('sendMessage', {
+                chat_id: msg.chat.id,
+                reply_to_message_id: msg.message_id,
+                parse_mode: 'HTML',
+                text: `📝 <b>Текстовый отчёт принят, ${firstName}!</b>\n\n` +
+                      `💬 «${esc(reportText)}»\n` +
+                      `🔥 День подряд: <b>${streak}</b>\n` +
+                      `🏆 +10 баллов репутации (Баланс: ${newPoints || 'обновлён'})`
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[challenge_text_checkin] failed to process:', err);
       }
     }
 
@@ -8397,7 +8467,7 @@ export default async function handler(req: any, res: any) {
             reply_to_message_id: msg.message_id,
             text: (doneToday
               ? `🔥 <b>${who}, день ${dayNo} засчитан.</b>\nСерия: <b>${streak}</b> дн. подряд.`
-              : `🌅 <b>${who}, сегодня отметки пока нет.</b>\nСерия: <b>${streak}</b> дн. Сними кружок и отправь сюда — засчитаю.`)
+              : `🌅 <b>${who}, сегодня отметки пока нет.</b>\nСерия: <b>${streak}</b> дн. Отправь кружок или текстовый отчёт сюда — засчитаю.`)
               + `\nВсего дней: <b>${myDates.size}</b>.`,
           });
           return res.status(200).json({ ok: true });
