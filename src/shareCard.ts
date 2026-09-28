@@ -152,6 +152,13 @@ export async function renderShareCard(ev: { title: string; date?: string; dateEn
 /** Рисует карточку и кладёт в хранилище; возвращает публичную ссылку. */
 export async function makeShareCard(ev: Parameters<typeof renderShareCard>[0]): Promise<string> {
   const dataUrl = await renderShareCard(ev);
+  /**
+   * Токен админки читаем из localStorage, потому что карточку делает костяк
+   * внутри Mini App: кука сессии там `SameSite=Strict` и к запросу не
+   * прикладывается. Хранить долгоживущий токен в localStorage — известный
+   * компромисс (его снимет любой XSS), поэтому он живёт 12 часов и обновляется
+   * при каждом входе в админку; отдельного «долгого» токена здесь нет.
+   */
   let token = '';
   try { token = localStorage.getItem('flint_admin_token') || ''; } catch { /* приватный режим */ }
   const r = await fetch('/api/admin/events?action=upload_image', {

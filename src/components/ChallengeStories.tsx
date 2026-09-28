@@ -10,9 +10,11 @@ import { haptic } from '../telegram';
  * Стиль Instagram Stories: горизонтальная лента кружков сверху, тап →
  * полноэкранный просмотр с прогресс-баром и перелистыванием.
  *
- * Источник кружков: `file_id` из `app_config.challenge_checkin:*`, прокси
- * `/api/events?action=media&fid=` отдаёт файл из Telegram. В Supabase
- * сами видео НЕ храним — 92 × N участников забьют память.
+ * Источник кружков: `file_id` из `app_config.challenge_checkin:*`, а сервер
+ * (`?action=stories`) отдаёт уже готовую подписанную ссылку `journalMedia` —
+ * сырые file_id с подписью в браузере не собираем: прокси принимает только
+ * подписанные запросы (иначе он превращается в чужое файлохранилище).
+ * В Supabase сами видео НЕ храним — 92 × N участников забьют память.
  *
  * Текстовые отчёты (без видео) показываются карточкой с текстом.
  */
@@ -24,6 +26,8 @@ type CheckinStory = {
   date: string;
   time?: string;
   file_id?: string;
+  /** Готовая подписанная ссылка на видео из Telegram (её считает сервер). */
+  media?: string;
   type?: 'video_note' | 'video';
   text?: string;  // текстовый отчёт
 };
@@ -171,9 +175,7 @@ function StoryViewer({ story, index, total, onClose, onNav }: {
   onClose: () => void;
   onNav: (dir: -1 | 1) => void;
 }) {
-  const src = story.file_id
-    ? `/api/events?action=media&fid=${encodeURIComponent(story.file_id)}`
-    : null;
+  const src = story.media || null;
 
   return (
     <div className="fixed inset-0 z-[70] bg-black/95 flex flex-col">
