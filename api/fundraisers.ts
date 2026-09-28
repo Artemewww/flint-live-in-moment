@@ -24,7 +24,8 @@ function verifyInitData(raw: string): { id: number } | null {
   } catch { return null; }
 }
 function admin(req: any): boolean {
-  const token = String(req.headers?.authorization || '').replace(/^Bearer\s+/i, '');
+  const authHeader = String(req.headers?.authorization || req.headers?.['x-flint-admin-token'] || '');
+  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
   if (!ADMIN_SECRET) return false;
   const validSession = (value: string): boolean => {
     const [exp, mac] = String(value).split('.');
@@ -152,17 +153,37 @@ export default async function handler(req: any, res: any) {
       if (error) throw error;
       const ids = (data || []).map((x: any) => x.id);
       const { data: ps } = ids.length ? await db.from('fundraiser_pledges').select('*').in('fundraiser_id', ids).order('created_at', { ascending: false }) : { data: [] };
-      return res.json({ fundraisers: (data || []).map((x: any) => shape(x, (ps || []).filter((p: any) => p.fundraiser_id === x.id))) });
+      const tgIds = Array.from(new Set((ps || []).map((p: any) => Number(p.telegram_id)).filter(Boolean)));
+      const { data: membersInfo } = tgIds.length
+        ? await db.from('members').select('telegram_id, first_name, last_name, username').in('telegram_id', tgIds)
+        : { data: [] };
+      const memberMap = new Map<number, string>();
+      for (const m of (membersInfo || [])) {
+        const full = [m.first_name, m.last_name].filter(Boolean).join(' ') || (m.username ? `@${m.username}` : `ID ${m.telegram_id}`);
+        memberMap.set(Number(m.telegram_id), full);
+      }
+      const pledgesWithNames = (ps || []).map((p: any) => ({
+        ...p,
+        memberName: memberMap.get(Number(p.telegram_id)) || (p.note ? p.note : `ID ${p.telegram_id}`)
+      }));
+      return res.json({ fundraisers: (data || []).map((x: any) => shape(x, pledgesWithNames.filter((p: any) => p.fundraiser_id === x.id))) });
     }
     if (req.method === 'GET' && action === 'audience') {
       if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
-      const { data, error } = await db.from('members').select('telegram_id,name,username,status,is_core,role,bot_active').order('name', { ascending: true });
+      const { data, error } = await db.from('members').select('telegram_id,first_name,last_name,username,status,is_core,role,bot_active').order('first_name', { ascending: true });
       if (error) throw error;
-      return res.json({ members: (data || []).filter((m: any) => Number(m.telegram_id) > 0 && m.bot_active !== false).map((m: any) => ({
-        id: Number(m.telegram_id), name: m.name || m.username || `Участник ${m.telegram_id}`,
-        username: m.username || '', status: m.status || '', isCore: m.is_core === true || ['owner', 'organizer'].includes(m.role),
-        avatar: avatarUrl(Number(m.telegram_id)),
-      })) });
+      return res.json({ members: (data || []).filter((m: any) => Number(m.telegram_id) > 0 && m.bot_active !== false).map((m: any) => {
+        // В members нет колонки name — собираем из first_name/last_name, как везде.
+        const displayName = [m.first_name, m.last_name].filter(Boolean).join(' ') || (m.username ? `@${m.username}` : `Участник ${m.telegram_id}`);
+        return {
+          id: Number(m.telegram_id),
+          name: displayName,
+          username: m.username || '',
+          status: m.status || '',
+          isCore: m.is_core === true || ['owner', 'organizer'].includes(m.role),
+          avatar: avatarUrl(Number(m.telegram_id)),
+        };
+      }) });
     }
     /**
      * Все идущие сборы — для карусели на главной. Раньше баннер показывал
@@ -186,20 +207,20 @@ export default async function handler(req: any, res: any) {
     }
     if (req.method === 'GET') {
       const slug = clean(req.query?.slug || req.query?.id, 120);
-      const query = db.from('fundraisers').select('*').eq('status', 'published');
+      const query = db.from('fundraisers').select('*');
       const { data, error } = slug
         ? await query.eq('slug', slug).maybeSingle()
-        : await query.order('created_at', { ascending: false }).limit(1).maybeSingle();
+        : await query.eq('status', 'published').order('created_at', { ascending: false }).limit(1).maybeSingle();
       if (error) throw error; if (!data) return res.status(404).json({ error: 'Not found' });
-      const { data: ps } = await db.from('fundraiser_pledges').select('amount,status,telegram_id,created_at').eq('fundraiser_id', data.id).order('created_at', { ascending: false });
+      const { data: ps } = await db.from('fundraiser_pledges').select('amount,status,telegram_id,created_at,note').eq('fundraiser_id', data.id).order('created_at', { ascending: false });
       const rows = ps || [];
       // Кружки поддержавших: только подтверждённые, последние сверху. Имя — лишь
       // первое (для буквы, если фото скрыто); суммы по людям публично не светим.
+      // Telegram ID и заметки вкладчиков на публичную страницу не отдаём.
       const confirmedIds = [...new Set(rows.filter((p: any) => p.status === 'confirmed').map((p: any) => Number(p.telegram_id)))].slice(0, 12);
       const { data: mem } = confirmedIds.length ? await db.from('members').select('telegram_id,first_name').in('telegram_id', confirmedIds) : { data: [] };
       const firstName = new Map((mem || []).map((m: any) => [Number(m.telegram_id), String(m.first_name || '')]));
       const supporters = confirmedIds.map((id) => ({ name: firstName.get(id) || '•', avatar: avatarUrl(id) }));
-      // Публичной странице не нужны telegram_id вкладчиков — shape получает только суммы.
       const fund = shape(data, rows.map((p: any) => ({ amount: p.amount, status: p.status })));
       return res.json({ fundraiser: { ...fund, pledges: undefined, supporters, amountOptions: amountOptions(fund.goalAmount, rows) } });
     }
@@ -290,10 +311,7 @@ export default async function handler(req: any, res: any) {
       if (!payload.slug || !payload.title || !payload.deadline || payload.goal_amount <= 0) return res.status(400).json({ error: 'Заполни название, slug, цель и дедлайн' });
       const { data, error } = await db.from('fundraisers').upsert(f.id ? { ...payload, id: f.id } : payload).select().single();
       if (error) {
-        // Схема может быть без новых полей (миграции 2026-09-15-fundraisers-legal.sql
-        // и 2026-09-15-fundraisers-image.sql ещё не применены) — сохраняем основные
-        // данные, а не роняем весь сбор.
-        const { cost_breakdown, legal_note, report_note, report_url, organizer_name, image_url, image_caption, ...core } = payload;
+        const { cost_breakdown, legal_note, report_note, report_url, organizer_name, image_url, ...core } = payload;
         if (!/column|schema cache/i.test(String(error.message))) throw error;
         console.warn('[fundraisers] новые поля недоступны, сохраняем базовый набор:', error.message);
         const retry = await db.from('fundraisers').upsert(f.id ? { ...core, id: f.id } : core).select().single();
@@ -301,6 +319,71 @@ export default async function handler(req: any, res: any) {
         return res.json({ ok: true, fundraiser: shape(retry.data), legalFieldsMissing: true });
       }
       return res.json({ ok: true, fundraiser: shape(data) });
+    }
+    if (action === 'close') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const id = clean(body.id, 80);
+      if (!id) return res.status(400).json({ error: 'Не указан ID сбора' });
+      const { data, error } = await db.from('fundraisers').update({ status: 'closed', updated_at: new Date().toISOString() }).eq('id', id).select().single();
+      if (error) throw error;
+      const { data: ps } = await db.from('fundraiser_pledges').select('*').eq('fundraiser_id', id);
+      return res.json({ ok: true, fundraiser: shape(data, ps || []) });
+    }
+    if (action === 'manual_pledge') {
+      if (!admin(req)) return res.status(401).json({ error: 'Unauthorized' });
+      const fundraiserId = clean(body.fundraiserId, 80);
+      const telegramId = Number(body.telegramId);
+      const amount = Number(body.amount);
+      const note = clean(body.note, 300);
+      if (!fundraiserId || !telegramId || !amount || amount <= 0) {
+        return res.status(400).json({ error: 'Укажите участника и сумму' });
+      }
+      const { data: f } = await db.from('fundraisers').select('*').eq('id', fundraiserId).single();
+      if (!f) return res.status(404).json({ error: 'Сбор не найден' });
+      
+      const { data: pledge, error: pledgeErr } = await db.from('fundraiser_pledges').insert({
+        fundraiser_id: fundraiserId,
+        telegram_id: telegramId,
+        amount,
+        note: note || 'Взнос отмечен организатором',
+        status: 'confirmed',
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: 0
+      }).select().single();
+      if (pledgeErr) throw pledgeErr;
+
+      // Начисление баллов
+      const awarded = Math.max(1, Math.round(amount * Number(f.points_per_100 || 1)));
+      const { data: m } = await db.from('members').select('points, first_name, last_name, username').eq('telegram_id', telegramId).maybeSingle();
+      if (m) {
+        await db.from('members').update({ points: Number(m.points || 0) + awarded }).eq('telegram_id', telegramId);
+        // points_log может отсутствовать до миграции — баллы в members уже начислены.
+        try {
+          await db.from('points_log').insert({
+            telegram_id: telegramId,
+            reason: 'fundraiser',
+            points: awarded,
+            description: `Вклад в сбор «${f.title}»`,
+          });
+        } catch (e: any) { console.warn('[fundraisers] points_log недоступен:', e?.message || e); }
+      }
+
+      const { data: allPs } = await db.from('fundraiser_pledges').select('*').eq('fundraiser_id', fundraiserId).order('created_at', { ascending: false });
+      const tgIds = Array.from(new Set((allPs || []).map((p: any) => Number(p.telegram_id)).filter(Boolean)));
+      const { data: membersInfo } = tgIds.length
+        ? await db.from('members').select('telegram_id, first_name, last_name, username').in('telegram_id', tgIds)
+        : { data: [] };
+      const memberMap = new Map<number, string>();
+      for (const mem of (membersInfo || [])) {
+        const full = [mem.first_name, mem.last_name].filter(Boolean).join(' ') || (mem.username ? `@${mem.username}` : `ID ${mem.telegram_id}`);
+        memberMap.set(Number(mem.telegram_id), full);
+      }
+      const pledgesWithNames = (allPs || []).map((p: any) => ({
+        ...p,
+        memberName: memberMap.get(Number(p.telegram_id)) || (p.note ? p.note : `ID ${p.telegram_id}`)
+      }));
+
+      return res.json({ ok: true, pledge, points: m ? awarded : 0, fundraiser: shape(f, pledgesWithNames) });
     }
     if (action === 'pledge_status') {
       const status = ['pending','confirmed','rejected'].includes(body.status) ? body.status : null; if (!status || !body.pledgeId) return res.status(400).json({ error: 'Некорректный статус' });

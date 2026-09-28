@@ -6908,7 +6908,6 @@ export default async function handler(req: any, res: any) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: why });
           return res.status(200).json({ ok: true });
         }
-        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место забронировано ✅' });
         // Сел в машину → снимаем его заявку «нужна попутка», чтобы не висел в списке
         // ищущих (и в админке). Матчим по событию и пассажиру (как ставили в rideseek_).
         await supabase.from('ride_requests').update({ active: false })
@@ -6926,16 +6925,34 @@ export default async function handler(req: any, res: any) {
         ];
         if (route) rows.unshift([{ text: '🧭 Маршрут до точки выезда', url: route }]);
 
-        await tg('editMessageText', {
-          chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
-          text:
-            `✅ <b>Место твоё</b>\n\n` +
-            `🚗 Водитель: ${esc((ride as any).driver_name || '')}` +
-            ((driverInfo as any)?.username ? ` @${esc((driverInfo as any).username)}` : '') + '\n' +
-            ((driverInfo as any)?.phone ? `📞 <code>${esc((driverInfo as any).phone)}</code>\n` : '') +
-            `📍 Выезд: ${esc((ride as any).from_point)}\n🕐 Когда: ${esc((ride as any).depart_text)}`,
-          reply_markup: kb(rows),
-        });
+        const bookingText =
+          `✅ <b>Место твоё</b>\n\n` +
+          `🚗 Водитель: ${esc((ride as any).driver_name || '')}` +
+          ((driverInfo as any)?.username ? ` @${esc((driverInfo as any).username)}` : '') + '\n' +
+          ((driverInfo as any)?.phone ? `📞 <code>${esc((driverInfo as any).phone)}</code>\n` : '') +
+          `📍 Выезд: ${esc((ride as any).from_point)}\n🕐 Когда: ${esc((ride as any).depart_text)}`;
+        const isGroupBooking = ['group', 'supergroup'].includes(String(cq.message?.chat?.type || ''));
+        if (isGroupBooking) {
+          // В группе не редактируем общий ответ и не публикуем личные контакты.
+          // Кнопки управления бронью отправляем только пассажиру в личный чат.
+          const privateMessage = await tg('sendMessage', {
+            chat_id: tgId, parse_mode: 'HTML', text: bookingText, reply_markup: kb(rows),
+          });
+          await tg('answerCallbackQuery', {
+            callback_query_id: cq.id,
+            text: privateMessage?.ok
+              ? 'Место забронировано ✅ Детали отправил в личные сообщения.'
+              : 'Место забронировано ✅ Открой личный чат с ботом и нажми «Старт», чтобы получить детали.',
+            show_alert: !privateMessage?.ok,
+          });
+        } else {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Место забронировано ✅' });
+          await tg('editMessageText', {
+            chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
+            text: bookingText,
+            reply_markup: kb(rows),
+          });
+        }
         try {
           await tg('sendMessage', {
             chat_id: (ride as any).driver_id, parse_mode: 'HTML',
@@ -8383,7 +8400,7 @@ export default async function handler(req: any, res: any) {
               const { data: ev } = await supabase.from('events').select('*').eq('id', (linkedEvent as any).id).maybeSingle();
               const lg = (ev as any)?.logistics || {};
               const { data: rides } = await supabase
-                .from('rides').select('driver_name,seats_total,seats_taken,from_point,kind')
+                .from('rides').select('id,driver_name,seats_total,seats_taken,from_point,kind')
                 .eq('event_id', (linkedEvent as any).id).eq('active', true);
               const { data: tsk } = await supabase
                 .from('tasks').select('title,taken_by,done').eq('event_id', (linkedEvent as any).id).limit(20);
@@ -8447,6 +8464,7 @@ export default async function handler(req: any, res: any) {
                 departAt ? `🚗 Выезд в <b>${esc(departAt)}</b>` : '',
               ].filter(Boolean).join(' · ') || 'Время уточняется у организатора';
 
+              const seatQuestion = /(свободн[а-яё]*\s+мест|есть\s+мест|мест[оа]?\s+в\s+машин|нужна\s+попутка|подвез)/i.test(text);
               let quick = '';
               if (/во\s*сколько|когда\s+(выезд|выезжаем|стартуем|сбор|собираемся)|время\s+выезда/i.test(text)) {
                 quick = `${whenLine}${(ev as any)?.date ? `, ${esc(dayPhrase((ev as any).date))}` : ''}`
@@ -8457,21 +8475,32 @@ export default async function handler(req: any, res: any) {
                   : 'Точку сбора организатор ещё не назначил — как назначит, пришлю сюда.';
               } else if (/скольк[а-яё]*\s+(стоит|взнос)|какой\s+взнос|цена|платить/i.test(text)) {
                 quick = `💰 ${esc((ev as any)?.price_label || 'Взнос не указан — уточню у организатора')}`;
-              } else if (/(свободн[а-яё]*\s+мест|есть\s+мест|мест[оа]?\s+в\s+машин|нужна\s+попутка|подвез)/i.test(text)) {
+              } else if (seatQuestion) {
                 quick = freeSeatsNow > 0
-                  ? `🚗 Свободных мест: <b>${freeSeatsNow}</b>.\n${freeRides.map((ride: any) => `• ${esc(ride.driver_name || 'Водитель')} — ${Math.max(0, Number(ride.seats_total || 0) - Number(ride.seats_taken || 0))} места${ride.from_point ? `, старт: ${esc(ride.from_point)}` : ''}`).join('\n')}\n\nЗанять место — кнопкой «Логистика и брони» в боте.`
+                  ? `🚗 Свободных мест: <b>${freeSeatsNow}</b>.\n${freeRides.map((ride: any) => `• ${esc(ride.driver_name || 'Водитель')} — ${Math.max(0, Number(ride.seats_total || 0) - Number(ride.seats_taken || 0))} места${ride.from_point ? `, старт: ${esc(ride.from_point)}` : ''}`).join('\n')}\n\nНажми кнопку напротив водителя, чтобы занять место.`
                   : `🚗 Свободных мест сейчас нет. Если поедешь своей машиной — напиши тут «еду на машине, N мест», я запишу.`;
               } else if (/кто\s+(едет|поедет|записал|будет)|скольк[а-яё]*\s+(человек|нас|едет)/i.test(text)) {
                 const names = (regs2 || []).map((r: any) => r.name).filter(Boolean);
                 quick = `👥 Едут (${names.length}): ${esc(names.join(', ') || '—')}`;
               }
               if (quick) {
+                const quickRows: any[] = [];
+                if (freeSeatsNow > 0 && seatQuestion) {
+                  for (const ride of freeRides as any[]) {
+                    const free = Math.max(0, Number(ride.seats_total || 0) - Number(ride.seats_taken || 0));
+                    quickRows.push([{
+                      text: `🚗 ${String(ride.driver_name || 'Водитель').slice(0, 40)} · ${free} мест`,
+                      callback_data: `ridebook_${ride.id}`,
+                    }]);
+                  }
+                }
+                if (asmC && /сбор|выезд|откуда/i.test(text)) {
+                  quickRows.push([{ text: '🧭 Маршрут к точке сбора', url: pointMapUrl(asmRaw) }]);
+                }
                 await tg('sendMessage', {
                   chat_id: chatId, parse_mode: 'HTML', reply_to_message_id: msg.message_id,
                   text: quick,
-                  reply_markup: asmC && /сбор|выезд|откуда/i.test(text)
-                    ? kb([[{ text: '🧭 Маршрут к точке сбора', url: pointMapUrl(asmRaw) }]])
-                    : undefined,
+                  reply_markup: quickRows.length ? kb(quickRows) : undefined,
                 });
                 await supabase.from('bot_group_actions').insert({
                   chat_id: chatId, event_id: (linkedEvent as any).id, action_type: 'info_reply',

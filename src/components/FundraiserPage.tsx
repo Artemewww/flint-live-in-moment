@@ -4,11 +4,12 @@ import { getInitData, haptic } from '../telegram';
 import Avatar from './Avatar';
 
 export type Fundraiser = { id?: string; slug: string; title: string; summary: string; story: string; goalAmount: number; deadline: string; recipientName: string; paymentCard: string; paymentNote: string; pointsPer100: number; organizerName?: string; costBreakdown?: string; legalNote?: string; reportNote?: string; reportUrl?: string; imageUrl?: string; imageCaption?: string; createdBy?: number | null; confirmedAmount: number; confirmedCount: number; status?: string; pledges?: any[]; supporters?: { name: string; avatar?: string }[]; amountOptions?: number[] };
-type Member = { id: number; name: string; isCore: boolean; avatar?: string };
+type Member = { id: number; name: string; username?: string; status?: string; isCore: boolean; avatar?: string };
 const money = (n: number) => `${Math.round(n).toLocaleString('ru-RU')} BYN`;
 const dayMonth = (iso: string) => { const d = new Date(`${iso}T12:00:00`); return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }); };
 const daysLeft = (iso: string) => Math.ceil((new Date(`${iso}T23:59:59`).getTime() - Date.now()) / 86400000);
 const headers = () => { const token = localStorage.getItem('flint_admin_token') || ''; return token ? { Authorization: `Bearer ${token}` } : {}; };
+
 
 /** Кружки поддержавших внахлёст — как «уже скинулись» в банковских сборах. */
 function SupportersRow({ fund }: { fund: Fundraiser }) {
@@ -99,6 +100,13 @@ export function FundraiserPage({ slug, onClose }: { slug: string; onClose?: () =
         <button onClick={onClose} className="flex items-center gap-2 border-0 bg-transparent p-0 text-sm text-white/50"><ArrowLeft className="h-4 w-4" /> В афишу FLINT</button>
         <FundraiserCard fund={fund} />
 
+        {fund.status === 'closed' ? (
+          <div className="rounded-3xl border border-white/10 bg-[#111] p-6 text-center">
+            <p className="font-display text-lg font-black">🏁 Сбор завершён</p>
+            <p className="mt-2 text-sm leading-6 text-white/60">Спасибо всем участникам клуба за поддержку! Итог: {money(fund.confirmedAmount)} из {money(fund.goalAmount)}.</p>
+          </div>
+        ) : (
+          <>
         {/* Поддержать — по образцу перевода в банке: крупная сумма, быстрые
             суммы чипами, реквизиты с копированием в один тап. */}
         <section className="space-y-5 rounded-3xl border border-brand/25 bg-gradient-to-b from-brand/[.08] to-[#111] p-5 md:p-7">
@@ -161,6 +169,8 @@ export function FundraiserPage({ slug, onClose }: { slug: string; onClose?: () =
             </>
           )}
         </section>
+          </>
+        )}
 
         <FundraiserStory fund={fund} />
       </main>
@@ -188,10 +198,47 @@ const STATUS_LABEL: Record<string, string> = { draft: 'черновик', review
 export function FundraiserAdmin({ onClose }: { onClose: () => void }) {
   const [items, setItems] = useState<Fundraiser[]>([]); const [editing, setEditing] = useState<Fundraiser>(blank); const [members, setMembers] = useState<Member[]>([]); const [audience, setAudience] = useState('core'); const [selected, setSelected] = useState<number[]>([]); const [preview, setPreview] = useState(false); const [message, setMessage] = useState(''); const [uploading, setUploading] = useState(false);
   const [aiText, setAiText] = useState(''); const [aiBusy, setAiBusy] = useState(false); const [imagePrompt, setImagePrompt] = useState(''); const [drawing, setDrawing] = useState(false);
+  // Ручная отметка «этот уже сдал» — организатор вписывает взнос за человека,
+  // который передал деньги в моменте: наличными, переводом без кнопки «Я перевёл».
+  const [manualSearch, setManualSearch] = useState(''); const [manualId, setManualId] = useState(''); const [manualAmount, setManualAmount] = useState('20'); const [manualNote, setManualNote] = useState(''); const [manualBusy, setManualBusy] = useState(false);
   const load = () => fetch('/api/fundraisers?action=admin', { headers: headers() }).then((r) => r.json()).then((j) => setItems(j.fundraisers || []));
   useEffect(() => { load(); fetch('/api/fundraisers?action=audience', { headers: headers() }).then((r) => r.json()).then((j) => setMembers(j.members || [])).catch(() => {}); }, []);
   const patch = (key: keyof Fundraiser, value: any) => setEditing((x) => ({ ...x, [key]: value }));
   const save = async (status?: string) => { const r = await fetch('/api/fundraisers?action=save', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ fundraiser: status ? { ...editing, status } : editing }) }); const j = await r.json(); if (r.ok) { setEditing(j.fundraiser); setMessage(status === 'published' ? 'Опубликовано' : 'Сохранено'); load(); } else setMessage(j.error || 'Ошибка'); };
+  /**
+   * Завершение сбора. Отдельное действие, а не просто статус в «Сохранить»:
+   * завершение должно срабатывать одной кнопкой и не зависеть от того, что
+   * ещё не сохранено в форме (иначе кнопка «ничего не делала»).
+   */
+  const closeFund = async () => {
+    if (!editing.id) return setMessage('Сначала сохрани сбор, потом завершай');
+    if (!window.confirm(`Завершить сбор «${editing.title}»? Он уйдёт в архив, новые вклады перестанут приниматься.`)) return;
+    const r = await fetch('/api/fundraisers?action=close', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ id: editing.id }) });
+    const j = await r.json();
+    if (!r.ok || !j.ok) return setMessage(j.error || 'Не удалось завершить сбор');
+    setEditing(j.fundraiser); setMessage('🏁 Сбор завершён — он в архиве, участники видят итог'); load();
+  };
+  /**
+   * Ручной взнос: человек сдал деньги в моменте, организатор отмечает за него.
+   * Вклад сразу подтверждён — баллы начисляются на месте.
+   */
+  const addManualPledge = async () => {
+    if (!editing.id) return setMessage('Сначала сохрани сбор');
+    const member = members.find((m) => String(m.id) === manualId);
+    const amount = Number(manualAmount) || 0;
+    if (!member) return setMessage('Выбери участника, который сдал деньги');
+    if (amount <= 0) return setMessage('Укажи сумму взноса');
+    setManualBusy(true);
+    try {
+      const r = await fetch('/api/fundraisers?action=manual_pledge', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ fundraiserId: editing.id, telegramId: member.id, amount, note: manualNote }) });
+      const j = await r.json();
+      if (!r.ok || !j.ok) return setMessage(j.error || 'Не удалось записать взнос');
+      setMessage(`✅ ${member.name} — записан взнос ${money(amount)}${j.points ? `, +${j.points} баллов` : ''}`);
+      setManualId(''); setManualNote(''); setManualSearch('');
+      if (j.fundraiser) setEditing(j.fundraiser);
+      await refresh();
+    } catch { setMessage('Сеть подвела — попробуй ещё раз'); } finally { setManualBusy(false); }
+  };
   const send = async () => { if (audience === 'none') return setMessage('Сохранено без рассылки'); const body = { id: editing.id, audience, memberIds: selected }; const dry = await fetch('/api/fundraisers?action=broadcast', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then((r) => r.json()); if (!dry.ok) return setMessage(dry.error || 'Ошибка'); if (!window.confirm(`Получателей: ${dry.wouldSend}. Отправить?`)) return; const result = await fetch('/api/fundraisers?action=broadcast', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ ...body, confirm: true }) }).then((r) => r.json()); setMessage(result.ok ? `Отправлено: ${result.sent}` : result.error || 'Ошибка рассылки'); };
 
   /**
@@ -264,6 +311,12 @@ export function FundraiserAdmin({ onClose }: { onClose: () => void }) {
   };
   const memberOf = (tgId: any) => members.find((m) => Number(m.id) === Number(tgId));
   const organizers = useMemo(() => [...members].sort((a, b) => Number(b.isCore) - Number(a.isCore) || a.name.localeCompare(b.name)), [members]);
+  /** Список для ручной отметки: сперва уже отметившиеся, иначе — поиск по имени. */
+  const manualOptions = useMemo(() => {
+    const q = manualSearch.trim().toLowerCase();
+    const base = q ? members.filter((m) => m.name.toLowerCase().includes(q) || (m.username || '').toLowerCase().includes(q)) : members;
+    return [...base].sort((a, b) => Number(b.isCore) - Number(a.isCore) || a.name.localeCompare(b.name)).slice(0, 60);
+  }, [members, manualSearch]);
 
   const compressImage = (file: File) => new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
@@ -285,18 +338,28 @@ export function FundraiserAdmin({ onClose }: { onClose: () => void }) {
     reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
     reader.readAsDataURL(file);
   });
+
   const pickImage = async (file?: File | null) => {
     if (!file) return;
-    if (!/^image\//.test(file.type)) return setMessage('Это не картинка: выбери PNG, JPEG или WebP');
-    setMessage('Загружаю фотографию…'); setUploading(true);
+    if (!/^image\//.test(file.type)) return setMessage("Это не картинка: выбери PNG, JPEG или WebP");
+    setMessage("Загружаю фотографию…");
+    setUploading(true);
     try {
       const dataUrl = await compressImage(file);
-      const r = await fetch('/api/fundraisers?action=upload_image', { method: 'POST', headers: { ...headers(), 'Content-Type': 'application/json' }, body: JSON.stringify({ dataUrl, slug: editing.slug }) });
+      const r = await fetch("/api/fundraisers?action=upload_image", {
+        method: "POST",
+        headers: { ...headers(), "Content-Type": "application/json" },
+        body: JSON.stringify({ dataUrl, slug: editing.slug }),
+      });
       const j = await r.json();
-      if (!r.ok || !j.ok) throw new Error(j.error || 'Не удалось загрузить фотографию');
-      patch('imageUrl', j.url);
-      setMessage('Фотография загружена — не забудь нажать «Сохранить».');
-    } catch (e: any) { setMessage(e.message || 'Ошибка загрузки'); } finally { setUploading(false); }
+      if (!r.ok || !j.ok) throw new Error(j.error || "Не удалось загрузить фотографию");
+      patch("imageUrl", j.url);
+      setMessage("Фотография загружена — не забудь нажать «Сохранить».");
+    } catch (e: any) {
+      setMessage(e.message || "Ошибка загрузки");
+    } finally {
+      setUploading(false);
+    }
   };
 
   const field = (label: string, key: keyof Fundraiser, opts: { type?: string; area?: number; placeholder?: string } = {}) => (
@@ -373,6 +436,10 @@ export function FundraiserAdmin({ onClose }: { onClose: () => void }) {
 
           <div className="grid grid-cols-2 gap-2"><button onClick={() => setPreview(true)} className="rounded-xl border-0 bg-white/10 py-3 font-bold text-white">Предпросмотр</button><button onClick={() => save()} className="rounded-xl border-0 bg-brand py-3 font-black text-black">Сохранить</button></div>
           {editing.status !== 'published' && <button onClick={() => save('published')} className="w-full rounded-xl border border-brand/40 bg-brand/15 py-3 font-black text-brand">Опубликовать</button>}
+          {/* Завершение — одной кнопкой: раньше статус надо было выбирать в списке и не забыть сохранить. */}
+          {editing.id && editing.status !== 'closed' && (
+            <button onClick={closeFund} className="w-full rounded-xl border border-rose-400/30 bg-rose-500/10 py-3 font-black uppercase text-rose-200">🏁 Завершить сбор — в архив</button>
+          )}
         </div>}
         {message && <p className="text-sm text-brand">{message}</p>}
       </section>
@@ -387,6 +454,26 @@ export function FundraiserAdmin({ onClose }: { onClose: () => void }) {
             </button>); })}
           <button onClick={() => { setEditing(blank()); setAiText(''); setImagePrompt(''); setMessage(''); }} className="mt-1 border-0 bg-transparent font-bold text-brand">+ Новый сбор</button>
         </div>
+
+        {editing.id && <div className="space-y-3 rounded-3xl border border-brand/25 bg-brand/[.04] p-5">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="flex items-center gap-2 font-bold"><Heart className="h-4 w-4 text-brand" /> Отметить взнос вручную</h3>
+            <span className="font-mono text-[10px] uppercase text-white/40">+ баллы сразу</span>
+          </div>
+          <p className="text-[11px] leading-5 text-white/55">Для тех, кто сдал деньги в моменте — наличными или переводом без кнопки. Взнос считается подтверждённым сразу, баллы начисляются тут же.</p>
+          <input value={manualSearch} onChange={(e) => setManualSearch(e.target.value)} placeholder="Поиск по имени или @username" className="w-full rounded-xl border border-white/10 bg-black/30 p-2.5 text-xs text-white" />
+          <select value={manualId} onChange={(e) => setManualId(e.target.value)} className="w-full rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-white">
+            <option value="">Кто сдал деньги…</option>
+            {manualOptions.map((m) => <option key={m.id} value={m.id}>{m.name}{m.username ? ` (@${m.username})` : ''}{m.isCore ? ' · костяк' : ''}</option>)}
+          </select>
+          <div className="grid grid-cols-[1fr_2fr] gap-2">
+            <input value={manualAmount} onChange={(e) => setManualAmount(e.target.value.replace(/[^\d]/g, '').slice(0, 6))} inputMode="numeric" placeholder="Сумма" className="rounded-xl border border-white/10 bg-black/30 p-3 text-sm font-bold text-white" />
+            <input value={manualNote} onChange={(e) => setManualNote(e.target.value)} placeholder="Комментарий (необязательно)" className="min-w-0 rounded-xl border border-white/10 bg-black/30 p-3 text-xs text-white" />
+          </div>
+          <button onClick={addManualPledge} disabled={manualBusy} className="flex w-full items-center justify-center gap-2 rounded-xl border-0 bg-brand py-3 font-black uppercase text-black disabled:opacity-50">
+            {manualBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />} Отметить сдачу
+          </button>
+        </div>}
 
         {editing.id && <div className="space-y-3 rounded-3xl border border-white/10 p-5">
           <div className="flex items-center justify-between gap-2"><h3 className="font-bold">Вклады ({(editing.pledges || []).length})</h3><span className="font-mono text-[11px] text-white/45">подтверждено {money(editing.confirmedAmount)}</span></div>
