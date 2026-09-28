@@ -166,6 +166,13 @@ function mapEventToCamelCase(event: any) {
     lockedHint: event.locked_hint,
     program: event.program || [],
     notifications: event.notifications || {},
+    /**
+     * Челлендж это или выезд. Флаг приходит явно, а не выводится на клиенте
+     * из `notifications._format`: фронту нужно решение «рисовать пульсирующую
+     * карточку марафона вместо обычной афиши», и оно должно быть в одном
+     * месте, а не размазано по условиям в трёх компонентах.
+     */
+    isChallenge: (event.notifications || {})._format === 'challenge' || (event.notifications || {}).is_challenge === true,
     programVoting: event.program_voting,
     createdAt: event.created_at,
     updatedAt: event.updated_at
@@ -736,6 +743,86 @@ async function rejectContribution(id: number, byId: number): Promise<{ ok: boole
 }
 
 /**
+ * ЧЕК-ИНЫ ЧЕЛЛЕНДЖА — «утро засчитано».
+ *
+ * GET ?action=checkins&id=<eventId>  → { days: [{ date, time, telegram_id }], me, streak, done_today }
+ *
+ * Почему отдельная ручка, а не колонка в events. Челлендж идёт 90 дней и
+ * каждый день приносит по отметке на человека: в jsonb-флаге события это
+ * превратилось бы в растущий на тысячи записей блоб, который нельзя ни
+ * проиндексировать, ни посчитать. Отметки уже лежат в app_config строками
+ * `challenge_checkin:<eventId>:<telegramId>:<YYYY-MM-DD>` — их пишет вебхук,
+ * когда человек присылает видео-кружок в чат. Здесь мы их отдаём наружу.
+ *
+ * Приватность: отдаём ДНИ и ВРЕМЯ подъёма, но не имена всех участников.
+ * Личная серия чужих людей — не предмет витрины; организатор смотрит полную
+ * картину в админке, а участник видит свои отметки и общий счёт дней.
+ */
+async function handleCheckins(req: any, res: any) {
+  const eventId = String(req.query?.id || '');
+  if (!eventId) return res.status(400).json({ error: 'missing_id' });
+
+  // Кто смотрит: без подписи Telegram отдаём только обезличенные дни
+  // (для публичной карточки челленджа на главной).
+  const user = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
+  const viewerId = Number(user?.id) || 0;
+
+  const { data: rows, error } = await supabase
+    .from('app_config')
+    .select('key,value')
+    .ilike('key', `challenge_checkin:${eventId}:%`)
+    .limit(20000);
+  if (error) return res.status(200).json({ days: [], me: 0, streak: 0, done_today: false });
+
+  /**
+   * Один человек мог «отметиться» дважды за день, если перешлёт кружок
+   * повторно, — ключ строки один и тот же, поэтому дублей в базе не бывает.
+   * Разбираем ключ вручную: value у app_config — текст, не jsonb.
+   */
+  const days: Array<{ date: string; time?: string; telegram_id?: number }> = [];
+  let mine = 0;
+  for (const r of rows || []) {
+    const parts = String((r as any).key).split(':');
+    // challenge_checkin : <eventId> : <telegramId> : <YYYY-MM-DD>
+    const tgId = Number(parts[2]);
+    const date = String(parts[3] || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+    let parsed: any = null;
+    try { parsed = typeof (r as any).value === 'string' ? JSON.parse((r as any).value) : (r as any).value; } catch { parsed = null; }
+    if (viewerId && tgId === viewerId) mine += 1;
+    days.push({ date, time: parsed?.time || undefined, telegram_id: viewerId ? tgId : undefined });
+  }
+
+  // Дубли по дате (разные люди в один день) склеиваем: карточке нужен
+  // календарь дней челленджа, а не список людей.
+  const byDate = new Map<string, { date: string; time?: string; telegram_id?: number }>();
+  for (const d of days.sort((a, b) => (a.date < b.date ? -1 : 1))) {
+    if (!byDate.has(d.date)) byDate.set(d.date, d);
+  }
+  const uniqueDays = Array.from(byDate.values());
+
+  // Серия считаем здесь, а не на клиенте: клиент мог сутки не открывать
+  // приложение, и его локальный кэш покажет неверный стрик.
+  const today = new Date().toISOString().slice(0, 10);
+  const set = new Set(uniqueDays.map((d) => d.date));
+  let streak = 0;
+  const cursor = new Date(`${today}T00:00:00Z`);
+  for (let i = 0; i < 400; i += 1) {
+    const ymd = cursor.toISOString().slice(0, 10);
+    if (!set.has(ymd)) break;
+    streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+
+  return res.status(200).json({
+    days: uniqueDays,
+    me: mine,
+    streak,
+    done_today: set.has(today),
+  });
+}
+
+/**
  * ПОСТУПКИ СОБЫТИЯ — «кто что сделал».
  *
  * GET  ?action=contributions&id=<eventId>   → список эпизодов (pending + история)
@@ -867,6 +954,8 @@ export default async function handler(req: any, res: any) {
     // тогда эпизод идёт в репутацию и приносит баллы.
     if (req.query?.action === 'contributions') return await handleContributions(req, res);
     if (req.query?.action === 'contribution_review') return await handleContributionReview(req, res);
+    // Чек-ины челленджа: дни и время подъёма. Публично — без имён.
+    if (req.query?.action === 'checkins') return await handleCheckins(req, res);
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
     // отдавался публично, а затем пускал по одному реф-коду — так не-член видел

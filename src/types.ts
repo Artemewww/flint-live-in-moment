@@ -132,6 +132,14 @@ export interface CommunityEvent {
    * заводить колонку под каждый флаг = миграция на каждый чих.
    */
   notifications: Record<string, boolean | string | number | undefined>;
+  /**
+   * Челлендж — многодневный марафон с ежедневной отметкой, а не выезд.
+   * Приходит с сервера готовым флагом (см. api/events.ts): карточка на
+   * главной у челленджа своя — пульсирующая, со стриком и прогрессом дней.
+   */
+  isChallenge?: boolean;
+  /** Мои дни челленджа: что засчитано, когда и во сколько подъём. */
+  checkins?: { date: string; time?: string }[];
   programVoting?: {
     enabled: boolean;
     deadline: string;

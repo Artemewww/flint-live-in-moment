@@ -8003,7 +8003,7 @@ export default async function handler(req: any, res: any) {
       }
       if (sess?.state === 'media_upload' && sess.context?.eventId) {
         const evId = String(sess.context.eventId);
-        const src = msg.video || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null);
+        const src = msg.video_note || msg.video || (Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null);
         if (src?.file_id) {
           const { count } = await supabase
             .from('event_media').select('id', { count: 'exact', head: true })
@@ -8017,7 +8017,7 @@ export default async function handler(req: any, res: any) {
             telegram_id: msg.from.id,
             file_id: src.file_id,
             file_unique_id: src.file_unique_id,
-            media_type: msg.video ? 'video' : 'photo',
+            media_type: (msg.video || msg.video_note) ? 'video' : 'photo',
           });
           // 23505 = дубликат (unique event_id+file_unique_id) — не ошибка.
           if (error && !String(error.code) .includes('23505')) {
@@ -8078,6 +8078,30 @@ export default async function handler(req: any, res: any) {
      */
     if (msg && Array.isArray(msg.new_chat_members) && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup')) {
       const chatId = msg.chat.id;
+      /**
+       * Метка времени «когда человек появился в чате». Telegram историю участия
+       * не отдаёт, а без неё не работает правило «сидит час и молчит — выводим»
+       * (см. БЛОК D в api/cron/reminders.ts). Пишем сюда же, где живут
+       * остальные служебные метки, — в app_config, без новой миграции.
+       */
+      try {
+        const joinKey = `groupjoin:${chatId}`;
+        const { data: jr } = await supabase.from('app_config').select('value').eq('key', joinKey).maybeSingle();
+        let joins: Record<string, number> = {};
+        try { joins = jr ? JSON.parse(String((jr as any).value)) : {}; } catch { joins = {}; }
+        const now = Date.now();
+        let touched = false;
+        for (const u of (msg.new_chat_members as any[]).filter((x) => x && !x.is_bot)) {
+          const uid = Number(u.id);
+          if (Number.isFinite(uid) && !joins[uid]) { joins[uid] = now; touched = true; }
+        }
+        // Молчаливых, которых уже вывели, не копим: метка живёт максимум сутки.
+        for (const [id, at] of Object.entries(joins)) {
+          if (now - Number(at) > 24 * 60 * 60 * 1000) { delete joins[id]; touched = true; }
+        }
+        if (touched) await supabase.from('app_config').upsert({ key: joinKey, value: JSON.stringify(joins) });
+      } catch { /* метка не критична для приветствия */ }
+
       // Добавили самого бота — сразу пытаемся понять, чей это чат.
       const botAdded = (msg.new_chat_members as any[]).some((u) => u?.is_bot && String(u.username || '').toLowerCase() === BOT_USERNAME.toLowerCase());
       const linkedId = await autoLinkGroup(msg.chat, { announce: true, askIfUnsure: botAdded });
@@ -8114,6 +8138,93 @@ export default async function handler(req: any, res: any) {
         }
       }
       return res.status(200).json({ ok: true });
+    }
+
+    /**
+     * КРУЖОЧКИ (video_note) И ВИДЕО В ЧАТЕ ЧЕЛЛЕНДЖА: УТРЕННИЙ ЧЕК-ИН
+     * Участник присылает утреннее видео-подтверждение подъёма.
+     * Проверяем, привязан ли чат к челленджу, фиксируем чек-ин дня и начисляем баллы.
+     */
+    if (msg && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup') && msg.from && !msg.from.is_bot && (msg.video_note || msg.video)) {
+      try {
+        const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', msg.chat.id).eq('active', true).maybeSingle();
+        if (gl && (gl as any).event_id) {
+          const evId = String((gl as any).event_id);
+          const { data: ev } = await supabase.from('events').select('id, title, date, date_end, notifications').eq('id', evId).maybeSingle();
+          const notifs = ((ev as any)?.notifications || {}) as Record<string, any>;
+          const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
+          
+          if (isChallenge) {
+            const todayStr = new Date().toISOString().slice(0, 10);
+            const tgId = Number(msg.from.id);
+            const firstName = esc(msg.from.first_name || msg.from.username || 'Участник');
+            const checkinKey = `challenge_checkin:${evId}:${tgId}:${todayStr}`;
+
+            // Проверяем, был ли уже чек-ин сегодня
+            const { data: existing } = await supabase.from('app_config').select('value').eq('key', checkinKey).maybeSingle();
+            if (!existing) {
+              const now = new Date();
+              const timeStr = now.toLocaleTimeString('ru-RU', { timeZone: 'Europe/Minsk', hour: '2-digit', minute: '2-digit' });
+              
+              await supabase.from('app_config').upsert({
+                key: checkinKey,
+                value: {
+                  telegram_id: tgId,
+                  name: msg.from.first_name || msg.from.username,
+                  event_id: evId,
+                  date: todayStr,
+                  time: timeStr,
+                  file_id: (msg.video_note || msg.video).file_id,
+                  type: msg.video_note ? 'video_note' : 'video'
+                }
+              });
+
+              // Начисляем +10 баллов за честный утренний чек-ин
+              const newPoints = await awardPoints(tgId, 10);
+              
+              // Подсчитываем текущий стрик участника
+              const { data: allUserCheckins } = await supabase
+                .from('app_config')
+                .select('key')
+                .ilike('key', `challenge_checkin:${evId}:${tgId}:%`);
+              const streak = (allUserCheckins || []).length;
+
+              // Сохраняем видео в галерею события
+              const srcFile = msg.video_note || msg.video;
+              if (srcFile?.file_id) {
+                // Дубль кружка (тот же file_unique_id) — не ошибка: человек
+                // мог переслать видео повторно, галерея уже его видела.
+                try {
+                  await supabase.from('event_media').insert({
+                    event_id: evId,
+                    telegram_id: tgId,
+                    file_id: srcFile.file_id,
+                    file_unique_id: srcFile.file_unique_id || `vn_${Date.now()}`,
+                    media_type: 'video'
+                  });
+                } catch { /* 23505 / временная ошибка — чек-ин важнее галереи */ }
+              }
+
+              // Отправляем поздравление в чат
+              await tg('sendMessage', {
+                chat_id: msg.chat.id,
+                reply_to_message_id: msg.message_id,
+                parse_mode: 'HTML',
+                text: `⚡️ <b>Чек-ин принят, ${firstName}!</b>
+
+` +
+                      `🌅 Время подъёма: <b>${timeStr}</b>
+` +
+                      `🔥 День подряд: <b>${streak}</b>
+` +
+                      `🏆 +10 баллов репутации (Баланс: ${newPoints || 'обновлён'})`
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[challenge_checkin] failed to process:', err);
+      }
     }
 
     /**
@@ -8239,6 +8350,55 @@ export default async function handler(req: any, res: any) {
               { text: '🤔 Думаю', callback_data: `grpmaybe_${evId}` },
               { text: '❌ Не еду', callback_data: `grpno_${evId}` },
             ]]),
+          });
+          return res.status(200).json({ ok: true });
+        }
+
+        /**
+         * /челлендж — «как я иду». В челлендже главное не список участников, а
+         * личная серия: человек в 06:40 утра хочет одним сообщением понять,
+         * засчитан ли сегодняшний день и сколько держится. Без команды за этим
+         * приходилось листать переписку и считать дни вручную.
+         */
+        if (gcmd === '/челлендж' || gcmd === '/challenge' || gcmd === '/стрик' || gcmd === '/streak') {
+          const { data: gl } = await supabase
+            .from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+          if (!gl) { await tg('sendMessage', { chat_id: chatId, text: 'Чат не привязан к событию — сначала /link.' }); return res.status(200).json({ ok: true }); }
+          const evId = String((gl as any).event_id);
+          const { data: ev } = await supabase.from('events').select('id,title,date,date_end,notifications').eq('id', evId).maybeSingle();
+          const notifs = ((ev as any)?.notifications || {}) as Record<string, any>;
+          if (notifs._format !== 'challenge' && notifs.is_challenge !== true) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Это событие не челлендж — команда не нужна.' });
+            return res.status(200).json({ ok: true });
+          }
+          const tgId = Number(msg.from.id);
+          const todayMinsk = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+          const { data: mine } = await supabase
+            .from('app_config').select('key')
+            .ilike('key', `challenge_checkin:${evId}:${tgId}:%`);
+          const myDates = new Set((mine || []).map((r: any) => String(r.key).split(':')[3]));
+          // Серия до сегодня включительно: пропуск обрывает её сразу.
+          let streak = 0;
+          const cursor = new Date(`${todayMinsk}T00:00:00Z`);
+          for (let i = 0; i < 400; i += 1) {
+            if (!myDates.has(cursor.toISOString().slice(0, 10))) break;
+            streak += 1;
+            cursor.setUTCDate(cursor.getUTCDate() - 1);
+          }
+          const start = String((ev as any)?.date || todayMinsk);
+          const end = String((ev as any)?.date_end || start);
+          const dayNo = Math.min(
+            Math.max(1, Math.round((new Date(todayMinsk).getTime() - new Date(start).getTime()) / 86400000) + 1),
+            Math.max(1, Math.round((new Date(end).getTime() - new Date(start).getTime()) / 86400000) + 1));
+          const doneToday = myDates.has(todayMinsk);
+          const who = esc(msg.from.first_name || msg.from.username || 'Участник');
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            reply_to_message_id: msg.message_id,
+            text: (doneToday
+              ? `🔥 <b>${who}, день ${dayNo} засчитан.</b>\nСерия: <b>${streak}</b> дн. подряд.`
+              : `🌅 <b>${who}, сегодня отметки пока нет.</b>\nСерия: <b>${streak}</b> дн. Сними кружок и отправь сюда — засчитаю.`)
+              + `\nВсего дней: <b>${myDates.size}</b>.`,
           });
           return res.status(200).json({ ok: true });
         }

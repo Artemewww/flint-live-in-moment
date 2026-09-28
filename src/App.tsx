@@ -4,7 +4,7 @@ import {
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle,
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle, Music, Clapperboard
 } from 'lucide-react';
-import { CommunityEvent, Registration } from './types';
+import { CommunityEvent, Registration, getToday } from './types';
 import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
@@ -12,6 +12,7 @@ import RegistrationModal from './components/RegistrationModal';
 import ClubOnboarding from './components/ClubOnboarding';
 import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
+import ChallengeCard from './components/ChallengeCard';
 import VerificationModal from './components/VerificationModal';
 import BirthdayCalendar from './components/BirthdayCalendar';
 import FeedbackModal from './components/FeedbackModal';
@@ -80,6 +81,7 @@ function mapEventToCamelCase(event: any): CommunityEvent {
     lockedHint: event.locked_hint || event.lockedHint,
     program: event.program || [],
     notifications: event.notifications || {},
+    isChallenge: event.isChallenge ?? event.is_challenge ?? false,
     programVoting: event.program_voting || event.programVoting
   };
 }
@@ -1233,6 +1235,20 @@ export default function App() {
         ) : (
           <>
             <FundraiserBanner onOpen={(slug) => { window.history.pushState({}, '', `/?fund=${encodeURIComponent(slug)}`); window.location.reload(); }} />
+
+            {/* Живой челлендж — отдельным пульсирующим блоком над календарём.
+                Обычная афиша про челлендж врёт: у него нет ни «мест осталось»,
+                ни «до старта», зато есть серия дней, которая рвётся, если
+                человек пропустит утро. Поэтому он идёт первым, пока свежо. */}
+            {events.find((e) => e.isChallenge && (e.dateEnd || e.date) >= getToday()) && (
+              <section id="challenge-live-block" className="pt-2">
+                <ChallengeCard
+                  event={events.find((e) => e.isChallenge && (e.dateEnd || e.date) >= getToday())!}
+                  onOpenDetails={setActiveDetailEvent}
+                />
+              </section>
+            )}
+
             {/* Compact Calendar Grid with no headers */}
             <section id="calendar-widget-block" className="pt-2">
               <CalendarGrid

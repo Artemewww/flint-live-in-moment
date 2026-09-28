@@ -5605,13 +5605,16 @@ function EditEventModal({ event, onClose, onSave }: {
 }
 
 // Add Event Modal — бесшовный ИИ-флоу
-type EventScale = 'hours' | 'day' | 'overnight' | 'multiday' | 'expedition';
+type EventScale = 'hours' | 'day' | 'overnight' | 'multiday' | 'expedition' | 'challenge';
 const SCALES: { k: EventScale; l: string; hint: string }[] = [
   { k: 'hours', l: '⏱ Пара часов', hint: 'кино, кафе, встреча' },
   { k: 'day', l: '☀️ День', hint: 'без ночёвки' },
   { k: 'overnight', l: '⛺ С ночёвкой', hint: '1–2 ночи' },
   { k: 'multiday', l: '🥾 Несколько дней', hint: 'поход, кемп' },
   { k: 'expedition', l: '✈️ Большая поездка', hint: 'недели, за границу' },
+  // Челлендж — не «выезд подольше», а другой жанр: ежедневная отметка в чате
+  // и серия дней. У него своя карточка на главной и своё правило зачёта.
+  { k: 'challenge', l: '🔥 Челлендж', hint: 'ежедневные отметки, серия дней, видео-кружок в чат' },
 ];
 /** Масштаб по датам, если ИИ его не назвал: разница дат и длительность дня. */
 function inferScale(f: { date?: string; dateEnd?: string; time?: string; timeEnd?: string }): EventScale {
@@ -5998,8 +6001,19 @@ function AddEventModal({ onClose, onAdd }: {
                 {formData.priceType === 'paid' && <PaymentDetailsEditor value={formData.paymentDetails} onChange={(v) => setFormData({...formData, paymentDetails: v})} />}
 
                 {/* Масштаб решает, какие разделы нужны: кино на пару часов не
-                    спрашивает про палатки, поездка на Бали — спрашивает про визу. */}
-                <ScaleChips value={scale} onChange={(k) => setFormData({ ...formData, notifications: { ...(formData.notifications || {}), _scale: k } })} />
+                    спрашивает про палатки, поездка на Бали — спрашивает про визу.
+                    Челлендж — единственный масштаб, который меняет ещё и
+                    ФОРМАТ: маршруты и сборы ему не нужны, а карточка на главной
+                    должна стать пульсирующей (см. ChallengeCard). Поэтому
+                    выбор «🔥 Челлендж» пишет _format='challenge'. */}
+                <ScaleChips value={scale} onChange={(k) => setFormData({
+                  ...formData,
+                  notifications: {
+                    ...(formData.notifications || {}),
+                    _scale: k,
+                    ...(k === 'challenge' ? { _format: 'challenge' } : {}),
+                  },
+                })} />
 
                 {(showAllFields || sections.logistics) && <LogisticsEditor value={formData.logistics} onChange={(v) => setFormData({ ...formData, logistics: v })} event={formData} />}
                 {(showAllFields || sections.trip) && <TripEditor value={formData.logistics?.trip} onChange={(trip) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), trip } })} />}

@@ -219,6 +219,13 @@ export default function EventDetailModal({
   /** Онлайн-событие: часть блоков (сборы, маршрут, чек-лист) для него бессмысленна. */
   const isOnline = event.notifications?._format === 'online';
   /**
+   * Челлендж: марафон с ежедневной отметкой видео-кружком.
+   * Отличается от выезда кардинально — нет ни сбора в точке, ни маршрута, ни
+   * палаток, зато есть дни, серия и правило «кружок в чат до 06:00». Держим
+   * флаг отдельно, чтобы не размазывать проверки по всему компоненту.
+   */
+  const isChallenge = !!event.isChallenge;
+  /**
    * Чек-лист для кемпинга уместен не везде. На «Вызове 30 км» или встрече в
    * городе список «палатка, спальник, котелок» — мусор, который сбивает с толку
    * («некоторые блоки просто не соответствуют мероприятию» — владелец, 30.08).
@@ -227,7 +234,7 @@ export default function EventDetailModal({
    */
   const isOvernight = !!event.dateEnd && event.dateEnd !== event.date;
   const campingType = ['camping', 'hike', 'retreat', 'mixed'].includes(String(event.type || '').toLowerCase());
-  const needsCampingList = !isOnline && (isOvernight || campingType);
+  const needsCampingList = !isOnline && !isChallenge && (isOvernight || campingType);
   /** Предупреждения из логистики: здоровье и условия на месте. */
   const logi: any = event.logistics || {};
   /** Промо-ролик события: явное поле или авто-подбор по названию/локации. */
@@ -724,8 +731,9 @@ export default function EventDetailModal({
                   <Check className="w-4 h-4" /> Твоё участие
                 </span>
 
-                {/* Карта точки — только записавшимся: место видят участники. */}
-                {event.format !== 'online' && (
+                {/* Карта точки — только записавшимся: место видят участники.
+                    У челленджа точки нет: каждый встаёт у себя дома. */}
+                {event.format !== 'online' && !isChallenge && (
                   <YandexMapBlock lat={event.coordinates?.lat || Number(extractCoords(event.location || '')?.lat) || undefined} lng={event.coordinates?.lng || Number(extractCoords(event.location || '')?.lon) || undefined} place={prettyPlace(event.location)} />
                 )}
 
@@ -896,7 +904,38 @@ export default function EventDetailModal({
             )}
 
             {/* Задачи события: кто что делает и к какому сроку — всем записавшимся. */}
-            {isRegistered && <EventTasks eventId={event.id} />}
+            {isRegistered && !isChallenge && <EventTasks eventId={event.id} />}
+
+            {/* ЧЕЛЛЕНДЖ: правила и чек-лист дня. Задачи, машины и палатки у
+                марафона отсутствуют — вместо них человеку нужно ровно одно:
+                понять, что именно считается «днём засчитан» и как это
+                отправить. Правило «видео-кружок в чат» спрятано в переписке,
+                и новичок про него не догадывается. */}
+            {isChallenge && (
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[.06] p-5 space-y-3">
+                <span className="flex items-center gap-2 font-mono text-[10px] font-black uppercase tracking-widest text-amber-300">
+                  <Clock className="w-3.5 h-3.5" /> Как засчитывается день
+                </span>
+                <ol className="space-y-2.5">
+                  {[
+                    { n: '1', t: 'Встань до 06:00', d: 'Время подъёма видно на видео — это единственное доказательство, которое мы принимаем.' },
+                    { n: '2', t: 'Сними видео-кружок прямо на месте подъёма', d: 'Кружок (круглое видео) снимается одним касанием: «скрепка» → «кружок». Не фото и не пересланное видео.' },
+                    { n: '3', t: 'Отправь его в чат челленджа', d: 'Бот сам увидит кружок, засчитает день, посчитает серию и начислит баллы.' },
+                  ].map((s) => (
+                    <li key={s.n} className="flex gap-3">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-400 text-[10px] font-black text-black">{s.n}</span>
+                      <div className="space-y-0.5">
+                        <b className="block text-[13px] text-white">{s.t}</b>
+                        <span className="block text-[11px] leading-5 text-white/55">{s.d}</span>
+                      </div>
+                    </li>
+                  ))}
+                </ol>
+                <p className="border-t border-white/10 pt-3 text-[11px] leading-5 text-white/50">
+                  Пропустил утро — серия обнуляется, но день из истории не исчезает. Ничего страшного: ценно не «идеально», а то, что ты возвращаешься завтра.
+                </p>
+              </div>
+            )}
 
             {/* Поступки события: «кто что сделал». Организатор подтверждает —
                 только тогда эпизод идёт в репутацию и приносит баллы. Кому что
@@ -980,7 +1019,10 @@ export default function EventDetailModal({
             {/* Логистика — инструмент того, кто уже едет: машины, брони, попутки.
                 Незаписавшемуся она не нужна и только отвлекает от решения,
                 идёт он или нет. */}
-            {isRegistered && <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />}
+            {/* Логистика (машины, попутчики, сборы) у челленджа бессмысленна:
+                никто никуда не едет — люди встают у себя дома, в разных
+                городах. Блок только сбивал бы с толку. */}
+            {isRegistered && !isChallenge && <LogisticsPanel eventId={event.id} isRegistered={isRegistered} />}
 
             {/* Правила круга: короткое напоминание вместо восьми экранов кодекса.
                 На место убранного «Дома Личности» встаёт то, что на выезде

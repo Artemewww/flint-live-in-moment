@@ -1146,6 +1146,168 @@ export default async function handler(req: any, res: any) {
       }
     } catch { /* чистка не должна ронять напоминания */ }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // БЛОК C: Челлендж — «кто ещё не отметился сегодня»
+    // ══════════════════════════════════════════════════════════════════════════
+    /**
+     * У челленджа провал виден не по цифре «сколько записалось», а по тишине:
+     * человек пропустил утро — и молчит. Без этого блока о пропуске узнают
+     * только тогда, когда серия уже разорвана, и мотивация потеряна.
+     *
+     * Пишем в ЧАТ челленджа, а не в личку каждому: это групповое дело, и
+     * «вижу, что другие уже встали» работает сильнее персонального пинга.
+     * Считаем чек-ины из app_config — там они и лежат (ключ
+     * challenge_checkin:<eventId>:<telegramId>:<дата>).
+     *
+     * Расписание. На Vercel Hobby крон ходит РАЗ В СУТКИ — `0 6 * * *`,
+     * то есть 06:00 UTC = 09:00 по Минску. Поэтому порог «не раньше 08:00
+     * Минска» здесь не защита от повторного запуска, а страховка: если крон
+     * случайно дёрнут вручную днём, пинг всё равно уйдёт (время уже прошло),
+     * а если запустят ночью — не разбудим людей в 4 утра.
+     * От повторов защищает отметка `_challengeNudge` ниже, а не время.
+     */
+    try {
+      const CHALLENGE_HOUR = 8;
+      const minskNow = new Date(Date.now() + 3 * 60 * 60 * 1000); // UTC+3
+      const todayMinsk = minskNow.toISOString().slice(0, 10);
+      const { data: challengeEvents } = await supabase
+        .from('events')
+        .select('id,title,date,date_end,notifications')
+        .lte('date', todayMinsk)
+        .gte('date_end', todayMinsk);
+      for (const ev of challengeEvents || []) {
+        const n = ((ev as any).notifications || {}) as Record<string, any>;
+        if (n._format !== 'challenge' && n.is_challenge !== true) continue;
+        // Один раз в сутки: отметку «уже напоминал» держим в том же jsonb,
+        // что и остальные служебные поля события — без новой миграции.
+        if (n._challengeNudge === todayMinsk) continue;
+        // Утренний пинг имеет смысл только утром. Часы берём сдвинутые
+        // (UTC+3), поэтому сравниваем с UTC-значением сдвинутой даты.
+        if (minskNow.getUTCHours() < CHALLENGE_HOUR) continue;
+
+        const { data: grp } = await supabase
+          .from('event_groups').select('chat_id').eq('event_id', (ev as any).id).eq('active', true).maybeSingle();
+        if (!grp) continue;
+
+        // Кто отметился сегодня и кто записан — разница и есть «молчуны».
+        const { data: checkRows } = await supabase
+          .from('app_config').select('key')
+          .ilike('key', `challenge_checkin:${(ev as any).id}:%:${todayMinsk}`);
+        const doneIds = new Set((checkRows || []).map((r: any) => Number(String(r.key).split(':')[2])));
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id')
+          .eq('event_id', (ev as any).id).neq('status', 'cancelled');
+        const silent = (regs || []).filter((r: any) => !doneIds.has(Number(r.telegram_id)));
+        // Никто не отметился и никто не записан — писать некому.
+        if (doneIds.size === 0 && silent.length === 0) continue;
+
+        const dayNo = Math.max(1, Math.round(
+          (new Date(todayMinsk).getTime() - new Date((ev as any).date).getTime()) / 86400000) + 1);
+        await tg('sendMessage', {
+          chat_id: Number((grp as any).chat_id), parse_mode: 'HTML',
+          text: `🌅 <b>Утро челленджа, день ${dayNo}</b>\n\n` +
+            (doneIds.size ? `Уже отметились: <b>${doneIds.size}</b> 🔥\n` : '') +
+            (silent.length
+              ? `Без отметки за сегодня: <b>${silent.length}</b>\n\nСними видео-кружок и отправь сюда — бот засчитает день и начислит баллы.`
+              : 'Все на месте — уважение 💪'),
+        });
+        await supabase.from('events')
+          .update({ notifications: { ...n, _challengeNudge: todayMinsk } })
+          .eq('id', (ev as any).id);
+        (report as any).challengeNudges = ((report as any).challengeNudges || 0) + 1;
+      }
+    } catch (e) { report.errors.push(`challenge: ${(e as Error).message}`); }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // БЛОК D: Авто-кик «молчаливых» из чата события
+    // ══════════════════════════════════════════════════════════════════════════
+    /**
+     * В чат выезда попадают по пересланной ссылке: человек заходит, читает
+     * локации и планы, но не отмечается и не пишет ни слова. Для организатора
+     * это выглядит как «нас 40», хотя едет 12, и машины считаются по мёртвым
+     * душам.
+     *
+     * Правило: если человек в чате события сидит больше часа, ни разу не
+     * написал и не отмечен в составе — бота просит его выйти. Это НЕ бан:
+     * `kickChatMember` (а не `banChatMember`) не запрещает вернуться, и по
+     * той же ссылке человек зайдёт снова, как только реально соберётся.
+     *
+     * Защита от ошибок: костяк, организатор и все, кто хоть раз писал в чат,
+     * не трогаются никогда. Отсчёт — 60 минут с момента появления в группе,
+     * метку ставит вебхук на new_chat_members (Telegram историю не отдаёт).
+     *
+     * Точность вывода ограничена расписанием крона: на Hobby он ходит раз в
+     * сутки (09:00 Минска), поэтому человек, зашедший вечером, будет выведен
+     * следующим утром, а не через час. Для чата выезда это нормально —
+     * «молчаливый» уходит до начала сбора людей, а не в момент чтения.
+     */
+    try {
+      const KICK_AFTER_MS = 60 * 60 * 1000;
+      const { data: activeGroups } = await supabase
+        .from('event_groups').select('event_id,chat_id').eq('active', true);
+      for (const grp of activeGroups || []) {
+        const chatId = Number((grp as any).chat_id);
+        const evId = String((grp as any).event_id);
+        if (!Number.isFinite(chatId) || chatId >= 0) continue;
+
+        const { data: ev } = await supabase
+          .from('events').select('id,title,status,deputy_id').eq('id', evId).maybeSingle();
+        // Кикаем только в живых событиях: после выезда группа доживает свою
+        // жизнь, и выкидывать оттуда никого не нужно.
+        if (!ev || (ev as any).status === 'closed') continue;
+
+        const { data: regs } = await supabase
+          .from('registrations').select('telegram_id')
+          .eq('event_id', evId).neq('status', 'cancelled');
+        const regIds = new Set((regs || []).map((r: any) => Number(r.telegram_id)));
+        if ((ev as any).deputy_id) regIds.add(Number((ev as any).deputy_id));
+
+        // Кто вообще писал в этом чате — тех не трогаем: человек может не
+        // отметиться, но он живой в переписке, значит он с нами.
+        const { data: talkers } = await supabase
+          .from('group_messages').select('telegram_id').eq('chat_id', chatId).limit(2000);
+        const talkerIds = new Set((talkers || []).map((t: any) => Number(t.telegram_id)));
+
+        // Первое появление в чате пишем сами: Telegram историю участия не
+        // отдаёт, поэтому метку времени ставит вебхук на new_chat_members.
+        const sinceKey = `groupjoin:${chatId}`;
+        const { data: joinRow } = await supabase.from('app_config').select('value').eq('key', sinceKey).maybeSingle();
+        let joins: Record<string, number> = {};
+        try { joins = joinRow ? JSON.parse(String((joinRow as any).value)) : {}; } catch { joins = {}; }
+
+        const now = Date.now();
+        const stale = Object.entries(joins).filter(([id, at]) =>
+          now - Number(at) >= KICK_AFTER_MS
+          && !regIds.has(Number(id))
+          && !talkerIds.has(Number(id)));
+
+        // Костяк проверяем одним запросом: он почти никогда не в списке записей.
+        let coreIds = new Set<number>();
+        if (stale.length) {
+          const { data: mems } = await supabase
+            .from('members').select('telegram_id,is_core,role')
+            .in('telegram_id', stale.map(([id]) => Number(id)));
+          coreIds = new Set((mems || [])
+            .filter((m: any) => m.is_core === true || m.role === 'owner')
+            .map((m: any) => Number(m.telegram_id)));
+        }
+
+        for (const [id] of stale) {
+          const uid = Number(id);
+          if (!Number.isFinite(uid)) { delete joins[id]; continue; }
+          // Костяк и основателя из чата не выводим никогда.
+          if (coreIds.has(uid)) { delete joins[id]; continue; }
+          const kicked = await tg('kickChatMember', { chat_id: chatId, user_id: uid });
+          if (kicked?.ok) (report as any).staleKicked = ((report as any).staleKicked || 0) + 1;
+          // Метку снимаем в любом случае: вторую попытку в тот же день не
+          // повторяем, иначе один неудачный кик превращается в спам-цикл.
+          delete joins[id];
+        }
+
+        await supabase.from('app_config').upsert({ key: sinceKey, value: JSON.stringify(joins) });
+      }
+    } catch (e) { report.errors.push(`stale-kick: ${(e as Error).message}`); }
+
     return res.status(200).json({ ok: true, ...report });
   } catch (err) {
     return res.status(500).json({ ok: false, ...report, error: (err as Error).message });
