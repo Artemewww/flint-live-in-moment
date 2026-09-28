@@ -311,6 +311,9 @@ export default async function handler(req: any, res: any) {
     }
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     if (!passwordMatches(body.password)) {
+      // Фиксируем попытку отдельной строкой: без этого невозможно отличить
+      // «владелец забыл пароль» от перебора, и инцидент нечем расследовать.
+      slog('warn', 'админка: неверный пароль', { ip: clientIp(req) });
       return res.status(401).json({ error: 'Неверный пароль' });
     }
     // Успех — сбрасываем счётчик попыток этого IP.

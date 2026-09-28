@@ -153,6 +153,19 @@ function esc(s: any): string {
 }
 
 /**
+ * Структурированный лог: одна JSON-строка на событие — greppable в Vercel.
+ * Нужен там, где важно доказательство (отклонённые подделки апдейтов), а не
+ * просто текст в консоли.
+ */
+function slog(level: 'info' | 'warn' | 'error', msg: string, extra?: any) {
+  try {
+    const line: any = { t: new Date().toISOString(), level, scope: 'webhook', msg };
+    if (extra !== undefined) line.extra = extra;
+    (level === 'error' ? console.error : level === 'warn' ? console.warn : console.log)(JSON.stringify(line));
+  } catch { /* лог не должен ронять обработку апдейта */ }
+}
+
+/**
  * Пишем реплику переписки поддержки в БД (best-effort). Лента «костяк ↔ участник»
  * группируется в админке по telegram_id собеседника. Если таблицы ещё нет
  * (миграция не накатана) — тихо игнорируем, флоу не ломаем.
@@ -1566,6 +1579,19 @@ async function sendSosAlert(from: any, _chatId: number, detail?: string): Promis
     kb(rows),
     Number(from?.id),
   );
+}
+
+/**
+ * Имя отправителя для сообщений, которые уходят в parse_mode: 'HTML'.
+ *
+ * first_name и username приходят из Telegram и НЕ экранируются ими: человек
+ * может назваться «<b>» или прислать ник «@a<t>» — такие строки попадали в
+ * уведомление костяку как разметка, ломая сообщение (и позволяя вписать
+ * чужую «системную» строку в админ-чат). Экранируем один раз здесь.
+ */
+function safeName(from: any): string {
+  const n = String(from?.first_name || from?.username || 'Участник').trim();
+  return esc(n.slice(0, 64)) || 'Участник';
 }
 
 async function notifyCore(text: string, replyMarkup?: unknown, exceptId?: number): Promise<number> {
@@ -3578,6 +3604,51 @@ async function runSetup(req: any, res: any) {
   return res.status(200).json({ ok: true, webhookUrl, secretRegistered: !!secret, setWebhook, menu, bot: me?.result });
 }
 
+/**
+ * ЗАСЛОН ПРОТИВ ФОРЖА АПДЕЙТОВ.
+ *
+ * Разбор инцидента 28.09: в `members` появилась строка telegram_id=1,
+ * first_name='probe' — её создал ровно один путь, отметка живости в вебхуке.
+ * Причина: вебхук авторизуется ТОЛЬКО заголовком secret-token, а тело
+ * апдейта не проверяется вообще. Кто узнал секрет (он выдаётся боту в
+ * setWebhook и лежит в bot_sessions), тем же запросом может:
+ *   • создать любое число «мёртвых душ» в members (они попадают в
+ *     аудиторию рассылок и в цифры по клубу);
+ *   • отправить `callback_query.data = approve_<id>` как «костяк» —
+ *     код верит cq.from.id, а не Telegram;
+ *   • переписать имя/ник живой строки (upsert отметки живости).
+ *
+ * Поэтому пускаем в базу ТОЛЬКО те апдейты, которые Telegram и правда
+ * отдаёт своему вебхуку:
+ *   • update_id — обязательное числовое поле любого апдейта;
+ *   • у callback_query обязателен id (иначе Telegram не примет update);
+ *   • из отправителя: положительный числовой id, строковый first_name,
+ *     username только строкой или null.
+ *
+ * Для обычного бота проверка ничего не ломает: Telegram присылает ровно
+ * такой update_id и такое from. Ломает она только подделку.
+ */
+function trustedUpdate(update: any): { ok: boolean; reason: string; tgId: number } {
+  const updateId = Number(update?.update_id);
+  if (!Number.isFinite(updateId) || updateId <= 0) return { ok: false, reason: 'update_id', tgId: 0 };
+
+  const cq = update?.callback_query;
+  if (cq) {
+    const from = cq.from;
+    if (typeof cq.id !== 'string' || !cq.id.length || !from) return { ok: false, reason: 'callback_query', tgId: 0 };
+  }
+
+  const actor = cq?.from || update?.message?.from;
+  if (!actor) return { ok: false, reason: 'no_actor', tgId: 0 };
+  const tgId = Number(actor.id);
+  if (!Number.isFinite(tgId) || tgId <= 0) return { ok: false, reason: 'actor_id', tgId: 0 };
+  if (typeof actor.first_name !== 'string' || !actor.first_name.length) return { ok: false, reason: 'first_name', tgId: 0 };
+  if (actor.username !== undefined && actor.username !== null && typeof actor.username !== 'string') {
+    return { ok: false, reason: 'username', tgId: 0 };
+  }
+  return { ok: true, reason: '', tgId };
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     if (req.query?.setup) return runSetup(req, res);
@@ -3609,8 +3680,20 @@ export default async function handler(req: any, res: any) {
     // иначе в аудитории появляются «левые боты» (жалоба владельца).
     const SERVICE_BOT_IDS = new Set([1087968824, 136817688, 777000, 93372553]);
     const isServiceActor = !!actor && (actor.is_bot === true || SERVICE_BOT_IDS.has(Number(actor.id)));
-    if (actor?.id && !isServiceActor) {
-      const base = { telegram_id: actor.id, username: actor.username || null, first_name: actor.first_name || null };
+
+    /**
+     * Апдейт должен выглядеть как настоящий (см. trustedUpdate выше).
+     * Подделка не только не пишется в базу — она вообще не доходит до
+     * обработчиков кнопок, где код полагается на cq.from.id как на личность.
+     */
+    const trust = trustedUpdate(update);
+    if (!trust.ok) {
+      slog('warn', 'webhook: отвергнут непроверенный апдейт', { reason: trust.reason });
+      return res.status(200).json({ ok: true, ignored: 'untrusted_update', reason: trust.reason });
+    }
+
+    if (!isServiceActor) {
+      const base = { telegram_id: trust.tgId, username: actor.username || null, first_name: actor.first_name || null };
       const { error } = await supabase.from('members').upsert(
         { ...base, bot_active: true, last_seen_at: new Date().toISOString() },
         { onConflict: 'telegram_id' }
@@ -3940,7 +4023,17 @@ export default async function handler(req: any, res: any) {
        * с кем реально пересекался. Тот, о ком отметили, об этом не узнаёт и не
        * узнаёт автора — иначе честной обратной связи не будет вообще.
        */
-      if (data.startsWith('rep_') || data.startsWith('repp_') || data.startsWith('repf_') || data.startsWith('repv_')) {
+      /**
+       * ПРЕФИКС `rep_` НЕ ДОЛЖЕН ЛОВИТЬ ЧУЖИЕ КНОПКИ.
+       * Здесь четыре разных сценария опроса круга, и все они начинаются с
+       * «rep». Подстроки пересекаются: `repg_12` (организатор отмечает ВКЛАД
+       * человека) тоже подходит под startsWith('rep_'). Пока ветка организатора
+       * стоит в коде РАНЬШЕ, порядок спасает — но он не выражен в коде: любая
+       * перестановка блоков (или новый `repX_` в другом месте) молча уводит
+       * нажатие кнопки в чужой обработчик. Поэтому перечисляем префиксы явно,
+       * с подчёркиванием на границе — `rep_` больше не «почти всё».
+       */
+      if (/^rep(p|f|v)?_/.test(data)) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
 
         if (data.startsWith('rep_')) {

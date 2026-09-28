@@ -258,7 +258,18 @@ async function handleFeedback(body: any, res: any) {
  * Проверка, что миграция 2026-final.sql применена: тыкаем каждую новую таблицу
  * и RPC. Читать схему посторонним незачем — поэтому под админ-токеном.
  * GET /api/events?action=health  (Authorization: Bearer <ADMIN_TOKEN>)
+ *
+ * ВАЖНО про пробы записи: раньше «якорное» событие создавалось с id='__probe__',
+ * а строки — с telegram_id=-999999. Живые таблицы при этом всё равно
+ * трогались (лишний insert+delete на каждый вызов), и если удаление не
+ * проходило (RLS, таймаут, ошибка прав), в проде оставался мусор. Теперь все
+ * служебные идентификаторы начинаются с `__probe` и удаляются ДО вставки —
+ * так повторный вызов не может наткнуться на собственный хвост.
  */
+const PROBE_EVENT_ID = '__probe_health__';
+const PROBE_TG_ID = -999999999;
+const PROBE_PREFIX = '__probe';
+
 async function handleHealth(res: any) {
   const tables = ['program_votes', 'interests', 'feedback', 'tasks', 'polls', 'poll_votes', 'bot_sessions', 'referrals', 'rides', 'ride_bookings', 'ride_requests'];
   const out: Record<string, string> = {};
@@ -299,23 +310,32 @@ async function handleHealth(res: any) {
   // Одного чтения мало: при включённом RLS без политик select молча вернёт
   // пустой список (выглядит как «ok»), а insert упадёт. Данные теряются тихо.
   // Поэтому каждую таблицу, в которую бот и сайт ПИШУТ, проверяем записью.
-  const PROBE = -999999;
   const writeProbes: [string, Record<string, unknown>, Record<string, unknown>][] = [
-    ['bot_sessions', { telegram_id: PROBE, state: 'probe' }, { telegram_id: PROBE }],
-    ['program_votes', { event_id: '__probe__', telegram_id: PROBE, option: 'p' }, { telegram_id: PROBE }],
-    ['interests', { event_id: '__probe__', telegram_id: PROBE }, { telegram_id: PROBE }],
-    ['feedback', { event_id: '__probe__', telegram_id: PROBE, rating: 5 }, { telegram_id: PROBE }],
+    ['bot_sessions', { telegram_id: PROBE_TG_ID, state: 'probe' }, { telegram_id: PROBE_TG_ID }],
+    ['program_votes', { event_id: PROBE_EVENT_ID, telegram_id: PROBE_TG_ID, option: 'p' }, { telegram_id: PROBE_TG_ID }],
+    ['interests', { event_id: PROBE_EVENT_ID, telegram_id: PROBE_TG_ID }, { telegram_id: PROBE_TG_ID }],
+    ['feedback', { event_id: PROBE_EVENT_ID, telegram_id: PROBE_TG_ID, rating: 5 }, { telegram_id: PROBE_TG_ID }],
   ];
+
+  // Уборка хвостов ПЕРЕД пробами: если прошлый вызов упал между вставкой и
+  // удалением, мусор снимается здесь, а не остаётся навсегда.
+  try {
+    await supabase.from('events').delete().eq('id', PROBE_EVENT_ID);
+    for (const [table, , key] of writeProbes) await supabase.from(table).delete().match(key);
+  } catch { /* таблицы может не быть — ниже это и выяснится */ }
 
   for (const [table, row, key] of writeProbes) {
     // program_votes/interests/feedback ссылаются на events(id) — сначала нужен якорь.
     const needsEvent = 'event_id' in row;
-    if (needsEvent) await supabase.from('events').upsert({ id: '__probe__', title: 'probe', date: '2000-01-01', location: 'probe' });
+    if (needsEvent) {
+      await supabase.from('events').delete().eq('id', PROBE_EVENT_ID);
+      await supabase.from('events').upsert({ id: PROBE_EVENT_ID, title: `${PROBE_PREFIX} health`, date: '2000-01-01', location: PROBE_PREFIX });
+    }
 
     const { error } = await supabase.from(table).insert(row);
     out[`${table}:WRITE`] = error ? `НЕ ПИШЕТСЯ: ${error.message}` : 'ok';
     if (!error) await supabase.from(table).delete().match(key);
-    if (needsEvent) await supabase.from('events').delete().eq('id', '__probe__');
+    if (needsEvent) await supabase.from('events').delete().eq('id', PROBE_EVENT_ID);
   }
 
   const broken = Object.entries(out).filter(([, v]) => v !== 'ok' && !v.startsWith('ok'));
@@ -337,8 +357,12 @@ async function handleImage(req: any, res: any) {
 
   const m = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(img);
   if (!m) {
-    // Картинки нет или это обычный путь — отправляем туда.
-    if (img) { res.setHeader('Location', img); return res.status(302).end(); }
+    // Картинки нет или это обычный путь — отправляем туда. Редирект допускаем
+    // ТОЛЬКО на свой относительный путь или https-адрес: иначе поле image из
+    // админки превращало «картинку события» в открытый редирект на чужой сайт
+    // (ссылка в og:image, фишинг с нашего домена).
+    const safe = /^\/(?!\/)/.test(img) ? img : (/^https:\/\//i.test(img) ? img : '');
+    if (safe) { res.setHeader('Location', safe); return res.status(302).end(); }
     return res.status(404).end();
   }
   const buf = Buffer.from(m[2], 'base64');
@@ -355,10 +379,31 @@ async function handleImage(req: any, res: any) {
 /**
  * Прокси медиа из Telegram. Стримим содержимое сами: redirect на
  * file-URL Telegram недопустим — путь содержит токен бота.
+ *
+ * ПОДПИСЬ ОБЯЗАТЕЛЬНА. Раньше отдавали любой file_id, который прислали в
+ * `fid`, — и прокси превращался в открытый CDN на нашем боте: кто угодно мог
+ * раздавать через клубный домен и клубный токен свои файлы (чужие фото,
+ * пиратское видео), а лимиты функции тратились на чужой трафик. Ссылки в
+ * галерее выдаёт сервер, значит он же их и подписывает; фронту ничего не
+ * нужно — он получает готовый `src` из media_list/stories.
  */
 async function handleMedia(req: any, res: any) {
   const fid = String(req.query?.fid || '');
+  const sig = String(req.query?.s || '');
+  const evId = String(req.query?.id || '');
   if (!fid || !BOT_TOKEN) return res.status(400).end();
+  if (!mediaSigValid(fid, sig)) return res.status(403).end();
+  /**
+   * Медиа принадлежит событию. Без этой привязки подписанная ссылка на своё
+   * видео (её видно в разметке галереи) открывала ЛЮБОЙ файл клуба: взял
+   * чужой file_id из своей галереи — и смотришь состав/чеки другого выезда.
+   * `id` приходит в ссылке бесплатно, а `file_id` события лежит в event_media.
+   */
+  if (evId) {
+    const { data: owned } = await supabase
+      .from('event_media').select('id').eq('event_id', evId).eq('file_id', fid).limit(1).maybeSingle();
+    if (!owned) return res.status(403).end();
+  }
   try {
     const gf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -394,6 +439,42 @@ function avatarSig(id: number): string {
 }
 function avatarUrl(id: number): string {
   return id > 0 && BOT_TOKEN ? `/api/events?action=avatar&u=${id}&s=${avatarSig(id)}` : '';
+}
+
+/**
+ * Подпись медиафайла Telegram (`file_id`). Тот же приём, что у аватарок:
+ * file_id неугадываем сам по себе, но утекает в разметке галереи; подпись
+ * закрывает прокси от использования как чужого файлохранилища.
+ */
+function mediaSig(fid: string): string {
+  return crypto.createHmac('sha256', BOT_TOKEN).update(`media:${fid}`).digest('hex').slice(0, 16);
+}
+function mediaSigValid(fid: string, sig: string): boolean {
+  if (!BOT_TOKEN || sig.length !== 16) return false;
+  const a = Buffer.from(sig), b = Buffer.from(mediaSig(fid));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+/** Подписанная ссылка на прокси медиа — единая точка для всех вызовов.
+ *  `eventId` добавляется, когда файл привязан к событию: прокси тогда ещё и
+ *  сверяет, что file_id действительно принадлежит этому событию (см. handleMedia).
+ *
+ *  ВАЖНО: URL медиа собирается из `file_id` — то есть из данных, которые
+ *  пришли от Telegram, но в общем случае форму не гарантируют (например,
+ *  file_id от кнопки support/чека). В HTML его подставляют и в атрибут src,
+ *  и в строку JS внутри onclick — сырые одинарные кавычки там ломают
+ *  разметку и позволяют внедрить свой скрипт в публичную страницу галереи.
+ *  Поэтому URL пропускаем через `mediaUrlSafe` (JS-контекст) или
+ *  `escapeHtml` (HTML-контекст).
+ */
+function mediaUrl(fid: string, eventId?: string): string {
+  if (!fid || !BOT_TOKEN) return '';
+  const owner = eventId ? `&id=${encodeURIComponent(eventId)}` : '';
+  return `/api/events?action=media&fid=${encodeURIComponent(fid)}&s=${mediaSig(fid)}${owner}`;
+}
+
+/** Тот же URL, но безопасный для подстановки в строку JS (onclick=…). */
+function mediaUrlSafe(fid: string, eventId?: string): string {
+  return mediaUrl(fid, eventId).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/</g, '\\x3c').replace(/\n/g, '');
 }
 async function handleAvatar(req: any, res: any) {
   const id = Number(req.query?.u || 0);
@@ -444,12 +525,11 @@ async function handleMediaList(req: any, res: any) {
     .order('votes', { ascending: false }).order('created_at', { ascending: true })
     .limit(200);
   if (error) return res.status(500).json({ error: error.message });
-  const base = `/api/events?action=media&fid=`;
   const items = (media || []).map((m: any) => ({
     id: m.id,
     media_type: m.media_type === 'video' ? 'video' : 'photo',
     votes: m.votes || 0,
-    src: base + encodeURIComponent(m.file_id),
+    src: mediaUrl(m.file_id),
   }));
   res.setHeader('Cache-Control', 'no-store');
   return res.status(200).json({ items });
@@ -467,16 +547,19 @@ async function handleGallery(req: any, res: any) {
     .limit(300);
   const title = escapeHtml(ev?.title || 'Событие');
   const cards = (media || []).map((m: any) => {
-    const src = `/api/events?action=media&fid=${encodeURIComponent(m.file_id)}`;
+    // Два представления одного URL: HTML-атрибут экранируем как HTML, строку
+    // внутри onclick — как JS. Без этого кавычка в file_id ломает страницу.
+    const src = escapeHtml(mediaUrl(m.file_id, evId));
+    const srcJs = mediaUrlSafe(m.file_id, evId);
     const isVideo = m.media_type === 'video';
     // Превью в сетке — тап открывает на весь экран (и фото, и видео).
     const inner = isVideo
       ? `<video src="${src}" preload="metadata" playsinline muted></video><span class="play">▶</span>`
       : `<img src="${src}" loading="lazy" alt="">`;
-    return `<figure data-id="${m.id}">`
-      + `<div class="thumb" onclick="openLb('${src}','${isVideo ? 'video' : 'photo'}')">${inner}</div>`
-      + `<button class="vote" onclick="vote(this,'${m.id}')">❤️ <span>${m.votes}</span></button>`
-      + `<button class="del" onclick="del(this,'${m.id}')" title="Удалить">🗑</button>`
+    return `<figure data-id="${escapeHtml(String(m.id))}">`
+      + `<div class="thumb" onclick="openLb('${srcJs}','${isVideo ? 'video' : 'photo'}')">${inner}</div>`
+      + `<button class="vote" onclick="vote(this,'${escapeHtml(String(m.id))}')">❤️ <span>${Number(m.votes) || 0}</span></button>`
+      + `<button class="del" onclick="del(this,'${escapeHtml(String(m.id))}')" title="Удалить">🗑</button>`
       + `</figure>`;
   }).join('');
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -873,6 +956,9 @@ async function handleCheckinsGrouped(req: any, res: any) {
   const participants = ids.map((tgId) => ({
     telegram_id: tgId,
     name: meta.get(tgId)?.name || 'Участник',
+    // Аватарка — подписанный прокси на фото из Telegram. Без неё таблица
+    // прогресса показывала пустые кружки с первой буквой, хотя Avatar её ждёт.
+    avatar: avatarUrl(tgId),
     days: (byUser.get(tgId) || []).sort((a, b) => (a.date < b.date ? -1 : 1)),
   }));
 
@@ -937,9 +1023,14 @@ async function handleStories(req: any, res: any) {
     .map((i) => ({
       telegram_id: i.telegram_id,
       name: meta.get(i.telegram_id)?.name || 'Участник',
+      // Сторис рисует кружки участников — без аватара там всегда буква.
+      avatar: avatarUrl(i.telegram_id),
       date: i.date,
       time: i.time,
       file_id: i.file_id,
+      // Готовая подписанная ссылка на прокси: подпись считает сервер, клиент
+      // только подставляет её в <video src>. Без неё прокси отдаёт 403.
+      media: i.file_id ? mediaUrl(i.file_id, eventId) : '',
       type: i.type,
       text: i.text,
     }))

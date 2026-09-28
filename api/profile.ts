@@ -78,6 +78,76 @@ function escHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** IP клиента за прокси Vercel (первый в x-forwarded-for). */
+function clientIp(req: any): string {
+  const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
+  return xf || String(req.headers?.['x-real-ip'] || '') || 'unknown';
+}
+
+/**
+ * Rate-limit на Supabase (переживает несколько инстансов Vercel, в отличие от
+ * in-memory). Бакет живёт в bot_sessions под отрицательным ключом-хешем — тот
+ * же приём, что в api/events.ts и api/admin/events.ts.
+ *
+ * Зачем профилю: до этого здесь не было НИ ОДНОГО ограничения. Действие
+ * `gate` перебирало реф-коды (6 символов base36), `apply` могло залить костяк
+ * фейковыми заявками, `send_message` — спамом в личку каждому члену клуба.
+ */
+async function rateLimit(scope: string, ident: string, max: number, windowMs: number): Promise<{ allowed: boolean; retryAfter: number }> {
+  try {
+    const raw = `rl:${scope}:${ident}`;
+    let h = 0;
+    for (let i = 0; i < raw.length; i++) h = (h * 31 + raw.charCodeAt(i)) | 0;
+    const key = -Math.abs(h) - 200000; // отдельный диапазон от presence/login
+    const now = Date.now();
+    const { data } = await supabase.from('bot_sessions').select('context').eq('telegram_id', key).maybeSingle();
+    const ctx: any = (data as any)?.context || {};
+    const windowStart = Number(ctx.ws) || 0;
+    let count = Number(ctx.n) || 0;
+    if (now - windowStart > windowMs) {
+      await supabase.from('bot_sessions').upsert(
+        { telegram_id: key, state: 'ratelimit', context: { ws: now, n: 1 }, updated_at: new Date().toISOString() },
+        { onConflict: 'telegram_id' }
+      );
+      return { allowed: true, retryAfter: 0 };
+    }
+    if (count >= max) return { allowed: false, retryAfter: Math.ceil((windowStart + windowMs - now) / 1000) };
+    count += 1;
+    await supabase.from('bot_sessions').upsert(
+      { telegram_id: key, state: 'ratelimit', context: { ws: windowStart, n: count }, updated_at: new Date().toISOString() },
+      { onConflict: 'telegram_id' }
+    );
+    return { allowed: true, retryAfter: 0 };
+  } catch {
+    // При сбое стора не блокируем легитимных пользователей.
+    return { allowed: true, retryAfter: 0 };
+  }
+}
+
+/**
+ * Проверка дорогих действий — по Telegram-подписи, а не «по факту запроса».
+ *
+ * Зачем: `generate`, `generate_schedule`, `receipt`, `recipe` дергают Gemini.
+ * У бесплатного тира 20 запросов в СУТКИ на модель; любой человек с curl мог
+ * выжечь квоту клуба за минуту, и организаторы оставались без ИИ до полуночи.
+ * Теперь эти действия доступны участнику клуба или админ-токену.
+ * Возвращает 'ok' | 'deny'.
+ */
+async function requireMemberOrAdmin(req: any, body: any): Promise<'ok' | 'deny'> {
+  const ADMIN_SECRET = process.env.ADMIN_TOKEN || '';
+  const bearer = String(req.headers?.authorization || '').replace('Bearer ', '');
+  const safeEq = (a: string, b: string) => {
+    const A = Buffer.from(String(a)), B = Buffer.from(String(b));
+    return A.length === B.length && A.length > 0 && crypto.timingSafeEqual(A, B);
+  };
+  if (ADMIN_SECRET && bearer && safeEq(bearer, ADMIN_SECRET)) return 'ok';
+  const user = verifyInitData(body?.initData);
+  if (!user) return 'deny';
+  const { data: me } = await supabase.from('members').select('status,is_core').eq('telegram_id', user.id).maybeSingle();
+  const ok = !!me && ((me as any).is_core === true || (me as any).status === 'approved');
+  return ok ? 'ok' : 'deny';
+}
+
 
 // Базовый чек-лист продуктов по категориям
 const FOOD_CATEGORIES = [
@@ -294,6 +364,47 @@ export default async function handler(req: any, res: any) {
   try {
     const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const action = body.action;
+
+    /**
+     * ОГРАНИЧИТЕЛИ ПУБЛИЧНЫХ ДЕЙСТВИЙ.
+     * До этого у профиля не было ни одного лимита: `gate` можно было
+     * перебирать (реф-код — 6 символов), `apply` — заваливать костяк фейковыми
+     * заявками с чужими телефонами (на каждого уходит уведомление в личку и в
+     * админ-чат), `send_message` — спамить в личку всему клубу.
+     */
+    const LIMITED: Record<string, { scope: string; max: number; windowMs: number }> = {
+      gate: { scope: 'gate', max: 30, windowMs: 10 * 60 * 1000 },
+      apply: { scope: 'apply', max: 5, windowMs: 60 * 60 * 1000 },
+      send_message: { scope: 'msg', max: 20, windowMs: 10 * 60 * 1000 },
+    };
+    const lim = typeof action === 'string' ? LIMITED[action] : undefined;
+    if (lim) {
+      const rl = await rateLimit(lim.scope, clientIp(req), lim.max, lim.windowMs);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfter));
+        slog('warn', `rate limit: ${action}`, { ip: clientIp(req), retryAfter: rl.retryAfter });
+        return res.status(429).json({ ok: false, error: `Слишком много запросов. Попробуй через ${Math.max(1, Math.ceil(rl.retryAfter / 60))} мин.` });
+      }
+    }
+
+    /**
+     * ДОРОГИЕ ДЕЙСТВИЯ (обращения к Gemini). Квота бесплатного тира — 20
+     * запросов в сутки на модель, поэтому пускаем только участника клуба или
+     * админ-токен. Раньше эндпоинт был открыт всем, и квоту выжигали чужие.
+     */
+    const AI_ACTIONS = new Set(['generate', 'generate_schedule', 'receipt', 'recipe']);
+    if (typeof action === 'string' && AI_ACTIONS.has(action)) {
+      const verdict = await requireMemberOrAdmin(req, body);
+      if (verdict !== 'ok') {
+        slog('warn', `ИИ-действие без прав: ${action}`, { ip: clientIp(req) });
+        return res.status(403).json({ ok: false, error: 'Доступно участникам клуба' });
+      }
+      const rl = await rateLimit('ai', `u:${String(body?.initData || '').length}:${clientIp(req)}`, 20, 60 * 60 * 1000);
+      if (!rl.allowed) {
+        res.setHeader('Retry-After', String(rl.retryAfter));
+        return res.status(429).json({ ok: false, error: 'Слишком часто. ИИ-квота клуба ограничена — попробуй позже.' });
+      }
+    }
 
     // === GATE (проверка входа в клуб: участник в Telegram или реф-код) ===
     if (action === 'gate') {
@@ -922,6 +1033,12 @@ export default async function handler(req: any, res: any) {
 
       const text = String(body.text || '').trim();
       if (!text) return res.status(200).json({ ok: false, error: 'Пустое сообщение' });
+      // Жёсткая граница длины: в Telegram текст режется на 4096, а в базе
+      // хранится 4000. Раньше лимит был только на записи в БД, а в уведомление
+      // каждому костяку уходило всё — длинную «простыню» можно было гонять как
+      // спам-бомбу по личкам. Режем один раз и используем везде.
+      const safeText = text.slice(0, 4000);
+      if (safeText.length < 2) return res.status(200).json({ ok: false, error: 'Слишком короткое сообщение' });
 
       const { data: me } = await supabase
         .from('members').select('first_name,username,status').eq('telegram_id', user.id).maybeSingle();
@@ -932,7 +1049,7 @@ export default async function handler(req: any, res: any) {
         || `id${user.id}`;
 
       const { error } = await supabase.from('support_messages').insert({
-        telegram_id: user.id, direction: 'in', text: text.slice(0, 4000), from_name: author,
+        telegram_id: user.id, direction: 'in', text: safeText, from_name: author,
       });
       if (error) return res.status(200).json({ ok: false, error: error.message });
 
@@ -943,7 +1060,7 @@ export default async function handler(req: any, res: any) {
        */
       let notified = 0;
       if (BOT_TOKEN) {
-        const body2 = `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(text.slice(0, 1500))}</i>`;
+        const body2 = `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(safeText.slice(0, 1500))}</i>`;
         const markup = { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: `reply_${user.id}` }]] };
         const targets: (string | number)[] = [];
         const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
@@ -2564,6 +2681,14 @@ export default async function handler(req: any, res: any) {
     if (action === 'generate_schedule') {
       const { eventId } = body;
       if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+
+      // Генерация ЗАТИРАЕТ расписание события (event_schedules) и дергает Gemini.
+      // Поэтому право проверяем здесь второй раз — по организатору конкретного
+      // события: любой участник клуба не должен переписать программу чужого выезда.
+      {
+        const verdict = await requireMemberOrAdmin(req, body);
+        if (verdict !== 'ok') return res.status(403).json({ ok: false, error: 'Доступно организатору события' });
+      }
 
       // Получаем событие
       const { data: event } = await supabase

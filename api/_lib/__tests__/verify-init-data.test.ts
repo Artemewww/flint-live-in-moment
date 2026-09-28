@@ -1,5 +1,5 @@
 /**
- * Проверка подписи Telegram WebApp initData.
+ * Проверка подписи Telegram WebApp initData + заслон от форжа апдейтов.
  *
  * Функция verifyInitData задублирована в пяти файлах API НАМЕРЕННО: импорт из
  * api/_lib/ роняет функции на Vercel в рантайме (см. HANDOFF.md). Цена
@@ -8,6 +8,12 @@
  *
  * Поэтому тест проверяет не эталон, а сами копии: вырезает функцию из
  * исходника каждого файла и гоняет по одинаковым сценариям.
+ *
+ * Второй тест в этом файле — заслон от форжа апдейтов в вебхуке: он вырезает
+ * проверку `trustedUpdate` из api/telegram/webhook.ts. Появление именно этой
+ * проверки потребовал инцидент 28.09 (в members попала строка telegram_id=1,
+ * first_name='probe' — её создал upsert отметки живости по подделанному телу
+ * апдейта).
  */
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -87,3 +93,79 @@ describe.each(COPIES)('verifyInitData в %s', (file) => {
     expect(verify(sign({ auth_date: String(now()) }))).toBeNull();
   });
 });
+
+/**
+ * ЗАСЛОН ОТ ФОРЖА АПДЕЙТОВ (webhook.ts).
+ *
+ * Тест вырезает trustedUpdate из вебхука и проверяет ровно два свойства:
+ *   1. настоящий апдейт Telegram проходит (иначе бот перестанет работать);
+ *   2. подделка, которой 28.09 создали строку telegram_id=1 / 'probe', НЕ проходит.
+ * Второе свойство — регрессия: если кто-то уберёт проверку, тест упадёт.
+ */
+describe('trustedUpdate в вебхуке', () => {
+  const loadTrusted = (): (u: any) => { ok: boolean; reason: string; tgId: number } => {
+    const file = path.join(__dirname, '../../telegram/webhook.ts');
+    const src = fs.readFileSync(file, 'utf8');
+    const m = src.match(/^function trustedUpdate\([\s\S]*?^}/m);
+    if (!m) throw new Error('trustedUpdate не найдена в api/telegram/webhook.ts');
+    const js = ts.transpileModule(m[0], { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
+    return new Function(`${js}\nreturn trustedUpdate;`)() as any;
+  };
+
+  const trusted = loadTrusted();
+  const realUser = { id: 377551019, first_name: 'Артём', username: 'Demarts' };
+
+  test('принимает настоящее сообщение', () => {
+    expect(trusted({ update_id: 100500, message: { from: realUser, text: 'привет' } }).ok).toBe(true);
+  });
+
+  test('принимает настоящую кнопку', () => {
+    const u = { update_id: 100501, callback_query: { id: '4382', from: realUser, data: 'home' } };
+    expect(trusted(u)).toEqual({ ok: true, reason: '', tgId: 377551019 });
+  });
+
+  test('принимает пользователя без @ника (nickname необязателен)', () => {
+    const u = { update_id: 100502, message: { from: { id: 555, first_name: 'Гость' } } };
+    expect(trusted(u).ok).toBe(true);
+  });
+
+  test('ОТКЛОНЯЕТ воспроизведённую подделку telegram_id=1 / probe', () => {
+    // Именно такое тело ушло на вебхук: id=1, имя 'probe', без update_id.
+    const forged = { message: { from: { id: 1, first_name: 'probe' } } };
+    const r = trusted(forged);
+    expect(r.ok).toBe(false);
+    expect(r.tgId).toBe(0);
+  });
+
+  test('без update_id (так и пришла подделка probe) — отказ, даже если id правдоподобен', () => {
+    // Настоящий Telegram всегда кладёт update_id. Его отсутствие — признак
+    // самодельного запроса, а не апдейта, поэтому отказываем всем таким.
+    const forged = { message: { from: { id: 500123456, first_name: 'probe' } } };
+    expect(trusted(forged)).toEqual({ ok: false, reason: 'update_id', tgId: 0 });
+  });
+
+  test('ОТКЛОНЯЕТ подделку кнопки «костяка» без callback_query.id', () => {
+    const forged = { update_id: 43, callback_query: { from: realUser, data: 'approve_1' } };
+    expect(trusted(forged)).toEqual({ ok: false, reason: 'callback_query', tgId: 0 });
+  });
+
+  test('ОТКЛОНЯЕТ нулевой, отрицательный и нечисловой id', () => {
+    expect(trusted({ update_id: 1, message: { from: { id: 0, first_name: 'x' } } }).ok).toBe(false);
+    expect(trusted({ update_id: 1, message: { from: { id: -5, first_name: 'x' } } }).ok).toBe(false);
+    expect(trusted({ update_id: 1, message: { from: { id: 'abc', first_name: 'x' } } }).ok).toBe(false);
+  });
+
+  test('ОТКЛОНЯЕТ подмену типов в полях пользователя', () => {
+    expect(trusted({ update_id: 1, message: { from: { id: 5, first_name: 42 } } }).ok).toBe(false);
+    expect(trusted({ update_id: 1, message: { from: { id: 5, first_name: '' } } }).ok).toBe(false);
+    expect(trusted({ update_id: 1, message: { from: { id: 5, first_name: 'ok', username: { a: 1 } } } }).ok).toBe(false);
+  });
+
+  test('ОТКЛОНЯЕТ апдейт без отправителя и без update_id', () => {
+    expect(trusted({ update_id: 7 }).ok).toBe(false);
+    expect(trusted({ message: { from: realUser } }).ok).toBe(false);
+    expect(trusted({}).ok).toBe(false);
+    expect(trusted(null).ok).toBe(false);
+  });
+});
+
