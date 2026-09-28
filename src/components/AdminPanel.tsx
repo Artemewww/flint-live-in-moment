@@ -23,10 +23,23 @@ const API_BASE = typeof window !== 'undefined' ? window.location.origin + '/api'
  */
 
 /** ИИ-генерация программы (Gemini). Возвращает null при ошибке/без ключа — тогда фолбэк на локальный генератор.
- *  instruction + current → режим правки: ИИ редактирует текущую программу (перенос дат, пожелания). */
+ *  instruction + current → режим правки: ИИ редактирует текущую программу (перенос дат, пожелания).
+ *
+ *  ВАЖНО: запросы идут через adminFetch, а НЕ через голый fetch. `/api/ai`
+ *  закрыт isAdmin (иначе ИИ-квота клуба выжигается чужими), поэтому без
+ *  заголовка Authorization все эти кнопки молча возвращали 401, а UI показывал
+ *  «не удалось сгенерировать» — то есть функция была нерабочей для самих
+ *  организаторов. adminFetch подставляет токен из localStorage (в Mini App
+ *  кука SameSite=Strict не доходит — заголовок там единственный путь).
+ *
+ *  adminFetch определён НИЖЕ в файле как function declaration: он хойстится,
+ *  поэтому вызов из тел этих async-функций безопасен, хотя визуально объявлен
+ *  позже. Если когда-нибудь его перепишут в `const adminFetch = ...` — все
+ *  вызовы упадут в ReferenceError, поэтому не трогайте форму объявления.
+ */
 async function aiProgram(ev: any, instruction?: string, current?: string[]): Promise<string[] | null> {
   try {
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // count: сколько ячеек программы админ создал — столько пунктов и генерим.
@@ -40,7 +53,7 @@ async function aiProgram(ev: any, instruction?: string, current?: string[]): Pro
 /** ИИ-генерация памятки участнику (logistics.prep): правила, сезон, снаряжение, протоколы. */
 async function aiPrep(ev: any): Promise<string | null> {
   try {
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'prep', event: ev, people: ev.maxParticipants }),
@@ -53,7 +66,7 @@ async function aiPrep(ev: any): Promise<string | null> {
 /** ИИ-генерация точек маршрута дня (logistics.itinerary). */
 async function aiItinerary(ev: any, count?: number): Promise<any[] | null> {
   try {
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'itinerary', event: ev, people: ev.maxParticipants, count }),
@@ -76,7 +89,7 @@ function normalizeTime(t: string): string {
 async function aiGenerateImage(title: string, description: string): Promise<string | null> {
   try {
     const prompt = `${title}: ${description}. Highly commercial, cinematic lighting, hyper-realistic photography, cinematic style, 8k, professional color grading, editorial look, clean composition, NO visual noise, premium quality`;
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'generate_image', prompt }),
@@ -90,7 +103,7 @@ async function aiGenerateImage(title: string, description: string): Promise<stri
 async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) => void): Promise<{ draft?: any; questions?: string[]; error?: string }> {
   onProgress('🤖 ИИ анализирует идею…');
   try {
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'generate_event', prompt }),
@@ -107,7 +120,7 @@ async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) =>
       // После генерации события запрашиваем уточняющие вопросы
       onProgress('💬 Формирование рекомендаций…');
       await new Promise(r => setTimeout(r, 200));
-      const qRes = await fetch('/api/ai', {
+      const qRes = await adminFetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task: 'clarifying_questions', event: j.draft }),
@@ -127,7 +140,7 @@ async function aiGenerateFullEvent(prompt: string, onProgress: (step: string) =>
 /** ИИ-автозаполнение всего события по названию (Gemini). Возвращает {draft?, error?}. */
 async function aiAutofill(ev: any): Promise<{ draft?: any; error?: string }> {
   try {
-    const res = await fetch('/api/ai', {
+    const res = await adminFetch('/api/ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ task: 'autofill', event: ev }),
@@ -214,7 +227,7 @@ function ShoppingGenerator({ event, registrations }: { event: any; registrations
   const gen = async () => {
     setLoading(true); setErr('');
     try {
-      const res = await fetch('/api/ai', {
+      const res = await adminFetch('/api/ai', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ task: 'shopping', event, people, diet, guests }),
