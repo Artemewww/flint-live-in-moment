@@ -53,6 +53,13 @@ WHERE key LIKE 'challenge_checkin:%'
 COMMENT ON VIEW challenge_checkins IS
   'Отметки челленджа, разобранные из app_config: кто, в какой день и во сколько поднялся.';
 
+-- VIEW по умолчанию выполняется с правами владельца (postgres) и обходит RLS
+-- на app_config — через anon-ключ отметки были бы видны всем (Security Advisor:
+-- security_definer_view). security_invoker = права вызывающего: service_role
+-- сервера видит всё, публика — ничего.
+ALTER VIEW challenge_checkins SET (security_invoker = true);
+REVOKE ALL ON challenge_checkins FROM anon, authenticated;
+
 -- ── 3. Проверка: какие события сейчас считаются челленджами ─────────────────
 -- Должно вернуть 90-Day Challenge (или пусто, если его ещё не помечали).
 SELECT id, title, date, date_end
