@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { getInitData } from '../telegram';
 import Avatar from './Avatar';
 import { CommunityEvent, getToday } from '../types';
 
@@ -75,7 +76,7 @@ export default function ChallengeProgress({ event, onOpenStory }: Props) {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch(`/api/events?action=checkins_grouped&id=${encodeURIComponent(event.id)}`)
+    fetch(`/api/events?action=checkins_grouped&id=${encodeURIComponent(event.id)}`, { headers: { 'X-Telegram-Init-Data': getInitData() } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!alive) return;

@@ -37,6 +37,12 @@ interface TelegramWebApp {
     notificationOccurred: (type: 'error' | 'success' | 'warning') => void;
     impactOccurred: (style: 'light' | 'medium' | 'heavy') => void;
   };
+  /** Bot API 8.0+: ярлык мини-приложения на экране «Домой». */
+  addToHomeScreen?: () => void;
+  checkHomeScreenStatus?: (cb: (status: 'unsupported' | 'unknown' | 'added' | 'missed') => void) => void;
+  isVersionAtLeast?: (v: string) => boolean;
+  onEvent?: (event: string, cb: (...args: any[]) => void) => void;
+  offEvent?: (event: string, cb: (...args: any[]) => void) => void;
   MainButton?: {
     setText: (text: string) => void;
     show: () => void;
@@ -140,4 +146,46 @@ export function closeToBot(url: string): void {
   if (typeof window !== 'undefined') {
     window.open(url, '_blank', 'noopener,noreferrer');
   }
+}
+
+/**
+ * ЯРЛЫК FLINT НА ЭКРАНЕ «ДОМОЙ».
+ * Главная жалоба владельца: люди забывают про приложение — оно живёт где-то
+ * внутри Telegram, и до него три тапа. Telegram (8.0+) умеет положить ярлык
+ * мини-приложения рядом с остальными иконками телефона — как у 360 Padel.
+ * Статус: 'added' — уже есть; 'missed' — можно добавить; 'unsupported' —
+ * старый клиент или десктоп, кнопку не показываем.
+ */
+export type HomeScreenStatus = 'unsupported' | 'unknown' | 'added' | 'missed';
+
+export function homeScreenStatus(): Promise<HomeScreenStatus> {
+  const wa = getWebApp();
+  if (!wa?.checkHomeScreenStatus || !wa.addToHomeScreen || (wa.isVersionAtLeast && !wa.isVersionAtLeast('8.0'))) {
+    return Promise.resolve('unsupported');
+  }
+  return new Promise((resolve) => {
+    // Старые клиенты иногда молча не зовут колбэк — не ждём вечно.
+    const t = setTimeout(() => resolve('unknown'), 1500);
+    try {
+      wa.checkHomeScreenStatus!((st) => { clearTimeout(t); resolve(st || 'unknown'); });
+    } catch { clearTimeout(t); resolve('unsupported'); }
+  });
+}
+
+/** Открывает системный диалог «Добавить на экран Домой». true — ярлык добавлен. */
+export function addToHomeScreen(): Promise<boolean> {
+  const wa = getWebApp();
+  if (!wa?.addToHomeScreen) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const done = (ok: boolean) => {
+      wa.offEvent?.('homeScreenAdded', onAdded);
+      wa.offEvent?.('homeScreenFailed', onFailed);
+      resolve(ok);
+    };
+    const onAdded = () => done(true);
+    const onFailed = () => done(false);
+    wa.onEvent?.('homeScreenAdded', onAdded);
+    wa.onEvent?.('homeScreenFailed', onFailed);
+    try { wa.addToHomeScreen!(); } catch { done(false); }
+  });
 }

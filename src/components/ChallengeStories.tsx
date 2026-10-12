@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X, ChevronLeft, ChevronRight, Trophy } from 'lucide-react';
 import { CommunityEvent, getToday } from '../types';
 import Avatar from './Avatar';
-import { haptic } from '../telegram';
+import { haptic, getInitData } from '../telegram';
 
 /**
  * ЛЕНТА СТОРИС ЧЕЛЛЕНДЖА — «кто как отчитался сегодня».
@@ -28,7 +28,8 @@ type CheckinStory = {
   file_id?: string;
   /** Готовая подписанная ссылка на видео из Telegram (её считает сервер). */
   media?: string;
-  type?: 'video_note' | 'video';
+  /** photo добавлен вместе с приёмом фото-отчётов: раньше сторис умел только видео. */
+  type?: 'video_note' | 'video' | 'photo';
   text?: string;  // текстовый отчёт
 };
 
@@ -48,7 +49,7 @@ export default function ChallengeStories({ event, focus, onCloseFocus }: Props) 
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch(`/api/events?action=stories&id=${encodeURIComponent(event.id)}`)
+    fetch(`/api/events?action=stories&id=${encodeURIComponent(event.id)}`, { headers: { 'X-Telegram-Init-Data': getInitData() } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!alive) return;
@@ -200,7 +201,7 @@ function StoryViewer({ story, index, total, onClose, onNav }: {
         </button>
       </div>
 
-      {/* Контент: видео или текст */}
+      {/* Контент: видео, фото или текст */}
       <div className="flex-1 relative flex items-center justify-center px-4">
         {src && (story.type === 'video_note' || story.type === 'video') ? (
           <video
@@ -209,6 +210,14 @@ function StoryViewer({ story, index, total, onClose, onNav }: {
             autoPlay
             playsInline
             className="max-h-full max-w-full rounded-2xl"
+          />
+        ) : src && story.type === 'photo' ? (
+          // Фото-отчёт рисуем картинкой: раньше он попадал в ветку «текст» и
+          // показывался как пустая карточка «Отчёт принят» без самого снимка.
+          <img
+            src={src}
+            alt="Отчёт участника"
+            className="max-h-full max-w-full rounded-2xl object-contain"
           />
         ) : (
           <div className="max-w-md w-full rounded-2xl bg-gradient-to-br from-amber-500/20 to-orange-600/10 border border-amber-400/30 p-6 text-center space-y-3">

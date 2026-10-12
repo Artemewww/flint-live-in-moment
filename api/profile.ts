@@ -78,6 +78,16 @@ function escHtml(s: string): string {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/**
+ * Подписанная ссылка на аватарку участника (тот же приём, что в api/events.ts).
+ * Вынесено на уровень модуля, потому что понадобилось сразу в нескольких
+ * обработчиках, а локальные копии перекрывали друг друга по видимости.
+ */
+function avatarOf(id: number): string {
+  if (!(id > 0) || !BOT_TOKEN) return '';
+  return `/api/events?action=avatar&u=${id}&s=${crypto.createHmac('sha256', BOT_TOKEN).update(`avatar:${id}`).digest('hex').slice(0, 16)}`;
+}
+
 /** IP клиента за прокси Vercel (первый в x-forwarded-for). */
 function clientIp(req: any): string {
   const xf = String(req.headers?.['x-forwarded-for'] || '').split(',')[0].trim();
@@ -1115,6 +1125,38 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ ok: true, birthdays: list });
     }
 
+    /**
+     * РЕЙТИНГ КЛУБА — таблица по очкам и «твоя позиция».
+     * Очки и уровни в клубе давно есть, но человек видел только свои цифры:
+     * не с чем сравнить, нет повода прийти ещё раз. Подсмотрено у 360 Padel:
+     * лидеры сверху и закреплённая плашка «ты — на N-м месте».
+     * Только для участников клуба (подпись Telegram), наружу список не отдаём.
+     */
+    if (action === 'leaderboard') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
+      const { data: members } = await supabase
+        .from('members').select('telegram_id,first_name,username,points,is_core')
+        .eq('status', 'approved').order('points', { ascending: false }).limit(500);
+      const { data: att } = await supabase.from('registrations').select('telegram_id').eq('attended', true).limit(5000);
+      const trips = new Map<number, number>();
+      for (const r of att || []) trips.set(Number((r as any).telegram_id), (trips.get(Number((r as any).telegram_id)) || 0) + 1);
+      const all = (members || []).map((m: any, i: number) => ({
+        place: i + 1,
+        id: String(m.telegram_id),
+        name: m.first_name || (m.username ? `@${m.username}` : 'Участник'),
+        points: Number(m.points) || 0,
+        level: Math.floor((Number(m.points) || 0) / 500) + 1,
+        trips: trips.get(Number(m.telegram_id)) || 0,
+        avatar: avatarOf(Number(m.telegram_id)),
+        me: Number(m.telegram_id) === Number(user.id),
+      }));
+      // Одинаковые очки — одно место: иначе из двух «по 0» один «хуже» другого.
+      for (let i = 1; i < all.length; i += 1) if (all[i].points === all[i - 1].points) all[i].place = all[i - 1].place;
+      const me = all.find((m) => m.me) || null;
+      return res.status(200).json({ ok: true, top: all.slice(0, 30), me, total: all.length });
+    }
+
     // === MY_EVENTS (история событий участника) ===
     /**
      * СНАРЯЖЕНИЕ В ПРОФИЛЕ.
@@ -1139,6 +1181,115 @@ export default async function handler(req: any, res: any) {
         const { data, error } = await supabase.from('member_equipment').select('*').eq('telegram_id', user.id).order('updated_at', { ascending: false });
         if (error) return res.status(500).json({ error: error.message });
         return res.status(200).json({ items: (data || []).map(shapeGear) });
+      }
+
+      /**
+       * ПРОСЬБА ПОДЕЛИТЬСЯ ВЕЩЬЮ.
+       *
+       * Человек увидел у круга «Палатка Naturehike» и хочет её на выезд. Жмёт
+       * «Попросить» — и хозяину вещи падает уведомление в Telegram.
+       *
+       * Раньше механика жила только в api/equipment.ts (action=transfer), но там
+       * уведомление уходило ПОЛУЧАТЕЛЮ, а не владельцу, и подтверждение
+       * ПЕРЕДАВАЛО вещь (удалял у хозяина, создавал у просителя). Для «поделиться»
+       * это неверно: вещь остаётся у хозяина, он просто разрешает ей пользоваться.
+       */
+      if (action === 'gear_request') {
+        const equipmentId = Number(body.equipmentId) || 0;
+        const ownerId = Number(body.ownerId) || 0;
+        const itemName = String(body.itemName || '').trim().slice(0, 80);
+        const note = String(body.note || '').trim().slice(0, 300);
+        if (!equipmentId || !ownerId || !itemName) return res.status(400).json({ error: 'Не хватает данных: нужны вещь и владелец' });
+        if (ownerId === user.id) return res.status(400).json({ error: 'Это твоя вещь — её и так не надо просить' });
+
+        // Не плодим одинаковые просьбы: если такая уже висит — просто скажем.
+        const { data: dupes } = await supabase
+          .from('equipment_transfers').select('id')
+          .eq('equipment_id', equipmentId).eq('to_telegram_id', user.id).eq('status', 'pending').limit(1);
+        if ((dupes || []).length) return res.status(200).json({ ok: true, already: true });
+
+        const { data: created, error: insErr } = await supabase.from('equipment_transfers').insert({
+          equipment_id: equipmentId,
+          from_telegram_id: ownerId,
+          to_telegram_id: user.id,
+          item_name: itemName,
+          quantity: 1,
+          status: 'pending',
+          created_at: new Date().toISOString(),
+        }).select('id').single();
+        if (insErr) return res.status(500).json({ error: insErr.message });
+
+        if (BOT_TOKEN && ownerId > 0) {
+          try {
+            const who = (me as any)?.first_name || `id ${user.id}`;
+            const text =
+              `🙋 <b>${escHtml(itemName)}</b>\n\n` +
+              `${escHtml(who)} просит по твоей вещи — скажи, можешь ли поделиться.\n` +
+              (note ? `\n<i>${escHtml(note)}</i>\n` : '') +
+              `\nОтветить — в профиле, раздел «Снаряжение».`;
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: ownerId, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+            });
+          } catch { /* уведомление не должно ронять заявку */ }
+        }
+        return res.status(200).json({ ok: true, id: (created as any).id });
+      }
+
+      /**
+       * АКТ ПРИЁМА: «ВЗЯЛ».
+       *
+       * Раньше считалось был один сцепая — или сколько разов. Но
+       * собратиь вещь нельзя: ответа «да» — и никто не понято,
+       * что вещь у кого-то лежит.
+       *
+       * Теперь принимает передаче с аттачением в личном обраще и отказом, но
+       * фактически не было — пока и не в обязанель вообще не точности.
+       */
+      if (action === 'gear_take') {
+        const equipmentId = Number(body.equipmentId) || 0;
+        const note = String(body.note || '').trim().slice(0, 300);
+        const photo = body.photo ? String(body.photo) : '';
+        if (!equipmentId) return res.status(400).json({ error: 'Не указана вещь' });
+        const { data: g } = await supabase.from('member_equipment').select('*').eq('id', equipmentId).maybeSingle();
+        if (!g) return res.status(404).json({ error: 'Вещь не найдена' });
+        const owner = Number(g.telegram_id);
+        if (owner === user.id) return res.status(400).json({ error: 'Это твоя вещь' });
+
+        // Одновременно в запросе: вещь может лежать только у одного владельца,
+        // и второй попытка установит нельзя сравнять самолецы с ерой.
+        const { data: busy } = await supabase
+          .from('equipment_transfers').select('id')
+          .eq('equipment_id', equipmentId).eq('status', 'taken').limit(1);
+        if ((busy || []).length) return res.status(409).json({ error: 'Вещь уже взяты — дай больше не получать' });
+
+        const { error: insErr } = await supabase.from('equipment_transfers').insert({
+          equipment_id: equipmentId,
+          from_telegram_id: owner,
+          to_telegram_id: user.id,
+          item_name: String(g.item || 'вещь').slice(0, 80),
+          quantity: 1, status: 'taken', note,
+          taken_photo: photo || null,
+          created_at: new Date().toISOString(),
+          taken_at: new Date().toISOString(),
+        });
+        if (insErr) return res.status(500).json({ error: insErr.message });
+
+        if (BOT_TOKEN && owner > 0) {
+          try {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: owner,
+                text: `📦 <b>${escHtml(String(g.item || 'вещь'))}</b>
+\n${escHtml((me as any)?.first_name || 'Участник')} взял у себя.` +
+                  (note ? `\n<i>${escHtml(note)}</i>` : ''),
+                parse_mode: 'HTML', disable_web_page_preview: true,
+              }),
+            });
+          } catch { /* уведомление не должно ронять передачу */ }
+        }
+        return res.status(200).json({ ok: true });
       }
 
       if (action === 'gear_save') {
@@ -1185,6 +1336,73 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /** Мои заявки: кому я написал и кто написал мне (в обе стороны). */
+      if (action === 'gear_requests') {
+        const { data: rows } = await supabase
+          .from('equipment_transfers').select('*')
+          .or(`from_telegram_id.eq.${user.id},to_telegram_id.eq.${user.id}`)
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(60);
+        const otherIds = [...new Set((rows || []).map((r: any) => (
+          Number(r.from_telegram_id) === user.id ? Number(r.to_telegram_id) : Number(r.from_telegram_id)
+        )).filter((n: number) => n > 0))];
+        const { data: ppl } = otherIds.length
+          ? await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', otherIds)
+          : { data: [] };
+        const byId = new Map((ppl || []).map((p: any) => [Number(p.telegram_id), p]));
+        const nameOf = (id: number) => {
+          const p: any = byId.get(Number(id)) || {};
+          return {
+            id: Number(id),
+            name: p.first_name || (p.username ? `@${p.username}` : 'Участник'),
+            username: p.username || '',
+            avatar: avatarOf(Number(id)),
+          };
+        };
+        return res.status(200).json({
+          incoming: (rows || []).filter((r: any) => Number(r.from_telegram_id) === user.id)
+            .map((r: any) => ({ id: r.id, item: r.item_name, from: nameOf(Number(r.to_telegram_id)) })),
+          outgoing: (rows || []).filter((r: any) => Number(r.to_telegram_id) === user.id)
+            .map((r: any) => ({ id: r.id, item: r.item_name, to: nameOf(Number(r.from_telegram_id)) })),
+        });
+      }
+
+      /**
+       * Ответ владельца на просьбу. Вещь НЕ переходит: он просто разрешает
+       * пользоваться. Прежний confirm-transfer в api/equipment.ts переносил
+       * владение, а это ломало учёт — вещь пропадала у хозяина навсегда.
+       */
+      if (action === 'gear_request_respond') {
+        const id = Number(body.id) || 0;
+        const accept = body.accept === true;
+        if (!id) return res.status(400).json({ error: 'Нет id заявки' });
+        const { data: row } = await supabase.from('equipment_transfers').select('*').eq('id', id).maybeSingle();
+        if (!row) return res.status(404).json({ error: 'Заявка не найдена' });
+        if (Number(row.from_telegram_id) !== user.id) return res.status(403).json({ error: 'Это не твоя заявка' });
+        const { error: upErr } = await supabase.from('equipment_transfers').update({
+          status: accept ? 'confirmed' : 'declined',
+          confirmed_at: accept ? new Date().toISOString() : null,
+          declined_at: accept ? null : new Date().toISOString(),
+        }).eq('id', id);
+        if (upErr) return res.status(500).json({ error: upErr.message });
+
+        if (BOT_TOKEN) {
+          try {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: Number(row.to_telegram_id), parse_mode: 'HTML',
+                text: accept
+                  ? `✅ <b>${escHtml(row.item_name)}</b> — ${escHtml((me as any)?.first_name || 'Владелец')} разрешил(а) пользоваться. Спишись и договорись о датах.`
+                  : `😔 По вещи <b>${escHtml(row.item_name)}</b> отказали. На выезд придётся взять своё или посмотреть склад клуба.`,
+              }),
+            });
+          } catch { /* не роняем ответ */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       /**
        * «Что есть у круга»: вещи участников, которыми они готовы делиться, и
        * имущество клуба. Прежде чем покупать палатку — видно, у кого она есть.
@@ -1217,7 +1435,17 @@ export default async function handler(req: any, res: any) {
           people,
           shared: (shared || []).map((g: any) => {
             const o: any = byId.get(Number(g.telegram_id)) || {};
-            return { ...shapeGear(g), owner: { name: o.first_name || (o.username ? `@${o.username}` : 'Участник'), username: o.username || '', avatar: avatarOf(Number(g.telegram_id)) } };
+            return {
+              ...shapeGear(g),
+              // id нужен для заявки «Попросить»: по нему мы ищем вещь в
+              // equipment_transfers и пишем владельцу.
+              owner: {
+                id: Number(g.telegram_id),
+                name: o.first_name || (o.username ? `@${o.username}` : 'Участник'),
+                username: o.username || '',
+                avatar: avatarOf(Number(g.telegram_id)),
+              },
+            };
           }),
           club,
         });
@@ -1229,6 +1457,45 @@ export default async function handler(req: any, res: any) {
        * же, что видит бот (app_config.club_inventory). Править запись может
        * тот, у кого вещь, её владелец или костяк.
        */
+      /**
+       * Запрос на ВЕЩЬ КЛУБА.
+       *
+       * Раньше «Попросить» работал только для личных вещей участников: у
+       * склада клуба не было ни кнопки, ни адресата. Именно поэтому вопрос
+       * «нажал на склад клуба — на мангал, а спросить некого» оставался без
+       * ответа. Адресат — тот, у кого вещь сейчас на руках, иначе костяк.
+       */
+      if (action === 'gear_club_request') {
+        const KEY = 'club_inventory';
+        const { data: inv } = await supabase.from('app_config').select('value').eq('key', KEY).maybeSingle();
+        let items: any[] = [];
+        try { items = JSON.parse(String((inv as any)?.value || '[]')); } catch { items = []; }
+        const it = items.find((x: any) => x.id === String(body.id || ''));
+        if (!it) return res.status(404).json({ error: 'Вещь не найдена' });
+        if (it.holderId === user.id) return res.status(400).json({ error: 'Она уже у тебя' });
+
+        // Если вещь просто стоит на складе (никто её не держит), писать
+        // некому — уведомление уходит костяку.
+        const target = Number(it.holderId) || Number(process.env.TELEGRAM_ADMIN_CHAT_ID) || 0;
+        const note = String(body.note || '').trim().slice(0, 300);
+        if (target > 0 && BOT_TOKEN) {
+          const who = (me as any)?.first_name || `id ${user.id}`;
+          try {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: target,
+                text: `🙋 <b>${escHtml(it.title)}</b>\n\n${escHtml(who)} просит вещь из склада клуба.` +
+                  (note ? `\n<i>${escHtml(note)}</i>` : '') +
+                  `\n\nПередать или нет — в профиле, раздел «Снаряжение».`,
+                parse_mode: 'HTML', disable_web_page_preview: true,
+              }),
+            });
+          } catch { /* уведомление не должно ронять заявку */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       if (action === 'gear_club_save' || action === 'gear_club_delete') {
         const KEY = 'club_inventory';
         const { data: inv } = await supabase.from('app_config').select('value').eq('key', KEY).maybeSingle();
@@ -1266,6 +1533,11 @@ export default async function handler(req: any, res: any) {
               name: String(c?.name || '').slice(0, 60), tgId: Number(c?.tgId) || null, amount: Number(c?.amount) || null, paid: c?.paid === true,
             })).filter((c: any) => c.name),
             note: g.note ? String(g.note).slice(0, 200) : null,
+            // Фото вещи. Без него карточка рисует только иконку категории, и
+            // отличить два мангала в складе невозможно — а именно по фото
+            // человек решает, брать ли вещь.
+            photo: g.photo ? String(g.photo).slice(0, 4000000) : (prev?.photo || null),
+            category: g.category ? String(g.category).slice(0, 20) : (prev?.category || null),
             returned: false,
             updatedAt: new Date().toISOString(),
           };
@@ -2271,7 +2543,7 @@ export default async function handler(req: any, res: any) {
       // одно и то же на каждой записи и было главной претензией к анкете.
       const { data: member } = await supabase
         .from('members')
-        .select('first_name,phone,gender,dietary')
+        .select('first_name,phone,gender,dietary,agreed_pd')
         .eq('telegram_id', user.id)
         .maybeSingle();
 
@@ -2307,6 +2579,18 @@ export default async function handler(req: any, res: any) {
           roles: Array.isArray(lastReg?.roles) ? lastReg.roles.join(',') : '',
           // Есть ли что подставлять вообще — фронт показывает «данные из профиля».
           hasHistory: !!lastReg,
+          /**
+           * Как добирался в прошлый раз — целиком, а не только «водитель».
+           * Раньше восстанавливалась лишь машина, и «ищу попутку»/«сам»
+           * приходилось выбирать заново на каждой записи. Нужно экспресс-записи.
+           */
+          transportMode: lastReg
+            ? (lastReg.has_transport
+              ? (/^каршеринг/i.test(String(lastReg.transport_details || '')) ? 'carsharing' : 'car')
+              : /попутк/i.test(String(lastReg.transport_details || '')) ? 'seek' : 'self')
+            : null,
+          // Согласие на обработку данных уже дано — не переспрашиваем галочкой.
+          agreedPd: (member as any)?.agreed_pd === true,
         },
       });
     }

@@ -1,36 +1,55 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { AnimatePresence } from 'motion/react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
 import { 
   Heart, Compass, Calendar as CalendarIcon, UserCheck, Trash2, CheckCircle,
   BookOpen, Info, ShieldCheck, HelpCircle, FileText, Sparkles, X, Gift, Trophy, Shield, Menu, MessageCircle, Music, Clapperboard
 } from 'lucide-react';
-import { CommunityEvent, Registration, getToday } from './types';
+import { CommunityEvent, Registration, getToday, isEventOver } from './types';
 import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
+import { lazyWithRetry } from './lazy';
+import ErrorBoundary from './components/ErrorBoundary';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
-import RegistrationModal from './components/RegistrationModal';
-import ClubOnboarding from './components/ClubOnboarding';
-import EventDetailModal from './components/EventDetailModal';
 import CalendarGrid from './components/CalendarGrid';
 import ChallengeCard from './components/ChallengeCard';
-import VerificationModal from './components/VerificationModal';
-import BirthdayCalendar from './components/BirthdayCalendar';
-import FeedbackModal from './components/FeedbackModal';
-import ProfileScreen from './components/ProfileScreen';
-import EventPoster from './components/EventPoster';
-import AdminPanel from './components/AdminPanel';
-import GateScreen from './components/GateScreen';
-import MusicPlayer from './components/MusicPlayer';
-import HistoryStories from './components/HistoryStories';
-import SnapModal from './components/SnapModal';
 import { useMusicPlayer } from './music';
 import { LogoMain, LogoEmblem, getVectorIconByKey } from './components/VectorIcons';
 import { submitFeedback } from './api';
-import { FundraiserPage } from './components/FundraiserPage';
 import FundraiserBanner from './components/FundraiserBanner';
 import Avatar from './components/Avatar';
 import BottomNav from './components/BottomNav';
+import SocialLinks from './components/SocialLinks';
 import { Star } from 'lucide-react';
+
+/**
+ * Ленивая загрузка тяжёлых экранов.
+ *
+ * Собранный бандл весил 1 054 КБ (287 КБ gzip) ОДНИМ куском. При этом
+ * `AdminPanel.tsx` — 377 КБ исходников, и он тянулся ВСЕМ, хотя открывается
+ * только админом через скрытую кнопку. То же с профилем, карточкой события,
+ * анкетой регистрации и онбордингом: человек открывал афишу и получал в подгрузку
+ * весь админский интерфейс, которого ему не надо.
+ *
+ * Здесь берём только то, что нужно на первой отрисовке, остальное — по тапу.
+ * `lazyWithRetry`, а не `React.lazy`: после деплоя уже открытая страница
+ * хранит старые хеши чанков, и обычной ленивой загрузки ей хватает, чтобы
+ * показать белый экран вместо приложения.
+ */
+const RegistrationModal = lazyWithRetry(() => import('./components/RegistrationModal'));
+const ClubOnboarding = lazyWithRetry(() => import('./components/ClubOnboarding'));
+const EventDetailModal = lazyWithRetry(() => import('./components/EventDetailModal'));
+const VerificationModal = lazyWithRetry(() => import('./components/VerificationModal'));
+const BirthdayCalendar = lazyWithRetry(() => import('./components/BirthdayCalendar'));
+const FeedbackModal = lazyWithRetry(() => import('./components/FeedbackModal'));
+const SnapModal = lazyWithRetry(() => import('./components/SnapModal'));
+const MusicPlayer = lazyWithRetry(() => import('./components/MusicPlayer'));
+const HistoryStories = lazyWithRetry(() => import('./components/HistoryStories'));
+const ProfileScreen = lazyWithRetry(() => import('./components/ProfileScreen'));
+const AdminPanel = lazyWithRetry(() => import('./components/AdminPanel'));
+const GateScreen = lazyWithRetry(() => import('./components/GateScreen'));
+const FundraiserPage = lazyWithRetry(() =>
+  // Экспортируется именованным — приводим к default, как ждёт React.lazy.
+  import('./components/FundraiserPage').then((m) => ({ default: m.FundraiserPage })),
+);
 
 // Маппинг snake_case -> camelCase для данных из Supabase
 function mapEventToCamelCase(event: any): CommunityEvent {
@@ -211,6 +230,53 @@ function EventsFailed({ onRetry }: { onRetry: () => void }) {
   );
 }
 
+/**
+ * Заглушка на время подгрузки ленивого экрана.
+ *
+ * Раньше тяжёлые экраны (админка на 377 КБ, карточка события, анкета) летели
+ * вместе с первой страницей. Теперь они грузятся по тапу — и пока едут, на
+ * их месте должно быть что-то живое, а не пустота: иначе тап по «Админ» или
+ * по событию выглядит как «ничего не работает».
+ */
+function LazyScreenFallback({ label = 'Открываем…' }: { label?: string }) {
+  return (
+    <div
+      className="fixed inset-0 z-[70] flex flex-col items-center justify-center gap-4 bg-[#0A0A0A]/80 backdrop-blur-sm"
+      role="status"
+      aria-live="polite"
+    >
+      <LogoEmblem size={48} className="animate-pulse" />
+      <p className="font-mono text-[11px] uppercase tracking-[0.25em] text-white/40">{label}</p>
+    </div>
+  );
+}
+
+/**
+ * Ленивый экран в границе ошибок и Suspense.
+ *
+ * Зачем граница ошибок на каждом экране, если есть общая в `main.tsx`: без
+ * неё падение ВНУТРИ одного экрана вышибает всё приложение целиком. Человек,
+ * который просто хотел глянуть профиль, терял бы афишу — и вместо «не
+ * открылся профиль» видел бы «сломалось всё». С локальной границей умирает
+ * только та часть, которая сломлась, а `fallback` гарантирует, что вместо
+ * неё отрисуется не пустота.
+ */
+function LazyScreen({
+  children,
+  area,
+  label,
+}: {
+  children: React.ReactNode;
+  area: string;
+  label?: string;
+}) {
+  return (
+    <ErrorBoundary area={area}>
+      <Suspense fallback={<LazyScreenFallback label={label} />}>{children}</Suspense>
+    </ErrorBoundary>
+  );
+}
+
 export default function App() {
   const [events, setEvents] = useState<CommunityEvent[]>([]);
   const [eventsLoading, setEventsLoading] = useState(true);
@@ -230,10 +296,10 @@ export default function App() {
    * событие нужен для проверок «уже записан».
    */
   const activeRegistrations = React.useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getToday();
     return userRegistrations.filter((reg) => {
       const ev = events.find((e) => e.id === reg.eventId);
-      return !!ev && (ev.dateEnd || ev.date) >= today;
+      return !!ev && !isEventOver(ev, today);
     });
   }, [userRegistrations, events]);
   const [showManifestoModal, setShowManifestoModal] = useState<boolean>(false);
@@ -262,21 +328,31 @@ export default function App() {
   /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
   const musicPlaying = useMusicPlayer().playing;
   /**
-   * Авто-«всплывашка» «Снять фото/видео»: если у юзера есть событие, которое
-   * идёт СЕГОДНЯ (в [date..dateEnd]) и он в него записан — показываем окно.
-   * Без постоянной блокировки: каждый раз, когда юзер (заново) открывает
-   * приложение во время события, окно вылетает снова. Закрыл — зайдёшь опять —
-   * появится ещё раз, пока событие длится.
+   * Авто-«всплывашка» «Снять фото/видео», когда событие идёт СЕГОДНЯ.
+   *
+   * Два исправления, оба по жалобам владельца:
+   *
+   * 1) ЧЕЛЛЕНДЖ ИСКЛЮЧЁН. Условие было «дата <= сегодня <= дата_конца», а у
+   *    90-дневного челленджа это условие выполняется КАЖДЫЙ ДЕНЬ все три месяца.
+   *    Из-за этого человеку, который записан на челлендж, при каждом входе в
+   *    приложение вылетало «сними фото или видео» — про событие, куда никто не
+   *    ездил и где ничего не снимали.
+   *
+   * 2) НЕ КАЖДЫЙ РАЗ. Раньше окно показывалось при каждом открытии приложения
+   *    во время события («закрыл — открыл — вылетело снова»). Теперь закрытие
+   *    запоминается на сутки: один раз показали, человек отложился или отказал.
    */
   useEffect(() => {
     if (registeredEventIds.length === 0 || events.length === 0) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getToday();
+    try { if (localStorage.getItem('flint_snap_dismissed') === today) return; } catch { /* приватный режим */ }
     const liveNow = events.find((ev) =>
-      registeredEventIds.includes(ev.id) && (ev.date || today) <= today && (ev.dateEnd || ev.date) >= today
+      !ev.isChallenge &&
+      registeredEventIds.includes(ev.id) &&
+      (ev.date || today) <= today && !isEventOver(ev, today)
     );
     if (liveNow) setPromptEvent(liveNow);
   }, [events, registeredEventIds]);
-  const [posterEvent, setPosterEvent] = useState<CommunityEvent | null>(null);
   const [showAdminPanel, setShowAdminPanel] = useState<boolean>(false);
   const [fundraiserSlug] = useState<string>(() => new URLSearchParams(window.location.search).get('fund') || '');
   /** Пол смотрящего: интерфейс пишет «записан»/«записана», а не скобку. */
@@ -347,11 +423,26 @@ export default function App() {
     return !!refFromLink;
   }, [refFromLink]);
 
-  // Находим ближайшее мероприятие для баннера
+  // Находим ближайшее мероприятие для баннера.
+  // Челлендж исключён намеренно: он «не проходит» месяцами, поэтому по дате
+  // всегда был ближайшим, и вместо анонса ближайшего выезда вся главная
+  // держала таймер до старта челленджа. Баннер — только настоящие события.
+  const todayStr = new Date().toISOString().split('T')[0];
   const nextEvent = events
     .filter(e => e.status === 'open' || e.status === 'locked')
+    .filter(e => !e.isChallenge)
     .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
-    .find(e => new Date(e.date) >= new Date(new Date().toISOString().split('T')[0]));
+    .find(e => new Date(e.date) >= new Date(todayStr));
+
+  // Челлендж — баннер над календарём. Показываем ВСЕГДА, пока челлендж заведён:
+  // оранжевая карточка и есть «живой» блок марафона, и прятать её после старта
+  // нельзя — владелец попросил вернуть. С прятанием было сделано неверно:
+  // отличать надо было только ТАЙМЕР на обложке (он остаётся за настоящим
+  // событием), а не саму карточку челленджа.
+  const activeChallenge = React.useMemo(
+    () => events.find(e => e.isChallenge) ?? null,
+    [events],
+  );
 
   // Рефетч афиши по требованию: админка после логина получает куку,
   // с которой сервер уже отдаёт список.
@@ -362,12 +453,23 @@ export default function App() {
     return () => window.removeEventListener('flint:events-refetch', bump);
   }, []);
 
-  // Тап по событию в профиле → открываем его карточку.
+  /**
+   * Тап по событию в профиле → её карточка. И возврат РОВНО суда сюда.
+   *
+   * Раньше профиль закрывался целиком, и возврать из карточки могла
+   * вести на главную афишу. Человек шёл вборьтаться и разбираться где
+   * он пришёл даже в учёбном месте — оттойдился набор владельца.
+   */
+  const [returnToProfile, setReturnToProfile] = useState(false);
   useEffect(() => {
     const open = (e: Event) => {
       const id = String((e as CustomEvent).detail || '');
       const ev = events.find((x) => x.id === id);
-      if (ev) { setShowUserStats(false); setActiveDetailEvent(ev); }
+      if (ev) {
+        setReturnToProfile(true);
+        setShowUserStats(false);
+        setActiveDetailEvent(ev);
+      }
     };
     window.addEventListener('flint:open-event', open);
     return () => window.removeEventListener('flint:open-event', open);
@@ -398,7 +500,7 @@ export default function App() {
       })
       .catch(err => {
         if (err === 'members_only') return; // закрытый клуб: без фолбэков
-        console.log('API not available, loading from JSON:', err);
+        console.warn('Афиша не пришла с сервера, пробуем JSON-фолбэк:', err);
         // Fallback на статический JSON.
         // ⚠️ Дальше фолбэка НЕТ: раньше на этом месте подставлялись
         // демо-события из src/data (баня «4 июня» и т.п.) — при сбое API
@@ -637,18 +739,29 @@ export default function App() {
     return () => window.removeEventListener('openVerification', handleOpenVerification);
   }, [events, clubApproved]);
 
-  // Слушаем событие открытия постера из EventDetailModal
-  useEffect(() => {
-    const handleOpenPoster = (e: any) => {
-      const { eventId } = e.detail;
-      const event = events.find(ev => ev.id === eventId);
-      if (event) {
-        setPosterEvent(event);
-      }
-    };
+  /**
+   * Постер как отдельное окно удалён по просьбе владельца: «Поделиться» у
+   * прошедшего события открывало карточку-постер поверх карточки события —
+   * лишний экран с одной кнопкой. Теперь «Поделиться» делает ровно то же,
+   * что «Позвать»: кладёт готовое приглашение с обложкой в чат с ботом.
+   */
 
-    window.addEventListener('openPoster', handleOpenPoster);
-    return () => window.removeEventListener('openPoster', handleOpenPoster);
+  /**
+   * Отзыв с прошедшего события.
+   *
+   * Кнопка «Оставить отзыв» в карточке диспатчит это событие уже давно, но
+   * слушателя не было нигде — `setFeedbackEvent` не вызывался НИ РАЗУ, и
+   * модалка `feedbackEvent` была недостижимым кодом. Человек нажимал кнопку
+   * и ничего не происходило.
+   */
+  useEffect(() => {
+    const handleOpenFeedback = (e: any) => {
+      const { eventId } = e.detail || {};
+      const event = events.find(ev => ev.id === eventId);
+      if (event) setFeedbackEvent(event);
+    };
+    window.addEventListener('openFeedback', handleOpenFeedback);
+    return () => window.removeEventListener('openFeedback', handleOpenFeedback);
   }, [events]);
 
   /**
@@ -824,21 +937,33 @@ export default function App() {
   // Админ должен попадать в панель, не проходя шлюз для гостей.
   if (gateEnabled && !gatePassed && showAdminPanel) {
     return (
-      <AdminPanel
-        events={events}
-        onUpdateEvent={(e) => adminSaveEvent(e, false)}
-        onAddEvent={(e) => adminSaveEvent(e, true)}
-        onDeleteEvent={(id) => adminDeleteEvent(id)}
-        onClose={() => setShowAdminPanel(false)}
-        onViewSite={() => { setGatePassed(true); setShowAdminPanel(false); }}
-      />
+      <LazyScreen area="админка" label="Открываем админку…">
+        <AdminPanel
+          events={events}
+          onUpdateEvent={(e) => adminSaveEvent(e, false)}
+          onAddEvent={(e) => adminSaveEvent(e, true)}
+          onDeleteEvent={(id) => adminDeleteEvent(id)}
+          onClose={() => setShowAdminPanel(false)}
+          onViewSite={() => { setGatePassed(true); setShowAdminPanel(false); }}
+        />
+      </LazyScreen>
     );
   }
 
-  if (fundraiserSlug) return <FundraiserPage slug={fundraiserSlug} onClose={() => { window.history.replaceState({}, '', '/'); window.location.reload(); }} />;
+  if (fundraiserSlug) {
+    return (
+      <LazyScreen area="сбор" label="Открываем сбор…">
+        <FundraiserPage slug={fundraiserSlug} onClose={() => { window.history.replaceState({}, '', '/'); window.location.reload(); }} />
+      </LazyScreen>
+    );
+  }
 
   if (gateEnabled && !gatePassed) {
-    return <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />;
+    return (
+      <LazyScreen area="шлюз" label="Проверяем пропуск…">
+        <GateScreen onPass={() => setGatePassed(true)} onAdmin={() => setShowAdminPanel(true)} />
+      </LazyScreen>
+    );
   }
 
   // Жёсткий клубный гейт: сервер отдаёт афишу только зарегистрированным участникам
@@ -875,19 +1000,21 @@ export default function App() {
       // localStorage, поэтому переживает переход «бот → мини-приложение».
       const ref: string | undefined = refFromLink || undefined;
       return (
-        <ClubOnboarding
-          refCode={ref}
-          onDone={(approved) => {
-            if (!approved) { setApplySent(true); return; }
-            setMembersOnly(false);
-            setShowApplyForm(false);
-            try { localStorage.setItem('flint_gate_ok', '1'); } catch { /* приватный режим */ }
-            // Афишу очистили на 403 — после вступления её нужно перезапросить,
-            // иначе новый участник видит пустой экран вместо событий.
-            setEventsLoading(true);
-            window.dispatchEvent(new Event('flint:events-refetch'));
-          }}
-        />
+        <LazyScreen area="вступление" label="Открываем анкету…">
+          <ClubOnboarding
+            refCode={ref}
+            onDone={(approved) => {
+              if (!approved) { setApplySent(true); return; }
+              setMembersOnly(false);
+              setShowApplyForm(false);
+              try { localStorage.setItem('flint_gate_ok', '1'); } catch { /* приватный режим */ }
+              // Афишу очистили на 403 — после вступления её нужно перезапросить,
+              // иначе новый участник видит пустой экран вместо событий.
+              setEventsLoading(true);
+              window.dispatchEvent(new Event('flint:events-refetch'));
+            }}
+          />
+        </LazyScreen>
       );
     }
     return (
@@ -1156,17 +1283,7 @@ export default function App() {
               <MessageCircle className="w-4 h-4" />
             </button>
 
-            <button
-              type="button"
-              onClick={() => openBot('https://t.me/campsflint_bot')}
-              className="bg-brand hover:bg-brand-hover text-black px-4.5 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center gap-2 cursor-pointer font-bold h-10 shadow-lg shadow-brand/10 hover:shadow-brand/20 active:scale-98 border-none"
-              id="tg-bot-main-btn"
-            >
-              <span>В Бот</span>
-              <span className="font-mono text-[9px] text-black/50 hidden sm:inline">@campsflint_bot</span>
-            </button>
           </div>
-
           {/* Mobile menu overlay */}
           {mobileMenuOpen && (
             <div
@@ -1235,15 +1352,6 @@ export default function App() {
 
                 <button
                   type="button"
-                  className="w-full bg-brand hover:bg-brand-hover text-black px-4 py-3 rounded-xl text-xs font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2 font-bold shadow-lg shadow-brand/10 border-none cursor-pointer"
-                  onClick={() => { openBot('https://t.me/campsflint_bot'); setMobileMenuOpen(false); }}
-                >
-                  <span>В Бот</span>
-                  <span className="font-mono text-[9px] text-black/50">@campsflint_bot</span>
-                </button>
-
-                <button
-                  type="button"
                   className="w-full px-4 py-3.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border border-white/15 bg-[#1C1C1C] hover:bg-[#282828] hover:text-brand cursor-pointer flex items-center gap-3 font-mono"
                   onClick={() => { openBot('https://t.me/campsflint_bot?start=support'); setMobileMenuOpen(false); }}
                 >
@@ -1270,14 +1378,16 @@ export default function App() {
           <>
             <FundraiserBanner onOpen={(slug) => { window.history.pushState({}, '', `/?fund=${encodeURIComponent(slug)}`); window.location.reload(); }} />
 
-            {/* Живой челлендж — отдельным пульсирующим блоком над календарём.
-                Обычная афиша про челлендж врёт: у него нет ни «мест осталось»,
-                ни «до старта», зато есть серия дней, которая рвётся, если
-                человек пропустит утро. Поэтому он идёт первым, пока свежо. */}
-            {events.find((e) => e.isChallenge && (e.dateEnd || e.date) >= getToday()) && (
+            {/* Живой челлендж — отдельным пульсирующим оранжевым блоком над
+                календарём. Обычная афиша про челлендж врёт: у него нет ни
+                «мест осталось», ни «до старта», зато есть серия дней, которая
+                рвётся, если человек пропустит утро. Поэтому он идёт первым.
+                Показывается, пока челлендж заведён, — и после старта тоже:
+                марафон идёт, значит и карточка живая (см. activeChallenge). */}
+            {activeChallenge && (
               <section id="challenge-live-block" className="pt-2">
                 <ChallengeCard
-                  event={events.find((e) => e.isChallenge && (e.dateEnd || e.date) >= getToday())!}
+                  event={activeChallenge}
                   onOpenDetails={setActiveDetailEvent}
                 />
               </section>
@@ -1333,10 +1443,14 @@ export default function App() {
             <div>
               <span className="font-bold">© {new Date().getFullYear()} LIVE IN MOMENT BELARUS — SELF-DEVELOPMENT THROUGH DIALOGUE</span>
             </div>
-            <div className="flex gap-4 font-black">
+            <div className="flex flex-wrap items-center justify-end gap-4 font-black">
               <button onClick={() => setShowManifestoModal(true)} className="hover:underline bg-transparent border-none text-black p-0 cursor-pointer uppercase tracking-wider font-mono font-bold">СПИСОК ВЕКТОРОВ</button>
               <span>•</span>
               <button type="button" onClick={() => openBot('https://t.me/campsflint_bot')} className="hover:underline bg-transparent border-none p-0 cursor-pointer uppercase font-mono">ВСТУПИТЬ В БОТ</button>
+              <span>•</span>
+              {/* Соцсети прямо в подвале: это точка выхода из приложения туда,
+                  где клуб продолжает общаться с теми, кто ещё не в клубе. */}
+              <SocialLinks tone="light" />
             </div>
           </div>
         </div>
@@ -1344,12 +1458,14 @@ export default function App() {
 
       {/* Popup Registration Modal Dialog */}
       {registeringEvent && (
-        <RegistrationModal
-          event={registeringEvent}
-          isMember={gatePassed}
-          onClose={() => setRegisteringEvent(null)}
-          onSuccess={handleRegistrationSuccess}
-        />
+        <LazyScreen area="анкета" label="Открываем анкету…">
+          <RegistrationModal
+            event={registeringEvent}
+            isMember={gatePassed}
+            onClose={() => setRegisteringEvent(null)}
+            onSuccess={handleRegistrationSuccess}
+          />
+        </LazyScreen>
       )}
 
       {/* Философия клуба: инфографики пути развития и колеса баланса (модалка из шапки) */}
@@ -1547,80 +1663,111 @@ export default function App() {
       )}
       {/* FLY-OUT DETAILS MODAL FROM HERO ACTIONS */}
       {activeDetailEvent && (
-        <EventDetailModal
-          event={activeDetailEvent}
-          isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
-          isClubMember={clubApproved === true}
-          onClose={() => setActiveDetailEvent(null)}
-          onRegisterClick={(evt) => setRegisteringEvent(evt)}
-        />
+        <LazyScreen area="событие" label="Открываем событие…">
+          <EventDetailModal
+            event={activeDetailEvent}
+            isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
+            isClubMember={clubApproved === true}
+            onClose={() => {
+              setActiveDetailEvent(null);
+              // Возвращаемся ровно там где мы пришли из профиля.
+              if (returnToProfile) {
+                setReturnToProfile(false);
+                setProfileTab('events');
+                setShowUserStats(true);
+              }
+            }}
+            onRegisterClick={(evt) => setRegisteringEvent(evt)}
+          />
+        </LazyScreen>
       )}
 
       {/* VERIFICATION MODAL */}
       {verifyingEvent && (
-        <VerificationModal
-          eventId={verifyingEvent.id}
-          eventTitle={verifyingEvent.title}
-          requiresOnboarding={verifyingEvent.needsOnboarding || false}
-          onClose={() => setVerifyingEvent(null)}
-          onSubmit={(data) => {
-            setVerificationData(data);
-            console.log('Verification submitted:', data);
-            setVerifyingEvent(null);
-          }}
-        />
+        <LazyScreen area="верификация" label="Открываем…">
+          <VerificationModal
+            eventId={verifyingEvent.id}
+            eventTitle={verifyingEvent.title}
+            requiresOnboarding={verifyingEvent.needsOnboarding || false}
+            onClose={() => setVerifyingEvent(null)}
+            onSubmit={(data) => {
+              // Раньше здесь стоял console.log с ФИО, телефоном и датой рождения
+              // участника — в консоли браузера это оставалось надолго и попадало
+              // в скриншоты при диагностике. Состояние и так уходит в state.
+              setVerificationData(data);
+              setVerifyingEvent(null);
+            }}
+          />
+        </LazyScreen>
       )}
 
       {/* BIRTHDAY CALENDAR MODAL */}
       {showBirthdayCalendar && (
-        <BirthdayCalendar
-          birthdays={birthdays}
-          onClose={() => setShowBirthdayCalendar(false)}
-        />
+        <LazyScreen area="дни рождения" label="Открываем…">
+          <BirthdayCalendar
+            birthdays={birthdays}
+            onClose={() => setShowBirthdayCalendar(false)}
+          />
+        </LazyScreen>
       )}
 
       {/* MUSIC PLAYER MODAL — внутренний плейлист сообщества */}
       {showMusicPlayer && (
-        <MusicPlayer onClose={() => setShowMusicPlayer(false)} />
+        <LazyScreen area="музыка" label="Открываем…">
+          <MusicPlayer onClose={() => setShowMusicPlayer(false)} />
+        </LazyScreen>
       )}
 
       {/* HISTORY — видео прошедших событий сообщества */}
       {showHistory && (
-        <HistoryStories onClose={() => setShowHistory(false)} />
+        <LazyScreen area="история" label="Открываем историю…">
+          <HistoryStories onClose={() => setShowHistory(false)} />
+        </LazyScreen>
       )}
 
       {/* SNAP — «всплывашка» «Снять фото/видео» в период события */}
       {promptEvent && (
-        <SnapModal
-          eventId={promptEvent.id}
-          eventTitle={promptEvent.title}
-          onClose={() => setPromptEvent(null)}
-          onUploaded={() => setEventsReloadTick((t) => t + 1)}
-        />
+        <LazyScreen area="камера" label="Открываем…">
+          <SnapModal
+            eventId={promptEvent.id}
+            eventTitle={promptEvent.title}
+            onClose={() => {
+              // Закрытие запоминаем на сутки: раньше окно вылетало снова при
+              // каждом входе, и это просто раздражало.
+              try { localStorage.setItem('flint_snap_dismissed', getToday()); } catch { /* приватный режим */ }
+              setPromptEvent(null);
+            }}
+            onUploaded={() => setEventsReloadTick((t) => t + 1)}
+          />
+        </LazyScreen>
       )}
 
       {/* FEEDBACK MODAL */}
       {feedbackEvent && (
-        <FeedbackModal
-          eventId={feedbackEvent.id}
-          eventTitle={feedbackEvent.title}
-          onClose={() => setFeedbackEvent(null)}
-          onSubmit={async (data) => {
-            await submitFeedback({
-              eventId: data.eventId,
-              eventTitle: feedbackEvent.title,
-              rating: data.rating,
-              wouldReturn: data.wouldReturn,
-              feedback: data.feedback,
-            });
-            setFeedbackEvent(null);
-          }}
-        />
+        <LazyScreen area="отзыв" label="Открываем…">
+          <FeedbackModal
+            eventId={feedbackEvent.id}
+            eventTitle={feedbackEvent.title}
+            onClose={() => setFeedbackEvent(null)}
+            onSubmit={async (data) => {
+              await submitFeedback({
+                eventId: data.eventId,
+                eventTitle: feedbackEvent.title,
+                rating: data.rating,
+                wouldReturn: data.wouldReturn,
+                feedback: data.feedback,
+              });
+              setFeedbackEvent(null);
+            }}
+          />
+        </LazyScreen>
       )}
 
       {/* ПРОФИЛЬ УЧАСТНИКА */}
       {showUserStats && (
-        <ProfileScreen initialTab={profileTab} onClose={() => { setShowUserStats(false); setProfileTab('overview'); }} />
+        <LazyScreen area="профиль" label="Открываем профиль…">
+          <ProfileScreen initialTab={profileTab} onClose={() => { setShowUserStats(false); setProfileTab('overview'); }} />
+        </LazyScreen>
       )}
 
       {/* Нижнее меню (мобильный): главные места приложения под большим пальцем. */}
@@ -1638,23 +1785,17 @@ export default function App() {
         />
       )}
 
-      {/* EVENT POSTER MODAL */}
-      {posterEvent && (
-        <EventPoster
-          event={posterEvent}
-          onClose={() => setPosterEvent(null)}
-        />
-      )}
-
       {/* ADMIN PANEL MODAL */}
       {showAdminPanel && (
-        <AdminPanel
-          events={events}
-          onUpdateEvent={(updated) => adminSaveEvent(updated, false)}
-          onAddEvent={(newEvent) => adminSaveEvent(newEvent, true)}
-          onDeleteEvent={(eventId) => adminDeleteEvent(eventId)}
-          onClose={() => setShowAdminPanel(false)}
-        />
+        <LazyScreen area="админка" label="Открываем админку…">
+          <AdminPanel
+            events={events}
+            onUpdateEvent={(updated) => adminSaveEvent(updated, false)}
+            onAddEvent={(newEvent) => adminSaveEvent(newEvent, true)}
+            onDeleteEvent={(eventId) => adminDeleteEvent(eventId)}
+            onClose={() => setShowAdminPanel(false)}
+          />
+        </LazyScreen>
       )}
     </div>
   );

@@ -121,6 +121,16 @@ function realIds(regs: any[]): any[] {
 }
 
 /**
+ * Челлендж это или выезд. Флаг лежит в events.notifications, а не в отдельной
+ * колонке. Нужен, чтобы выключить для челленджа «вчерашние» напоминания:
+ * это марафон дома, а не выезд, и просьба прислать фото оттуда неуместна.
+ */
+function isChallengeEvent(ev: any): boolean {
+  const n = (ev && ev.notifications) || {};
+  return n._format === 'challenge' || n.is_challenge === true;
+}
+
+/**
  * БАДИ-ПАРЫ (копия логики из api/telegram/webhook.ts — общий _lib роняет
  * функции на Vercel). Крон — страховка: связки достраиваются при каждой записи,
  * но если бот не смог доставить сообщение (человек ещё не открывал диалог) или
@@ -306,7 +316,10 @@ export default async function handler(req: any, res: any) {
   if (!authorized(req)) return res.status(401).json({ error: 'Unauthorized' });
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
-  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, autoRemindersSent: 0, buddyPairs: 0, errors: [] as string[] };
+  // staleRemindersVoided — сколько просроченных напоминаний погашено за прогон.
+  // Показываем отдельно: если счётчик растёт, значит события потом
+  // меняются, а напоминания остаются — это стоит увидеть.
+  const report = { eventReminders: 0, paymentReminders: 0, feedbackRequests: 0, menuBroadcasts: 0, pollsClosed: 0, autoRemindersSent: 0, staleRemindersVoided: 0, buddyPairs: 0, errors: [] as string[] };
 
   // Забаненных исключаем на слое отправки (защита-в-глубину для legacy).
   await loadBlockedIds();
@@ -326,7 +339,35 @@ export default async function handler(req: any, res: any) {
       .lt('attempts', 3)
       .limit(50);
 
+    /**
+     * Мёртвые напоминания — гасим, а не шлём.
+     *
+     * Живой жалобой владельца было: «вылетают задачи по Нарочи, которые я
+     * давно закрыл». Так и работало: строка создаётся заранее, а отправляется
+     * когда наступит remind_at. Если событие за это время перенесли, закрыли
+     * или оно просто прошло — строка остаётся непрочитанной и срабатывает
+     * позже, уже после выезда. Отправить её нельзя, но и оставлять нельзя:
+     * она будет пытаться уйти ещё два раза.
+     *
+     * Поэтому сверяемся с событием и помечаем такие строки отправленными:
+     * в отчёте они видны отдельным счётчиком, а не растворяются молча.
+     */
+    const staleIds: string[] = [];
     for (const r of autoReminders || []) {
+      if (!r.event_id) continue;
+      const { data: evRow } = await supabase
+        .from('events').select('date,date_end,status').eq('id', r.event_id).maybeSingle();
+      if (!evRow) { staleIds.push(String(r.id)); continue; }
+      const end = String((evRow as any).date_end || (evRow as any).date || '');
+      if (end && end < nowIso.slice(0, 10)) staleIds.push(String(r.id));
+    }
+    if (staleIds.length) {
+      await supabase.from('auto_reminders').update({ sent: true, attempts: 3 }).in('id', staleIds);
+      report.staleRemindersVoided = staleIds.length;
+    }
+
+    for (const r of autoReminders || []) {
+      if (staleIds.includes(String(r.id))) continue;
       try {
         await tg('sendMessage', {
           chat_id: r.telegram_id,
@@ -803,10 +844,17 @@ export default async function handler(req: any, res: any) {
     const yesterday = dayOffset(-1);
     const { data: pastEvents } = await supabase
       .from('events')
-      .select('id,title')
+      .select('id,title,notifications')
       .or(`date_end.eq.${yesterday},and(date.eq.${yesterday},date_end.is.null)`);
 
     for (const ev of pastEvents || []) {
+      /**
+       * Челлендж пропускаем. Владелец жаловался: при открытии бота вылезало
+       * «ты был(а) на событии — пришли фото», и это было про 90-дневный
+       * челлендж, на котором все сидят дома. Просить там фотографии нечего.
+       * Флаг челленджа лежит в events.notifications, а не в отдельной колонке.
+       */
+      if (isChallengeEvent(ev)) continue;
       const { data: regs } = await supabase
         .from('registrations')
         .select('id,telegram_id,reminded_at')
@@ -1129,17 +1177,26 @@ export default async function handler(req: any, res: any) {
     // у отправителей — «удаление» значит только уход из галереи.
     try {
       const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      // Неделя считается от КОНЦА события: многодневный выезд или челлендж не
+      // должен обрезаться до топ-5, пока он ещё идёт. Свежие — первыми, чтобы
+      // при >50 прошедших событиях выбор не был случайным.
       const { data: oldEvents } = await supabase
-        .from('events').select('id').lt('date', weekAgo).limit(50);
-      for (const ev of oldEvents || []) {
+        .from('events').select('id,date,date_end').lt('date', weekAgo)
+        .order('date', { ascending: false }).limit(50);
+      for (const ev of (oldEvents || []).filter((e: any) => String(e.date_end || e.date) < weekAgo)) {
         const { data: media } = await supabase
           .from('event_media').select('id,is_keeper')
           .eq('event_id', (ev as any).id)
           .order('votes', { ascending: false }).order('created_at', { ascending: true });
         if (!media || !media.length) continue;
-        if (media.every((m: any) => m.is_keeper)) continue;
-        const keep = media.slice(0, 5).map((m: any) => m.id);
-        const drop = media.slice(5).map((m: any) => m.id);
+        // is_keeper уже отобранное (в т.ч. официальный ролик и фото клуба) не
+        // трогаем никогда. Раньше топ-5 считался по всей галерее: стоило одному
+        // участнику дозалить фото — официальные материалы с 0 голосов
+        // проигрывали и удалялись. Топ-5 теперь выбирается только из новых.
+        const fresh = media.filter((m: any) => !m.is_keeper);
+        if (!fresh.length) continue;
+        const keep = fresh.slice(0, 5).map((m: any) => m.id);
+        const drop = fresh.slice(5).map((m: any) => m.id);
         await supabase.from('event_media').update({ is_keeper: true }).in('id', keep);
         if (drop.length) await supabase.from('event_media').delete().in('id', drop);
         (report as any).galleriesCleaned = ((report as any).galleriesCleaned || 0) + 1;
@@ -1205,11 +1262,18 @@ export default async function handler(req: any, res: any) {
           (new Date(todayMinsk).getTime() - new Date((ev as any).date).getTime()) / 86400000) + 1);
         await tg('sendMessage', {
           chat_id: Number((grp as any).chat_id), parse_mode: 'HTML',
-          text: `🌅 <b>Утро челленджа, день ${dayNo}</b>\n\n` +
-            (doneIds.size ? `Уже отметились: <b>${doneIds.size}</b> 🔥\n` : '') +
-            (silent.length
-              ? `Без отметки за сегодня: <b>${silent.length}</b>\n\nСними видео-кружок и отправь сюда — бот засчитает день и начислит баллы.`
-              : 'Все на месте — уважение 💪'),
+          /**
+           * Утренний пинг — это ТРИ слова и одна картинка в голове, а не
+           * инструкция. Раньше здесь стояло «Сними видео-кружок и отправь
+           * сюда»: человек, которому лень снимать видео, читал это и
+           * откладывал на вечер, а вечером уже не откладывалось.
+           * Теперь перечислены все три способа — выбрать можно любой, и
+           * «просто сфоткать» перестаёт быть нарушением правил.
+           */
+          text: `🔥 <b>День ${dayNo}. Отметься.</b>\n\n` +
+            (doneIds.size ? `Уже отметились: <b>${doneIds.size}</b>` : '') +
+            (silent.length ? (doneIds.size ? ' · ' : '') + `ждём: <b>${silent.length}</b>` : '') +
+            '\n\n<b>Кружок · фото · слово</b> — сюда. Бот засчитает день.',
         });
         await supabase.from('events')
           .update({ notifications: { ...n, _challengeNudge: todayMinsk } })

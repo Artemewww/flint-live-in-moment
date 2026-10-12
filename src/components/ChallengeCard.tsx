@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Flame, Zap, ArrowRight, Target, Video } from 'lucide-react';
 import { CommunityEvent, getToday } from '../types';
-import { haptic } from '../telegram';
+import { haptic, getInitData } from '../telegram';
 
 /**
  * КАРТОЧКА ЧЕЛЛЕНДЖА — компактный пульсирующий блок на главной.
@@ -68,7 +68,7 @@ export default function ChallengeCard({
   useEffect(() => {
     setCheckins(readLocalCheckins(event.id));
     let alive = true;
-    fetch(`/api/events?action=checkins&id=${encodeURIComponent(event.id)}`)
+    fetch(`/api/events?action=checkins&id=${encodeURIComponent(event.id)}`, { headers: { 'X-Telegram-Init-Data': getInitData() } })
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
         if (!alive || !j) return;
@@ -100,15 +100,26 @@ export default function ChallengeCard({
   const lastTime = [...checkins].sort((a, b) => (a.date < b.date ? 1 : -1))[0]?.time;
 
   return (
-    <div
+    /**
+     * Вся карточка — одна большая кнопка.
+     *
+     * Раньше кликалась только стрелка справа: на телефоне это мишень в 32px
+     * в самом углу, и человек просто не попадал, а челлендж выглядел так,
+     * будто нажать нельзя. Теперь тап в любом месте баннера открывает
+     * карточку — по кнопке попасть невозможно мимо.
+     */
+    <button
+      type="button"
       id={`challenge-card-${event.id}`}
-      className="relative overflow-hidden rounded-2xl border border-amber-500/30 bg-gradient-to-br from-[#141007] via-[#0F0D08] to-[#0A0A0A] shadow-lg animate-pulse"
+      onClick={() => { haptic('success'); onOpenDetails(event); }}
+      title={stats.doneToday ? 'Посмотреть челлендж' : 'Открыть и отметить день'}
+      className="relative overflow-hidden rounded-2xl border border-amber-500/30 bg-gradient-to-br from-[#141007] via-[#0F0D08] to-[#0A0A0A] shadow-lg animate-pulse w-full text-left cursor-pointer block"
     >
       {/* Пульс: мягкое дыхание фона — челлендж живой, он идёт прямо сейчас. */}
-      <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-amber-500/10 blur-3xl" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,176,0,0.08),transparent_55%)]" />
+      <span className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-amber-500/10 blur-3xl" />
+      <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,176,0,0.08),transparent_55%)]" />
 
-      <div className="relative flex items-center gap-3 p-2.5 pr-3">
+      <span className="relative flex items-center gap-3 p-2.5 pr-3">
         {/* Обложка квадратом 76px (как FundraiserBanner) */}
         <span className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-600/10 flex items-center justify-center">
           <span className="text-3xl">🔥</span>
@@ -155,16 +166,15 @@ export default function ChallengeCard({
           </span>
         </span>
 
-        {/* Стрелка-CTA */}
-        <button
-          type="button"
-          onClick={() => { haptic('success'); onOpenDetails(event); }}
-          className="shrink-0 p-2 rounded-xl bg-amber-400/10 border border-amber-400/30 text-amber-300 hover:bg-amber-400/20 hover:scale-105 transition-all"
-          title={stats.doneToday ? 'Посмотреть челлендж' : 'Открыть и отметить день'}
+        {/* Стрелка-CTA: осталась как указатель «сюда», но больше не единственная
+            точка входа — вся карточка кликабельна. */}
+        <span
+          className="shrink-0 p-2 rounded-xl bg-amber-400/10 border border-amber-400/30 text-amber-300"
+          aria-hidden="true"
         >
           <ArrowRight className="h-4 w-4" />
-        </button>
-      </div>
-    </div>
+        </span>
+      </span>
+    </button>
   );
 }

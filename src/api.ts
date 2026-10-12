@@ -194,6 +194,10 @@ export async function getPrefillData(): Promise<{
     roles: string;
     /** Есть прошлая регистрация — значит анкету реально есть чем заполнить. */
     hasHistory?: boolean;
+    /** Как добирался в прошлый раз. null — не записывался. */
+    transportMode?: 'car' | 'carsharing' | 'seek' | 'self' | null;
+    /** Согласие на обработку данных уже дано раньше. */
+    agreedPd?: boolean;
   };
   error?: string;
 }> {

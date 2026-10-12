@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
+import sharp from 'sharp';
 
 // Хелперы задублированы с api/register.ts НАМЕРЕННО: общий api/_lib/ роняет
 // функции на Vercel в рантайме (FUNCTION_INVOCATION_FAILED). Не выносить.
@@ -113,6 +114,20 @@ async function notifyAdmins(text: string): Promise<boolean> {
 
 // Маппинг snake_case -> camelCase для фронтенда.
 // Дублируется в api/admin/events.ts: serverless не импортирует из ../src (PLAN.md §9).
+/**
+ * Афиши хранятся в базе как data:-URL (base64, ~100–300 КБ каждая). Раньше они
+ * уходили в список событий целиком: ответ рос с каждым новым событием и
+ * перекачивался при каждом обновлении ленты. Теперь в списке — ссылка на
+ * прокси action=image (кэшируется браузером на сутки; v= сбрасывает кэш при
+ * правке события). Обычные URL проходят как есть.
+ */
+function eventImageUrl(event: any, value: any, kind?: 'telegram'): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  if (!value.startsWith('data:')) return value;
+  const v = encodeURIComponent(String(event.updated_at || ''));
+  return `/api/events?action=image&id=${encodeURIComponent(String(event.id))}${kind ? `&kind=${kind}` : ''}&v=${v}`;
+}
+
 function mapEventToCamelCase(event: any) {
   if (!event) return null;
   return {
@@ -134,8 +149,8 @@ function mapEventToCamelCase(event: any) {
       lng: event.coordinates_lng
     },
     painPoint: event.pain_point,
-    image: event.image,
-    telegramImage: event.telegram_image || undefined,
+    image: eventImageUrl(event, event.image),
+    telegramImage: eventImageUrl(event, event.telegram_image, 'telegram'),
     maxParticipants: event.max_participants,
     participantsCount: event.participants_count,
     // Состав события: имя/пол/костяк каждого записавшегося (см. сборку выше).
@@ -367,6 +382,10 @@ async function handleImage(req: any, res: any) {
   }
   const buf = Buffer.from(m[2], 'base64');
   res.setHeader('Content-Type', m[1]);
+  // SVG с нашего домена исполнял бы встроенные скрипты (stored XSS через
+  // загрузку афиши). sandbox запрещает скрипты, nosniff — подмену типа.
+  res.setHeader('Content-Security-Policy', "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'");
+  res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'public, max-age=86400');
   return res.status(200).send(buf);
 }
@@ -404,6 +423,16 @@ async function handleMedia(req: any, res: any) {
       .from('event_media').select('id').eq('event_id', evId).eq('file_id', fid).limit(1).maybeSingle();
     if (!owned) return res.status(403).end();
   }
+  // Крупный файл из нашего бакета: не стримим, а отправляем браузеру прямо на
+  // CDN. Файл не перезаходит через функцию — значит, работают Range-запросы
+  // и перемотка, и снимается лимит на размер ответа. Ссылка отдаётся только
+  // после проверки подписи И владения строкой (выше), поэтому это не открытый
+  // редирект: подделать свой URL в galleries нельзя.
+  if (isStorageMedia(fid)) {
+    if (!evId) return res.status(403).end();
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    return res.status(302).setHeader('Location', fid).end();
+  }
   try {
     const gf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -416,12 +445,184 @@ async function handleMedia(req: any, res: any) {
     const buf = Buffer.from(await fr.arrayBuffer());
     // Лимит ответа Vercel-функции — держим запас (фото Telegram сжимает до ~300КБ).
     if (buf.length > 8 * 1024 * 1024) return res.status(413).end();
-    res.setHeader('Content-Type', fr.headers.get('content-type') || (path.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg'));
+    /**
+     * Content-Type приходится УГАДЫВАТЬ, а не брать у Telegram.
+     *
+     * Telegram отдаёт файлы как application/octet-stream («не знаю, что это»).
+     * Раньше мы это значение пробрасывали как есть, и фото уезжали в галерею с
+     * чужим типом. На десктопе Chrome это незаметно, а в Telegram Mini App на
+     * айфоне картинка просто не рисуется — пустой серый квадрат. Тип из ответа
+     * берём только если он осмысленный (image/* или video/*), иначе смотрим
+     * на расширение file_path.
+     */
+    const upstream = (fr.headers.get('content-type') || '').split(';')[0].trim();
+    const byExt = /\.webm$/i.test(path) ? 'video/webm'
+      : /\.mov$/i.test(path) ? 'video/quicktime'
+        : /\.mp4$/i.test(path) ? 'video/mp4'
+          : /\.webp$/i.test(path) ? 'image/webp'
+            : 'image/jpeg';
+    res.setHeader('Content-Type', /^(image|video)\//.test(upstream) ? upstream : byExt);
     res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
     return res.status(200).send(buf);
   } catch {
     return res.status(502).end();
   }
+}
+
+/**
+ * ОБЛОЖКА ВИДЕО. Раньше в сетке галереи видео рисовалось пустым тёмным
+ * квадратом с треугольником: у <video> без poster нет кадра до play, а наш
+ * прокси не отдаёт Range, поэтому браузер и не мог подтянуть первый кадр.
+ *
+ * Здесь обложка достаётся бесплатно из самого Telegram: у каждого залитого
+ * видео есть thumbnail. Отдаём картинкой с суточным кэшем — на 20 плиток это
+ * 20 запросов в день, а не 20 на каждый просмотр. Для файлов из Storage
+ * обложка лежит рядом (.jpg) и отдаётся редиректом на CDN.
+ */
+async function handleMediaPoster(req: any, res: any) {
+  const fid = String(req.query?.fid || '');
+  const sig = String(req.query?.s || '');
+  const evId = String(req.query?.id || '');
+  const day = 'public, max-age=86400, s-maxage=86400';
+  if (!fid || !BOT_TOKEN || !evId) return res.status(400).end();
+  if (!mediaSigValid(fid, sig)) return res.status(403).end();
+  if (!isStorageMedia(fid)) {
+    const { data: owned } = await supabase
+      .from('event_media').select('id').eq('event_id', evId).eq('file_id', fid).limit(1).maybeSingle();
+    if (!owned) return res.status(403).end();
+  }
+  res.setHeader('Cache-Control', day);
+  if (isStorageMedia(fid)) return res.status(302).setHeader('Location', storagePosterOf(fid)).end();
+  try {
+    const gf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: fid }),
+    }).then((r) => r.json());
+    const thumbId = gf?.result?.thumbnail?.file_id;
+    if (!thumbId) return res.status(404).end();
+    const tf = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/getFile`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_id: thumbId }),
+    }).then((r) => r.json());
+    const path = tf?.result?.file_path;
+    if (!path) return res.status(404).end();
+    const fr = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`);
+    if (!fr.ok) return res.status(404).end();
+    res.setHeader('Content-Type', 'image/jpeg');
+    return res.status(200).send(Buffer.from(await fr.arrayBuffer()));
+  } catch {
+    return res.status(502).end();
+  }
+}
+
+/**
+ * АРХИВ МЕРОПРИЯТИЙ («История сообщества»).
+ *
+ * Раньше эта страница бралась из src/history.ts — жёстко вписанного списка из
+ * пяти пунктов, который ничего не знал о базе. Отсюда и жалобы: события шли в
+ * произвольном порядке (самое свежее оказывалось не сверху), Bison Race с его
+ * сорока кадрами в архиве не было вообще, а «кто был» не показывался нигде.
+ * Теперь архив = прошедшие события из той же таблицы, что и афиша, поэтому
+ * он пополняется сам: организатор залил галерею — кадры появились здесь.
+ *
+ * Порядок — по убыванию даты, свежее сверху (DESC), и это решается в одном
+ * запросе, а не сортировкой на клиенте.
+ */
+async function handleArchive(req: any, res: any) {
+  const today = minskToday();
+  const { data: events } = await supabase
+    .from('events')
+    .select('id,title,date,date_end,date_label,location,image,checklist')
+    // Будущие события не должны съедать лимит архива, а черновики — попадать
+    // в него вовсе (раньше прошедший draft видели все участники).
+    .lte('date', today)
+    .or('status.is.null,status.neq.draft')
+    .order('date', { ascending: false })
+    .limit(40);
+
+  // Прошедшее = закончился последний день. Многодневный выезд не должен
+  // выпадать из архива на своём втором дне (date, а не date_end).
+  // …или организатор нажал «Завершить» (checklist.finished) — тогда сразу.
+  const past = (events || []).filter((e: any) => e.checklist?.finished === true || (e.date_end || e.date) < today);
+  if (!past.length) {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(200).json({ items: [] });
+  }
+  const ids = past.map((e: any) => e.id);
+
+  // Один запрос на медиа всех событий и один на состав — вместо N+1 на каждое
+  // прошедшее событие. На архиве их десятки, иначе функция упирается в лимит.
+  const { data: media } = await supabase
+    .from('event_media').select('id,event_id,file_id,media_type,votes')
+    .in('event_id', ids)
+    .order('votes', { ascending: false });
+  const { data: regs } = await supabase
+    .from('registrations').select('event_id,telegram_id,status,attended,name')
+    .in('event_id', ids)
+    .neq('status', 'cancelled');
+
+  // Имена для «кто был» — из профиля, иначе из самой записи.
+  const allTids = [...new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter((n: number) => n > 0))];
+  let nameById = new Map<number, string>();
+  if (allTids.length) {
+    const { data: mem } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', allTids);
+    nameById = new Map((mem || []).map((m: any) => [Number(m.telegram_id), m.first_name || (m.username ? '@' + m.username : '')]));
+  }
+  const regName = new Map<number, string>((regs || []).map((r: any) => [Number(r.telegram_id), r.name || '']));
+
+  const mediaByEvent = new Map<string, any[]>();
+  for (const m of media || []) {
+    const list = mediaByEvent.get(m.event_id) || [];
+    list.push(m);
+    mediaByEvent.set(m.event_id, list);
+  }
+
+  const items = past.map((e: any) => {
+    const evId: string = e.id;
+    const list = mediaByEvent.get(evId) || [];
+    const videos = list.filter((m) => m.media_type === 'video').map((m) => ({
+      id: m.id, src: mediaUrl(m.file_id, evId), poster: mediaPosterUrl(m.file_id, evId),
+    }));
+    const photos = list.filter((m) => m.media_type !== 'video').map((m) => ({ id: m.id, src: mediaUrl(m.file_id, evId) }));
+
+    // «Кто был»: сперва отмеченные attended. Если отметок нет (старое событие,
+    // кнопку не нажимали) — показываем тех, кто записан и не отменял запись,
+    // иначе половина архива была бы с пустым составом.
+    const forEvent = (regs || []).filter((r: any) => r.event_id === evId);
+    const attended = forEvent.filter((r: any) => r.attended === true);
+    const who = (attended.length ? attended : forEvent);
+    const seen = new Set<number>();
+    const attendees = who
+      .map((r: any) => ({ tid: Number(r.telegram_id), name: nameById.get(Number(r.telegram_id)) || regName.get(Number(r.telegram_id)) || '' }))
+      .filter((p: any) => {
+        if (!(p.tid > 0) || seen.has(p.tid)) return false;
+        seen.add(p.tid);
+        return true;
+      })
+      .map((p: any) => ({ telegramId: p.tid, name: p.name, avatar: avatarUrl(p.tid) }));
+
+    return {
+      id: evId,
+      title: e.title,
+      date: e.date,
+      dateEnd: e.date_end || null,
+      dateLabel: e.date_label || e.date,
+      location: e.location || '',
+      // Обложка карточки: афиша события. Если её нет — первый кадр из галереи,
+      // иначе карточка выходит пустой серой прямоугольником.
+      cover: e.image ? `/api/events?action=image&id=${encodeURIComponent(evId)}` : (photos[0]?.src || videos[0]?.poster || ''),
+      videos,
+      photos,
+      attendees,
+      // По этим счётчикам на открытке рисуются бейджи «видео» и «фото».
+      videoCount: videos.length,
+      photoCount: photos.length,
+      peopleCount: attendees.length,
+    };
+  });
+
+  res.setHeader('Cache-Control', 'no-store');
+  return res.status(200).json({ items });
 }
 
 /**
@@ -446,6 +647,22 @@ function avatarUrl(id: number): string {
  * file_id неугадываем сам по себе, но утекает в разметке галереи; подпись
  * закрывает прокси от использования как чужого файлохранилища.
  */
+/**
+ * Content-Type для картинки из Telegram.
+ *
+ * Telegram отдаёт файлы как application/octet-stream («не знаю, что это»), и
+ * раньше это значение пробрасывалось как есть. На десктопе Chrome такой тип
+ * для <img> безобиден, а в Telegram Mini App на айфоне картинка просто не
+ * рисуется — пустой серый кружок. Поэтому доверяем ответу Telegram только
+ * когда он осмысленный (image/*), иначе определяем тип по расширению.
+ */
+function imageContentType(upstream: string | null, filePath: string): string {
+  const t = String(upstream || '').split(';')[0].trim();
+  if (/^image\//i.test(t)) return t;
+  if (/\.webp$/i.test(filePath)) return 'image/webp';
+  return 'image/jpeg';
+}
+
 function mediaSig(fid: string): string {
   return crypto.createHmac('sha256', BOT_TOKEN).update(`media:${fid}`).digest('hex').slice(0, 16);
 }
@@ -476,6 +693,55 @@ function mediaUrl(fid: string, eventId?: string): string {
 function mediaUrlSafe(fid: string, eventId?: string): string {
   return mediaUrl(fid, eventId).replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/"/g, '\\"').replace(/</g, '\\x3c').replace(/\n/g, '');
 }
+
+/* ── Крупные файлы в Supabase Storage ────────────────────────────────────
+ *
+ * Исторически в `event_media.file_id` лежит только Telegram file_id, и это
+ * работает: участники шлют короткие клипы с телефона, прокси их стримит.
+ * Но прокси — это Vercel-функция, и у неё два жёстких потолка:
+ *   • лимит ответа (в коде стоит страховочный порог 8 МБ),
+ *   • отсутствие Range-запросов — файл отдаётся целиком, перемотка не работает.
+ *
+ * Смонтированный ролик (100 с, 1080×1920) в оба потолка не влезает: 118 МБ.
+ * Поэтому `file_id` теперь умеет быть публичной ссылкой на наш же бакет —
+ * такие файлы отдаём 302-редиректом прямо на CDN Supabase, минуя функцию.
+ * Ссылка остаётся подписанной и привязанной к событию: подпись проверяется,
+ * владение строкой в event_media — тоже, произвольный чужой URL не отдаём.
+ */
+
+/** Префикс нашего ПУБЛИЧНОГО бакета. Всё, что не под ним, — не наше. */
+const STORAGE_PREFIX = `${String(process.env.SUPABASE_URL || '').replace(/\/+$/, '')}/storage/v1/object/public/event-images/`;
+
+/**
+ * «Сегодня» по Минску (UTC+3 круглый год, без перехода на летнее время).
+ * toISOString() даёт дату по UTC: с 00:00 до 03:00 по Минску это ещё вчера —
+ * загрузка в первый день выезда получала not_started, а отметка челленджа
+ * записывалась на прошлый день и рвала серию.
+ */
+function minskToday(): string {
+  return new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isStorageMedia(fid: string): boolean {
+  return !!fid && fid.startsWith(STORAGE_PREFIX) && /^https:\/\//.test(fid) && !/[\s"'\\<>]/.test(fid);
+}
+
+/**
+ * Обложка видео. Telegram умеет отдать свою превьюшку (thumbnail) бесплатно,
+ * а для файлов в Storage обложка кладётся рядом по соглашению: тот же путь,
+ * но с расширением .jpg. Соглашение вместо новой колонки — потому что DDL в
+ * этом проекте применяется руками через Dashboard Supabase, и код обязан
+ * работать и до, и после миграции.
+ */
+function storagePosterOf(fid: string): string {
+  return fid.replace(/\.[a-z0-9]{2,5}$/i, '') + '.jpg';
+}
+function mediaPosterUrl(fid: string, eventId?: string): string {
+  if (!fid || !BOT_TOKEN) return '';
+  const owner = eventId ? `&id=${encodeURIComponent(eventId)}` : '';
+  return `/api/events?action=media_poster&fid=${encodeURIComponent(fid)}&s=${mediaSig(fid)}${owner}`;
+}
+
 async function handleAvatar(req: any, res: any) {
   const id = Number(req.query?.u || 0);
   const sig = String(req.query?.s || '');
@@ -502,7 +768,9 @@ async function handleAvatar(req: any, res: any) {
     const fr = await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${path}`);
     if (!fr.ok) return res.status(404).end();
     const buf = Buffer.from(await fr.arrayBuffer());
-    res.setHeader('Content-Type', fr.headers.get('content-type') || 'image/jpeg');
+    // Telegram отдаёт аватарку как application/octet-stream; в Mini App на
+    // айфоне такая картинка не рисуется. Тип определяем сами — см. imageContentType.
+    res.setHeader('Content-Type', imageContentType(fr.headers.get('content-type'), path));
     res.setHeader('Cache-Control', 'public, s-maxage=86400, max-age=86400');
     return res.status(200).send(buf);
   } catch {
@@ -529,16 +797,45 @@ async function handleMediaList(req: any, res: any) {
     id: m.id,
     media_type: m.media_type === 'video' ? 'video' : 'photo',
     votes: m.votes || 0,
-    src: mediaUrl(m.file_id),
+    // id события обязателен: по нему прокси проверяет, что файл принадлежит
+    // именно этому выезду, иначе подписанная ссылка открывала бы чужое медиа.
+    src: mediaUrl(m.file_id, evId),
+    // У видео в сетке показываем обложку, а не пустой тёмный квадрат.
+    ...(m.media_type === 'video' ? { poster: mediaPosterUrl(m.file_id, evId) } : {}),
   }));
   res.setHeader('Cache-Control', 'no-store');
-  return res.status(200).json({ items });
+  // Подписанная ссылка на HTML-галерею: без g= она отдаёт 403, а собрать
+  // подпись на клиенте нельзя (секрет — токен бота).
+  const galleryUrl = BOT_TOKEN ? `/api/events?action=gallery&id=${encodeURIComponent(evId)}&g=${gallerySig(evId)}` : null;
+  return res.status(200).json({ items, galleryUrl });
+}
+
+/**
+ * Подпись на страницу галереи события.
+ *
+ * Галерею открывает бот (web_app-кнопка), и это обычная HTML-страница: она не
+ * умеет приложить заголовок с Telegram initData, поэтому клубной гейт к ней
+ * неприменим. Вместо этого доступ подписывается ссылкой: подпись — HMAC от id
+ * события, которую выдаёт сервер. Зная id события (он есть в любой пересылке),
+ * страницу по чужой ссылке не открыть.
+ */
+function gallerySig(eventId: string): string {
+  return crypto.createHmac('sha256', BOT_TOKEN).update(`gallery:${eventId}`).digest('hex').slice(0, 16);
+}
+function gallerySigValid(eventId: string, sig: string): boolean {
+  if (!BOT_TOKEN || sig.length !== 16) return false;
+  const a = Buffer.from(sig), b = Buffer.from(gallerySig(eventId));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 /** Галерея события: мобильная страница с голосованием (открывается как Mini App из бота). */
 async function handleGallery(req: any, res: any) {
   const evId = String(req.query?.id || '');
+  const gsig = String(req.query?.g || '');
   if (!evId) return res.status(400).send('Missing id');
+  // Без подписи галерея не отдаётся: раньше страница была полностью публичной,
+  // и любой, угадавший id события, получал все фото и подписанные ссылки на них.
+  if (!isAdmin(req) && !gallerySigValid(evId, gsig)) return res.status(403).send('Forbidden');
   const { data: ev } = await supabase.from('events').select('title,date').eq('id', evId).maybeSingle();
   const { data: media } = await supabase
     .from('event_media').select('id,file_id,media_type,votes')
@@ -553,8 +850,12 @@ async function handleGallery(req: any, res: any) {
     const srcJs = mediaUrlSafe(m.file_id, evId);
     const isVideo = m.media_type === 'video';
     // Превью в сетке — тап открывает на весь экран (и фото, и видео).
+    // У видео рисуем обложку (thumbnail из Telegram или .jpg рядом с файлом
+    // в Storage): раньше там был пустой чёрный квадрат с треугольником,
+    // и галерея выглядела сломанной.
     const inner = isVideo
-      ? `<video src="${src}" preload="metadata" playsinline muted></video><span class="play">▶</span>`
+      ? `<img src="${escapeHtml(mediaPosterUrl(m.file_id, evId))}" loading="lazy" alt="" onerror="this.remove()">`
+        + `<span class="play">▶</span>`
       : `<img src="${src}" loading="lazy" alt="">`;
     return `<figure data-id="${escapeHtml(String(m.id))}">`
       + `<div class="thumb" onclick="openLb('${srcJs}','${isVideo ? 'video' : 'photo'}')">${inner}</div>`
@@ -643,6 +944,214 @@ window.Telegram?.WebApp?.expand?.();
 </script></body></html>`);
 }
 
+/**
+ * БАННЕР ДЛЯ ШАРИНГА — 1200×630, горизонтальный.
+ *
+ * Зачем: все афиши клуба ВЕРТИКАЛЬНЫЕ (720×1280), а превью ссылки в Telegram
+ * показывает квадрат. Вертикальный постер в квадрате обрезался так, что в
+ * пересылке оставался кусок фотографии — баннер выглядел случайным.
+ *
+ * Что делает: берёт фото события и кадрирует под 1200×630
+ * берёт кадр геометрическим центром — ровно то, что видно на афише,
+ * кладёт тёмную вуаль слева и снизу, ставит логотип FLINT в левый верхний
+ * угол. Если фото нет — собирает фирменный фон, чтобы баннер не был пустым.
+ *
+ * Текста на баннере НЕТ намеренно: SVG-текст в sharp рисуется системными
+ * шрифтами, а на сервере их нет — надпись молча исчезла бы. Заголовок, дату и
+ * место Telegram показывает рядом из og:title/og:description.
+ */
+async function handleShareImage(req: any, res: any) {
+  const id = String(req.query?.id || '');
+  if (!id) return res.status(400).end();
+  const { data: ev } = await supabase
+    .from('events').select('title,date,date_label,location,image,telegram_image').eq('id', id).maybeSingle();
+  if (!ev) return res.status(404).end();
+
+  const W = 1200, H = 630;
+  // Логотип FLINT — те же пути, что и LogoMain в src/components/VectorIcons.tsx,
+  // чтобы баннер был ровно в стиле приложения.
+  const LOGO = `<g transform="translate(56,44) scale(0.52)" fill="#E6FD3A">
+    <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z"/>
+    <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z"/>
+    <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z"/>
+    <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z"/>
+    <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z"/>
+    <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z"/>
+    <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="#0B0B0B"/>
+  </g>`;
+  const overlay = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="l" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#000" stop-opacity="0.72"/>
+        <stop offset="55%" stop-color="#000" stop-opacity="0.18"/>
+        <stop offset="100%" stop-color="#000" stop-opacity="0.05"/>
+      </linearGradient>
+      <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#000" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#000" stop-opacity="0.6"/>
+      </linearGradient>
+    </defs>
+    <rect width="${W}" height="${H}" fill="url(#l)"/>
+    <rect width="${W}" height="${H}" fill="url(#b)"/>
+    ${LOGO}
+    <rect x="0" y="${H - 10}" width="${W}" height="10" fill="#E6FD3A"/>
+  </svg>`;
+
+  let base: Buffer;
+  const src = String((ev as any).telegram_image || (ev as any).image || '');
+  const m = /^data:image\/[a-zA-Z+]+;base64,(.+)$/.exec(src);
+  try {
+    if (!m) throw new Error('нет фото');
+    // Кадр — ГЕОМЕТРИЧЕСКИМ ЦЕНТРОМ, а не «по смыслу». Проверил на трёх афишах:
+    // attention и entropy оба уезжали в небо и солнечные блики, и баннер
+    // получался пустым куском веток. Центр даёт ровно то, что на афише: река,
+    // поля, люди. Отступ сверху не берём — на вертикальных постерах он уводил
+    // кадр в верхнюю треть с небом.
+    base = await sharp(Buffer.from(m[1], 'base64'))
+      .rotate()
+      .resize(W, H, { fit: 'cover', position: 'centre' })
+      .toBuffer();
+  } catch {
+    // Фото нет или битое — фирменный фон, чтобы превью не было пустым.
+    base = await sharp({
+      create: { width: W, height: H, channels: 3, background: '#151515' },
+    }).toBuffer();
+  }
+
+  const out = await sharp(base)
+    .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
+    .jpeg({ quality: 86, progressive: true })
+    .toBuffer();
+
+  res.setHeader('Content-Type', 'image/jpeg');
+  // Баннер меняется только при смене фото события — кэшируем месяц.
+  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  return res.status(200).send(out);
+}
+
+/**
+ * Хелперы приглашения (были отдельной функцией api/share.ts).
+ *
+ * На Hobby-плане Vercel жёсткий потолок — 12 serverless-функций на деплой,
+ * а их уже было ровно 12. Ещё одна (`/api/share`) ломала деплой целиком,
+ * поэтому приглашение живёт здесь, действием `action=share`.
+ */
+/** Месяцы по-русски — только для подписи в приглашении. */
+const SHARE_MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+
+/** «12 октября» — разбираем для приглашения. */
+function shareDayPhrase(iso: string): string {
+  const d = iso ? new Date(`${iso}T12:00:00`) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  return `${d.getDate()} ${SHARE_MONTHS[d.getMonth()]}`;
+}
+
+
+/**
+ * Приглашение: кладём в личку человека баннер + подпись со скрытой ссылкой.
+ *
+ * Зачем не системный диалог `t.me/share/url`: там текст идёт сверху, а
+ * ссылка отдельной карточкой превью снизу — ровно наоборот, чем просили.
+ * Плюс человек уходил в стороннее окно выбора чата. Здесь сообщение
+ * получается правильным: обложка сверху, ссылка спрятана под словами
+ * «Открыть и записаться», и пересылается обычным «переслать».
+ */
+async function handleShareInvite(body: any, req: any, res: any) {
+  if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
+
+  const user = verifyInitData(String(body.initData || ''), BOT_TOKEN);
+  if (!user) return res.status(200).json({ ok: false, error: 'Нужен вход через Telegram' });
+
+  const eventId = String(body.eventId || '').trim();
+  if (!eventId) return res.status(400).json({ ok: false, error: 'eventId обязателен' });
+
+  const { data: ev } = await supabase
+    .from('events')
+    .select('id,title,date,time,location,description,image,telegram_image,notifications,status')
+    .eq('id', eventId).maybeSingle();
+  if (!ev) return res.status(404).json({ ok: false, error: 'Событие не найдено' });
+
+  // Реф-код пригласившего — без него пересланное приглашение ничего не приносит.
+  let ref = '';
+  const { data: m } = await supabase
+    .from('members').select('ref_code').eq('telegram_id', user.id).maybeSingle();
+  if (m?.ref_code) ref = String(m.ref_code);
+
+  const host = req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app';
+  const site = `https://${host}`;
+  const link = `${site}/e/${encodeURIComponent(eventId)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
+  const banner = `${site}/api/events?action=share_image&id=${encodeURIComponent(eventId)}&t=${Date.now()}`;
+
+  const notifs = ((ev as any).notifications || {}) as Record<string, any>;
+  const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
+
+  const dateLine = [shareDayPhrase(String((ev as any).date || '')), (ev as any).time || '']
+    .filter(Boolean).join(', ');
+  const desc = String((ev as any).description || '').replace(/\s+/g, ' ').trim().slice(0, 110);
+
+  const headline = isChallenge
+    ? `Каждый день — одно движение для себя. 90 дней подряд.`
+    : `${dateLine ? `📅 ${dateLine}\n` : ''}${desc ? `${desc}\n` : ''}`;
+
+  const caption =
+    `<b>${escapeHtml((ev as any).title)}</b>\n\n` +
+    `${headline}\n` +
+    `<a href="${escapeHtml(link)}">👉 Открыть и записаться</a>`;
+
+  // Кнопка — на челлендже «Забронировать» звучит как «забронировать место в
+  // поездке», а ехать некуда. Ссылка в кнопке — startapp, чтобы человек сразу
+  // попал в приложение на карточку события, мимо бота.
+  const markup = {
+    inline_keyboard: [[{
+      text: isChallenge ? '✅ Вступить в челлендж' : '✅ Забронировать место',
+      url: `https://t.me/${BOT_USERNAME}?startapp=${encodeURIComponent(
+        ref ? `ref_${ref}_ev_${eventId}` : `ev_${eventId}`
+      )}`,
+    }]],
+  };
+
+  try {
+    // Баннер отдаём файлом: Telegram не всегда подтягивает картинку по
+    // внешней HTTP-ссылке, и тогда сообщение уходило вообще без обложки.
+    let sent = false;
+    try {
+      const r = await fetch(banner);
+      if (r.ok) {
+        const buf = Buffer.from(await r.arrayBuffer());
+        const form = new FormData();
+        form.append('chat_id', String(user.id));
+        form.append('photo', new Blob([buf], { type: 'image/jpeg' }), 'banner.jpg');
+        form.append('caption', caption);
+        form.append('parse_mode', 'HTML');
+        form.append('reply_markup', JSON.stringify(markup));
+        const fr = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto`, {
+          method: 'POST', body: form,
+        });
+        const fj: any = await fr.json().catch(() => ({}));
+        sent = !!fj?.ok;
+        if (!sent) console.warn('[share] sendPhoto:', fj?.description || fr.status);
+      }
+    } catch (e: any) {
+      console.warn('[share] banner fetch failed:', e?.message || e);
+    }
+    if (!sent) {
+      const fr = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: user.id, parse_mode: 'HTML', text: caption,
+          reply_markup: markup, disable_web_page_preview: true,
+        }),
+      });
+      const fj: any = await fr.json().catch(() => ({}));
+      if (!fj?.ok) throw new Error(fj?.description || 'Не получилось отправить');
+    }
+    return res.status(200).json({ ok: true });
+  } catch (e: any) {
+    return res.status(200).json({ ok: false, error: e?.message || 'Не получилось отправить' });
+  }
+}
+
 async function handleOg(req: any, res: any) {
   const id = String(req.query.id || '');
   const ref = String(req.query.ref || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 32);
@@ -658,10 +1167,46 @@ async function handleOg(req: any, res: any) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   const site = `https://${host}`;
   // Превью ссылки: приоритет — вертикальная афиша (telegram_image), иначе обычная.
-  const imageUrl = (ev as any).telegram_image
-    ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}&kind=telegram`
-    : ((ev as any).image ? `${site}/api/events?action=image&id=${encodeURIComponent(id)}` : `${site}/assets/images/og-default.png`);
-  const botUrl = `https://t.me/${BOT_USERNAME}?start=${ref ? `ref_${ref}_ev_${id}` : `event_${id}`}`;
+  // Превью ссылки. Раньше сюда шла вертикальная афиша (720×1280), и Telegram
+  // вписывал её в квадрат превью — пересылка выглядела случайным куском фото.
+  // Теперь это горизонтальный баннер 1200×630 с логотипом (action=share_image),
+  // который сам подбирает кадр. Ширину и высоту НЕ объявляем: картинка
+  // горизонтальная, Telegram сам знает, как её вписать.
+  const imageUrl = `${site}/api/events?action=share_image&id=${encodeURIComponent(id)}`;
+  /**
+   * ТОЧКА ВХОДА. Раньше здесь был `start=ref_...` / `start=event_...` и через
+   * 1.2 секунды страница САМА кидала посетителя в бота. Это и была дыра:
+   * ссылка /e/<id> публичная, поэтому любой человек из интернета попадал
+   * в клубской сценарий мимо заявки, а страница при этом печатала
+   * «Присоединяйся!» и обещала «Забронировать место» — будто клуб открытый.
+   *
+   * Теперь ссылка ведёт в ЗАЯВКУ и несёт id события, чтобы после одобрения
+   * человек попал именно на этот выезд. Решение «член или нет» принимает бот:
+   * он знает telegram_id, страница — нет.
+   */
+  /**
+   * ССЫЛКА ВЕДЁТ ПРЯМО В МИНИ-ПРИЛОЖЕНИЕ.
+   *
+   * Раньше кнопка вела в БОТ (`?start=verify_ev_...`): человек видел белый
+   * экран с кнопкой START, а не карточку события — то есть в превью у него
+   * была картинка, дата и место, а по клику их не оказывалось.
+   *
+   * `?startapp=ev_<id>` открывает Mini App сразу на карточке события (её
+   * читает App.tsx по `start_param`). Решение «член или нет» при этом не
+   * обходится: не допущенному приложение показывает гейт и заявку, то есть
+   * ровно то же, что показывал бот.
+   *
+   * Редирект делает JS, а не meta-refresh: краулер Telegram не выполняет
+   * скрипты, и og-картинка с описанием в пересылке остаётся на месте.
+   *
+   * Если у бота в @BotFather НЕ настроен Direct Mini App, `?startapp=`
+   * откроет просто страницу бота — это рабочий откат, хуже прежнего нет.
+   *
+   * Если в ссылке есть код пригласившего — сохраняем его: иначе теряется
+   * атрибуция «кто позвал» (у Тимы referred_by оказался пустым именно так).
+   */
+  const startappParam = ref ? `ref_${ref}_ev_${id}` : `ev_${id}`;
+  const miniAppUrl = `https://t.me/${BOT_USERNAME}?startapp=${encodeURIComponent(startappParam)}`;
 
   const title = `Живи в моменте: ${(ev as any).title}`;
   // Описание для превью: схлопываем пробелы/переносы и режем по границе слова,
@@ -687,10 +1232,15 @@ async function handleOg(req: any, res: any) {
 <meta property="og:title" content="${escapeHtml(title)}">
 <meta property="og:description" content="${escapeHtml(desc)}">
 <meta property="og:image" content="${escapeHtml(imageUrl)}">
-<meta property="og:image:width" content="1200">
-<meta property="og:image:height" content="630">
 <meta property="og:url" content="${escapeHtml(`${site}/e/${id}`)}">
 <meta name="twitter:card" content="summary_large_image">
+<!--
+  Размеры картинки намеренно НЕ объявляем. Раньше здесь стояли жёсткие
+  1200×630, но афиши вертикальные (720×1280): Telegram брал объявленные
+  размеры и вписывал вертикальный постер в горизонтальную рамку превью —
+  картинка доходила обрезанной. Без og:image:width/height потребитель сам
+  читает размер из файла и вёрстывает его правильно.
+-->
 <style>
  body{margin:0;background:#0b0b0b;color:#fff;font-family:system-ui,-apple-system,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;padding:24px}
  .card{max-width:520px;width:100%;background:#141414;border:1px solid #262626;border-radius:24px;overflow:hidden}
@@ -698,18 +1248,47 @@ async function handleOg(req: any, res: any) {
  .body{padding:24px}
  h1{font-size:24px;margin:0 0 8px}
  p{color:#a3a3a3;font-size:14px;line-height:1.6;margin:0 0 20px}
- a{display:block;text-align:center;background:#E6FD3A;color:#000;font-weight:700;padding:16px;border-radius:14px;text-decoration:none}
+ a{display:block;text-align:center;background:#E6FD3A;color:#000;font-weight:800;padding:16px;border-radius:14px;text-decoration:none;font-size:15px}
+ .gate{display:inline-flex;align-items:center;gap:6px;background:#E6FD3A;color:#000;font-weight:900;font-size:10px;letter-spacing:.14em;text-transform:uppercase;border-radius:999px;padding:5px 11px;margin-bottom:14px}
+ .note{background:rgba(230,253,58,.06);border:1px solid rgba(230,253,58,.2);border-radius:14px;padding:14px 16px;margin:0 0 18px}
+ .note b{display:block;color:#fff;margin-bottom:4px;font-size:14px}
+ .note span{color:#a3a3a3;font-size:13px;line-height:1.55}
+ .foot{color:#6b6b6b;font-size:11px;text-align:center;margin-top:16px;line-height:1.6}
 </style>
 </head><body>
 <div class="card">
   ${(ev as any).image ? `<img src="${escapeHtml(imageUrl)}" alt="">` : ''}
   <div class="body">
+    <span class="gate">Закрытый клуб</span>
     <h1>${escapeHtml((ev as any).title)}</h1>
-    <p>${escapeHtml(desc)}</p>
-    <a href="${escapeHtml(botUrl)}">✅ Забронировать место</a>
+    <div class="note">
+      <b>${escapeHtml(dateLabel ? `📅 ${dateLabel}` : 'Приглашение в клуб')}</b>
+      <span>Это закрытое сообщество. Если ты из клуба — откроется карточка события. Если нет — там же подаётся заявка: кодекс и короткое знакомство, 2–3 минуты.</span>
+    </div>
+    <a href="${escapeHtml(miniAppUrl)}" id="go">Открыть событие</a>
+    <p class="hint">Откроется приложение FLINT. Решение принимает костяк клуба.</p>
+    <div class="foot">Ты пришёл по приглашению на этот выезд.<br>После одобрения откроется именно он.</div>
   </div>
 </div>
-<script>setTimeout(function(){location.href=${JSON.stringify(botUrl)}},1200)</script>
+<script>
+/**
+ * Автопереход в Mini App.
+ *
+ * Страницу /e/<id> открывают из пересылки в Telegram — то есть человек уже
+ * в мессенджере, и лишний экран между «захотел пойти» и «попадал в
+ * приложение» просто отнимал решение. Кнопка под скриптом остаётся на
+ * случай, если автопереход не сработал.
+ */
+(function () {
+  var go = document.getElementById('go');
+  if (!go) return;
+  var ua = navigator.userAgent || '';
+  // Вне Telegram редиректить незачем: там всё равно нужен гейт заявки,
+  // а человек мог открыть ссылку с десктопа и ждал нормальную страницу.
+  if (!/Telegram/i.test(ua) && !window.TelegramWebviewProxy) return;
+  setTimeout(function () { location.replace(go.href); }, 350);
+})();
+</script>
 </body></html>`);
 }
 
@@ -886,7 +1465,7 @@ async function handleCheckins(req: any, res: any) {
 
   // Серия считаем здесь, а не на клиенте: клиент мог сутки не открывать
   // приложение, и его локальный кэш покажет неверный стрик.
-  const today = new Date().toISOString().slice(0, 10);
+  const today = minskToday();
   const set = new Set(uniqueDays.map((d) => d.date));
   let streak = 0;
   const cursor = new Date(`${today}T00:00:00Z`);
@@ -1163,19 +1742,20 @@ export default async function handler(req: any, res: any) {
     // Публичные: превью-страница приглашения и картинка события.
     if (req.query?.action === 'og') return await handleOg(req, res);
     if (req.query?.action === 'image') return await handleImage(req, res);
-    // Галерея события и прокси медиа (file_id неугадываем, голос — только участникам).
+    if (req.query?.action === 'share_image') return await handleShareImage(req, res);
+    // Галерея события — HTML-страница, её открывает бот (web_app-кнопка), и
+    // заголовков авторизации там нет. Поэтому доступ подписывается самой
+    // ссылкой (gallerySig): зная id события, страницу не отдать.
+    // Остальные медиа и состав — под гейтом, см. ниже.
     if (req.query?.action === 'gallery') return await handleGallery(req, res);
-    if (req.query?.action === 'media_list') return await handleMediaList(req, res);
     if (req.query?.action === 'media') return await handleMedia(req, res);
+    if (req.query?.action === 'media_poster') return await handleMediaPoster(req, res);
     if (req.query?.action === 'avatar') return await handleAvatar(req, res);
     // Поступки события: «кто что сделал». Организатор подтверждает — только
     // тогда эпизод идёт в репутацию и приносит баллы.
     if (req.query?.action === 'contributions') return await handleContributions(req, res);
     if (req.query?.action === 'contribution_review') return await handleContributionReview(req, res);
-    // Чек-ины челленджа: дни и время подъёма. Публично — без имён.
-    if (req.query?.action === 'checkins') return await handleCheckins(req, res);
-    if (req.query?.action === 'checkins_grouped') return await handleCheckinsGrouped(req, res);
-    if (req.query?.action === 'stories') return await handleStories(req, res);
+    // Чек-ины и истории челленджа — тоже под гейтом (см. ниже).
 
     // Афиша — СТРОГО для зарегистрированных участников клуба. Раньше список
     // отдавался публично, а затем пускал по одному реф-коду — так не-член видел
@@ -1204,6 +1784,18 @@ export default async function handler(req: any, res: any) {
       const u = verifyInitData(String(req.headers['x-telegram-init-data'] || ''), BOT_TOKEN);
       viewerId = Number(u?.id) || 0;
     }
+    // Дальше — только для участников клуба.
+    //
+    // Эти четыре экшена стояли ВЫШЕ гейта и были видны любому, кто угадает
+    // id события в адресной строке: состав челленджа с именами и аватарками,
+    // отметки подъёма, список медиа с уже подписанными ссылками на файлы.
+    // Это и были открытые «каналы по ссылке». Теперь они под тем же гейтом,
+    // что и афиша, а страница галереи — под подписью (gallerySig).
+    if (req.query?.action === 'archive') return await handleArchive(req, res);
+    if (req.query?.action === 'media_list') return await handleMediaList(req, res);
+    if (req.query?.action === 'checkins') return await handleCheckins(req, res);
+    if (req.query?.action === 'checkins_grouped') return await handleCheckinsGrouped(req, res);
+    if (req.query?.action === 'stories') return await handleStories(req, res);
     try {
       const { data: events, error } = await supabase
         .from('events')
@@ -1405,6 +1997,17 @@ export default async function handler(req: any, res: any) {
         }
       }
 
+      /**
+       * ПРИГЛАШЕНИЕ В СВОЙ ЧАТ — обложка сверху, ссылка зашита в текст.
+       *
+       * Отдельная функция `/api/share` не выжила: на Hobby-плане Vercel
+       * максимум 12 serverless-функций на деплой, и лимит был выбран до
+       * предела. Действие живёт здесь, в уже существующей `/api/events`.
+       */
+      if (action === 'share') {
+        return await handleShareInvite(body, req, res);
+      }
+
       // Голос за кадр в галерее: только участник клуба, один голос на файл.
       if (action === 'media_vote') {
         const user = verifyInitData(body.initData, BOT_TOKEN);
@@ -1470,14 +2073,14 @@ export default async function handler(req: any, res: any) {
         // Только участник события может грузить (кто зарегистрировался и прошёл).
         const { data: reg } = await supabase
           .from('registrations').select('id,status')
-          .eq('event_id', eventId).eq('telegram_id', user.id).neq('status', 'cancelled').maybeSingle();
+          .eq('event_id', eventId).eq('telegram_id', user.id).in('status', ['pending', 'confirmed']).maybeSingle();
         if (!reg) return res.status(403).json({ error: 'not_registered' });
 
         // Период события: грузить можно только пока событие идёт / ещё не прошло.
         const { data: ev } = await supabase
           .from('events').select('date,date_end').eq('id', eventId).maybeSingle();
         if (ev) {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = minskToday();
           const start = String(ev.date || today);
           const end = ev.date_end && String(ev.date_end) > start ? String(ev.date_end) : start;
           if (today < start) return res.status(403).json({ error: 'not_started' });
@@ -1486,9 +2089,14 @@ export default async function handler(req: any, res: any) {
           return res.status(404).json({ error: 'event_not_found' });
         }
 
+        if (!/^(image\/(jpeg|png|webp)|video\/(mp4|quicktime|webm))$/.test(mime)) {
+          return res.status(415).json({ error: 'bad_type' });
+        }
         const isVideo = mime.startsWith('video/');
-        // Vercel free: лимит тела ~4.5 МБ; фото уже сжаты клиентом (~1-300КБ).
-        const maxBytes = isVideo ? 4 * 1024 * 1024 : 2 * 1024 * 1024;
+        // Vercel free: лимит ТЕЛА ~4.5 МБ, а файл едет в base64 (+33%), так что
+        // реальный потолок видео ~3.3 МБ. Раньше стоял 4 МБ — недостижимый: такие
+        // файлы падали 413 у Vercel ещё до этой проверки, без понятной ошибки.
+        const maxBytes = isVideo ? 3 * 1024 * 1024 : 2 * 1024 * 1024;
         const bytes = Buffer.from(b64, 'base64');
         if (bytes.length === 0) return res.status(400).json({ error: 'empty' });
         if (bytes.length > maxBytes) {

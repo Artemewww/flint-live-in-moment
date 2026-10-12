@@ -1,11 +1,40 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { AvatarStack } from './Avatar';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  CalendarDays, History, Sparkles, ChevronRight, Compass, ShieldAlert, ArrowUpRight, Lock, Archive
+  CalendarDays, History, Sparkles, ChevronRight, Compass, ShieldAlert, ArrowUpRight, Lock, Archive, MapPin
 } from 'lucide-react';
-import { CommunityEvent, EventType, getEventPhase, getToday } from '../types';
-import EventDetailModal from './EventDetailModal';
+import { CommunityEvent, EventType, getEventPhase, getToday, isEventOver, prettyPlace } from '../types';
+import { lazyWithRetry } from '../lazy';
+import HomeScreenButton from './HomeScreenButton';
+
+/**
+ * Карточка события весит ~94 КБ и тянет за собой логистику, задачи, правила и
+ * историю. Статический импорт здесь означал, что ВСЕ, кто просто открыл афишу,
+ * скачивали её вместе с лентой — хотя открывают единицы. Ленивим: едет только
+ * по тапу на карточку.
+ */
+const EventDetailModal = lazyWithRetry(() => import('./EventDetailModal'));
+
+/** «9–11 окт · пт–вс» / «27 сент · сб · 09:20» — главное о времени одной строкой. */
+function whenLine(e: CommunityEvent): string {
+  const d = (s: string) => new Date(`${s}T00:00:00`);
+  const a = d(e.date);
+  if (Number.isNaN(a.getTime())) return '';
+  const wd = (x: Date) => x.toLocaleDateString('ru-RU', { weekday: 'short' });
+  const mon = (x: Date) => x.toLocaleDateString('ru-RU', { month: 'short' }).replace('.', '');
+  if (e.dateEnd && e.dateEnd > e.date) {
+    const b = d(e.dateEnd);
+    const range = a.getMonth() === b.getMonth()
+      ? `${a.getDate()}–${b.getDate()} ${mon(b)}`
+      : `${a.getDate()} ${mon(a)} – ${b.getDate()} ${mon(b)}`;
+    return `${range} · ${wd(a)}–${wd(b)}`;
+  }
+  return `${a.getDate()} ${mon(a)} · ${wd(a)}${e.time ? ` · ${e.time}` : ''}`;
+}
+
+const placesWord = (n: number) =>
+  n % 10 === 1 && n % 100 !== 11 ? 'место' : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? 'места' : 'мест';
 
 interface EventFeedProps {
   events: CommunityEvent[];
@@ -30,9 +59,9 @@ export default function EventFeed({
   // Только актуальные события в основной ленте. Прошедшим считается событие,
   // у которого закончился ПОСЛЕДНИЙ день: по одному `date` многодневный выезд
   // уезжал в архив уже на второй день, пока люди ещё на месте.
-  const lastDay = (e: CommunityEvent) => e.dateEnd || e.date;
-  const upcomingEvents = events.filter(e => lastDay(e) >= today);
-  const pastEvents = events.filter(e => lastDay(e) < today);
+  // Завершённое кнопкой «Завершить» уходит в архив сразу, не дожидаясь даты.
+  const upcomingEvents = events.filter(e => !isEventOver(e, today));
+  const pastEvents = events.filter(e => isEventOver(e, today));
 
   // Применяем фильтр по типу
   const filteredEvents = activeFilter === 'all' 
@@ -81,6 +110,9 @@ export default function EventFeed({
           )}
         </button>
       </div>
+
+      {/* Ярлык на «Домой»: люди забывают про приложение — пусть оно будет на экране. */}
+      {!showArchive && <div className="-mx-4"><HomeScreenButton variant="banner" /></div>}
 
       {/* FILTER BUTTONS CONTAINER */}
       <div 
@@ -138,8 +170,13 @@ export default function EventFeed({
                   exit={{ opacity: 0, scale: 0.95 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <button
+                  {/* div, а не button: внутри живёт своя кнопка «Записаться»,
+                      а кнопка в кнопке — невалидный HTML и двойной клик в Safari. */}
+                  <div
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setActiveDetailEvent(event)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveDetailEvent(event); } }}
                     className="w-full text-left bg-[#121212] border border-white/10 hover:border-brand/30 rounded-2xl overflow-hidden transition-all cursor-pointer group"
                   >
                     {/* Card Image */}
@@ -186,39 +223,88 @@ export default function EventFeed({
                       </div>
                     </div>
 
-                    {/* Card Content */}
-                    <div className="p-4 space-y-2">
-                      <h3 className="font-display font-black text-sm uppercase tracking-tight text-white group-hover:text-brand transition-colors leading-tight">
+                    {/* Card Content — как у 360 Padel: когда, где, сколько мест и
+                        кнопка записи прямо на карточке, без захода в подробности. */}
+                    <div className="p-4 space-y-2.5">
+                      <h3 className="font-display font-black text-[15px] uppercase tracking-tight text-white group-hover:text-brand transition-colors leading-tight">
                         {event.title}
                       </h3>
-                      
-                      <p className="text-[10px] text-white/50 font-mono line-clamp-2 leading-relaxed">
-                        {event.painPoint}
-                      </p>
 
-                      <div className="flex items-center justify-between pt-1">
-                        <div className="flex items-center gap-2 text-[9px] text-white/40 font-mono">
-                          {event.participantsCount > 0 || (event.participants?.length || 0) > 0 ? (
-                            <AvatarStack people={event.participants || []} total={event.participantsCount} size={24} />
-                          ) : (
-                            <span>Будь первым</span>
-                          )}
-                          {event.priceType === 'paid' && event.priceAmount > 0 && (
-                            <span className="text-brand/80">{event.priceAmount} Br</span>
-                          )}
-                        </div>
-                        <ChevronRight className="w-3.5 h-3.5 text-white/20 group-hover:text-brand transition-colors" />
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-white/60">
+                        {whenLine(event) && (
+                          <span className="flex items-center gap-1.5"><CalendarDays className="w-3.5 h-3.5 text-brand/80" />{whenLine(event)}</span>
+                        )}
+                        {event.location && (
+                          <span className="flex min-w-0 items-center gap-1.5"><MapPin className="w-3.5 h-3.5 shrink-0 text-brand/80" /><span className="truncate max-w-[170px]">{prettyPlace(event.location)}</span></span>
+                        )}
                       </div>
 
-                      {/* Registered badge */}
-                      {isRegistered && (
-                        <div className="flex items-center gap-1 text-[8px] text-emerald-400 font-mono uppercase tracking-wider pt-1 border-t border-white/5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                          Вы записаны
-                        </div>
+                      {event.painPoint && (
+                        <p className="text-[12px] text-white/45 line-clamp-2 leading-relaxed">
+                          {event.painPoint}
+                        </p>
                       )}
+
+                      {/* Места: шкала заполнения. Пустую шкалу у «без лимита» не рисуем. */}
+                      {!isPast && !event.isChallenge && event.maxParticipants ? (() => {
+                        const max = event.maxParticipants;
+                        const taken = Math.min(max, event.participantsCount || 0);
+                        const left = Math.max(0, max - taken);
+                        return (
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between text-[11px]">
+                              <span className="text-white/45">Участников</span>
+                              <span className="font-bold text-brand tabular-nums">{taken} / {max}</span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                              <div className={`h-full rounded-full ${left <= 2 ? 'bg-rose-400' : 'bg-brand'}`} style={{ width: `${Math.max(4, (taken / max) * 100)}%` }} />
+                            </div>
+                            <div className={`text-[11px] ${left <= 2 ? 'text-rose-300' : 'text-white/45'}`}>
+                              {left > 0 ? `${left} ${placesWord(left)} свободно` : 'Мест нет — можно в лист ожидания'}
+                            </div>
+                          </div>
+                        );
+                      })() : null}
+
+                      <div className="flex items-center justify-between gap-2 pt-1">
+                        <div className="flex min-w-0 items-center gap-2 text-[11px] text-white/45">
+                          {event.participantsCount > 0 || (event.participants?.length || 0) > 0 ? (
+                            <AvatarStack people={event.participants || []} total={event.participantsCount} size={26} />
+                          ) : !isPast && !event.maxParticipants ? (
+                            <span>Будь первым</span>
+                          ) : null}
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1.5">
+                          {!isPast && (
+                            <span className="rounded-full bg-brand/10 px-2.5 py-1.5 text-[12px] font-bold text-brand">
+                              {event.priceType !== 'paid' ? 'Бесплатно'
+                                : event.priceAmount > 0 ? `${event.priceAmount} Br`
+                                : (event.priceLabel && event.priceLabel.length <= 14 ? event.priceLabel : 'Платно')}
+                            </span>
+                          )}
+                          {isPast ? (
+                            <ChevronRight className="w-4 h-4 text-white/25 group-hover:text-brand transition-colors" />
+                          ) : isRegistered ? (
+                            <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-3 py-1.5 text-[12px] font-bold text-emerald-300">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Ты едешь
+                            </span>
+                          ) : phase === 'open' && !event.isChallenge ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); onRegisterClick(event); }}
+                              className="rounded-full border-none bg-brand px-4 py-1.5 text-[12px] font-black text-black cursor-pointer hover:bg-brand-hover"
+                            >
+                              Записаться
+                            </button>
+                          ) : (
+                            <span className="rounded-full bg-white/5 px-3 py-1.5 text-[12px] font-bold text-white/50">
+                              {isLocked ? 'Скоро' : phase === 'full' ? 'Мест нет' : event.isChallenge ? 'Открыть' : 'Набор закрыт'}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </button>
+                  </div>
                 </motion.div>
               );
             })
@@ -229,12 +315,14 @@ export default function EventFeed({
       {/* Detail Modal */}
       <AnimatePresence>
         {activeDetailEvent && (
-          <EventDetailModal
-            event={activeDetailEvent}
-            isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
-            onClose={() => setActiveDetailEvent(null)}
-            onRegisterClick={onRegisterClick}
-          />
+          <Suspense fallback={null}>
+            <EventDetailModal
+              event={activeDetailEvent}
+              isRegistered={registeredEventIds.includes(activeDetailEvent.id)}
+              onClose={() => setActiveDetailEvent(null)}
+              onRegisterClick={onRegisterClick}
+            />
+          </Suspense>
         )}
       </AnimatePresence>
     </div>

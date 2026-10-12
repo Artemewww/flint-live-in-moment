@@ -34,12 +34,14 @@ export default function SnapModal({ eventTitle, eventId, onClose, onUploaded }: 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'media_upload', eventId, initData: getInitData(), data: shot.data, mime: shot.mime }),
       });
-      const j = await res.json();
+      // 413 от самого Vercel приходит не JSON — без этой защиты человек видел
+      // «ошибку сети» вместо понятного «файл слишком большой».
+      const j = await res.json().catch(() => ({ error: res.status === 413 ? 'video_too_large' : 'bad_response' }));
       if (res.ok && j.ok) setStatus('✅ Отправлено! Спасибо за кадр');
       else if (j.error === 'finished') setStatus('⏳ Событие уже завершилось');
       else if (j.error === 'not_started') setStatus('⏳ Событие ещё не началось');
       else if (j.error === 'not_registered') setStatus('🔒 Сначала запишись на событие');
-      else if (j.error === 'video_too_large' || j.error === 'shot_too_large') setStatus('📦 Слишком большой файл (лимит ~4 МБ)');
+      else if (j.error === 'video_too_large' || j.error === 'shot_too_large') setStatus('📦 Слишком большой файл (лимит ~3 МБ)');
       else setStatus('⚠️ Не получилось. Попробуй ещё раз');
     } catch (e) {
       setStatus(e instanceof ShotTooLargeError ? '📦 Файл слишком большой' : '⚠️ Ошибка сети/загрузки');
@@ -129,7 +131,7 @@ return (
           {status && <div className="text-[11px] text-white/70 font-sans text-center">{status}</div>}
 
           <p className="text-white/35 text-[9px] font-mono uppercase tracking-widest">
-            Фото сжимаются автоматически · файлы ≤ 4 МБ
+            Фото сжимаются автоматически · видео ≤ 3 МБ
           </p>
         </div>
       </motion.div>

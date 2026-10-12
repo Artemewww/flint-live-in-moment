@@ -309,9 +309,21 @@ export default async function handler(req: any, res: any) {
     // Проверка ТОЛЬКО серверная — сам код на публичный фронт не отдаётся.
     const { data: evGate } = await supabase
       .from('events')
-      .select('is_public, access_code, telegram_bot_url, logistics')
+      .select('is_public, access_code, telegram_bot_url, logistics, date, date_end')
       .eq('id', eventId)
       .maybeSingle();
+    // Заявка на несуществующее или уже прошедшее событие — мусорная строка в
+    // registrations и сообщение админу о «новой записи» туда, куда уже не поехать.
+    if (!evGate) {
+      return res.status(404).json({ error: 'Событие не найдено', code: 'event_not_found', delivered: false });
+    }
+    {
+      const todayMinsk = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const lastDay = String((evGate as any).date_end || (evGate as any).date || '');
+      if (lastDay && lastDay < todayMinsk) {
+        return res.status(400).json({ error: 'Событие уже прошло', code: 'event_past', delivered: false });
+      }
+    }
     if (evGate && evGate.is_public === false && evGate.access_code) {
       const provided = String(body.accessCode || '').trim().toLowerCase();
       const expected = String(evGate.access_code).trim().toLowerCase();
@@ -364,6 +376,22 @@ export default async function handler(req: any, res: any) {
         ? Number(handle)
         : idFromHandle(handle || name);
     const username = verified?.username || handle || null;
+
+    // Без подписи Telegram личность заявителя ничем не подтверждена: id берётся
+    // из поля «телеграм» в анкете. Раньше по нему делался upsert — с любым
+    // валидным реф-кодом можно было переписать имя/телефон существующего
+    // участника и записать его на событие от его имени. Теперь анкета без
+    // initData создаёт только НОВЫЙ профиль; существующего просим зайти из Telegram.
+    if (!verified) {
+      const { data: existing } = await supabase
+        .from('members').select('telegram_id').eq('telegram_id', telegramId).maybeSingle();
+      if (existing) {
+        return res.status(409).json({
+          error: 'Этот Telegram уже есть в клубе. Открой запись через бота — так мы точно знаем, что это ты.',
+          code: 'verify_required', delivered: false,
+        });
+      }
+    }
 
     // 1) Участник (upsert по telegram_id).
     const { data: member, error: memberError } = await supabase
@@ -460,6 +488,12 @@ export default async function handler(req: any, res: any) {
       source: source || 'website',
     };
     for (const f of REG_FIELDS) if (body[f] !== undefined) registration[f] = body[f];
+    // guest_count идёт в общий счётчик мест — без ограничения одна заявка
+    // с guest_count=500 «заполняла» событие для всех.
+    if (registration.guest_count !== undefined) {
+      const g = Math.floor(Number(registration.guest_count));
+      registration.guest_count = Number.isFinite(g) ? Math.min(Math.max(g, 0), 5) : 0;
+    }
     // «Откуда узнал о клубе» — свободный текст анкеты. Отдельной колонки в members
     // нет, поэтому кладём в заметку заявки: костяк видит это в карточке участника.
     if (body.sourceHint) {
@@ -631,19 +665,29 @@ export default async function handler(req: any, res: any) {
           `<b>Телефон:</b> ${escapeHtml(phone || '—')}\n` +
           `<b>Верификация:</b> ${verified ? '✅ Telegram подтверждён' : 'веб-форма'}`;
       }
-      // Получатели: групповой чат + личка костякам (для заявок с кнопками — чтобы
-      // владелец точно увидел и решил). Обычные записи — тоже в чат.
+      // Получатели: групповой чат + ЛИЧКА костякам. Для заявок с кнопками это
+      // обязательно (владелец должен увидеть и решить). Для обычной записи на
+      // событие раньше писали ТОЛЬКО в чат — а чат почти всегда на mute, и
+      // владелец узнавал о новом участнике, только открыв админку руками.
+      // Теперь личка приходит на каждую новую запись: это и есть «увидел, что
+      // кто-то записался», без ручной проверки списка.
       const recipients = new Set<string>();
       if (ADMIN_CHAT_ID) recipients.add(String(ADMIN_CHAT_ID));
-      if (newPendingViaRef) {
-        try {
-          const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
-          for (const c of core || []) {
-            const cid = Number((c as any).telegram_id);
-            if (Number.isFinite(cid) && cid > 0) recipients.add(String(cid));
-          }
-        } catch { /* нет доступа — остаётся чат */ }
-      }
+      try {
+        const { data: core } = await supabase.from('members').select('telegram_id,role').eq('is_core', true);
+        for (const c of core || []) {
+          const cid = Number((c as any).telegram_id);
+          if (Number.isFinite(cid) && cid > 0) recipients.add(String(cid));
+        }
+        // Владелец с is_core=false — тоже должен узнавать (жёсткая страховка).
+        const { data: owners } = await supabase.from('members').select('telegram_id').eq('role', 'owner');
+        for (const o of owners || []) {
+          const oid = Number((o as any).telegram_id);
+          if (Number.isFinite(oid) && oid > 0) recipients.add(String(oid));
+        }
+      } catch { /* нет доступа — остаётся чат */ }
+      // Не пишем владельцу «ты записался» на собственное событие.
+      if (verified?.id) recipients.delete(String(verified.id));
       for (const chat of recipients) {
         try {
           const tg = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {

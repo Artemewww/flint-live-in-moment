@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Music, Play, Pause, X, AudioLines } from 'lucide-react';
+import { Music, Play, Pause, X, AudioLines, SkipBack, SkipForward } from 'lucide-react';
 import { PLAYLIST, useMusicPlayer, musicStore } from '../music';
 
 interface MusicPlayerProps {
@@ -74,6 +74,79 @@ export default function MusicPlayer({ onClose }: MusicPlayerProps) {
                 Наш гимн и вайбы сообщества — жми play и слушай прямо в боте.
               </p>
             </div>
+
+            {/**
+             * Панель «Сейчас играет». Раньше в списке треков не было ничего,
+             * кроме полоски прогресса рядом с названием, и управлять треком
+             * было нечем: ни перемотки крупным планом, ни перехода между
+             * треками. Теперь это обычная панель плеера — название, понятная
+             * шкала с отметками времени и перемотка пальцем.
+             */}
+            {currentTrack && (
+              <div className="rounded-2xl border border-brand/25 bg-brand/5 p-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 shrink-0 rounded-xl bg-brand/15 border border-brand/30 flex items-center justify-center text-brand">
+                    <AudioLines className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] font-mono uppercase tracking-widest text-brand/70">
+                      {player.playing ? 'Сейчас играет' : 'На паузе'}
+                    </div>
+                    <div className="font-display font-black text-base uppercase tracking-tight text-white truncate">
+                      {currentTrack.title}
+                    </div>
+                    {currentTrack.subtitle && (
+                      <div className="text-[11px] text-white/50 font-mono truncate">{currentTrack.subtitle}</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Шкала: сколько прошло / сколько всего. Значения слева и
+                    справа — не «сколько осталось», а привычные 0:42 / 3:18,
+                    по ним видно, где ты и сколько длится трек. */}
+                <div className="mt-3">
+                  <input
+                    type="range"
+                    min={0}
+                    max={Math.max(1, Math.floor(player.duration) || 0)}
+                    step={1}
+                    value={Math.min(Math.floor(player.currentTime), Math.floor(player.duration) || 0)}
+                    onChange={(e) => musicStore.seek(currentTrack.id, Number(e.target.value))}
+                    className="w-full accent-[#E6FD3A] cursor-pointer"
+                    aria-label={`Перемотка — ${currentTrack.title}`}
+                  />
+                  <div className="flex justify-between mt-1 font-mono text-[10px] text-white/50">
+                    <span>{formatTime(player.currentTime)}</span>
+                    <span>{player.duration > 0 ? formatTime(player.duration) : '—:—'}</span>
+                  </div>
+                </div>
+
+                {/* Переключение треков */}
+                <div className="flex items-center justify-center gap-4 mt-3">
+                  <button
+                    onClick={() => musicStore.prev()}
+                    className="p-2.5 rounded-full bg-white/5 border border-white/10 text-white/80 hover:text-brand hover:border-brand/40 transition-colors cursor-pointer"
+                    aria-label="Предыдущий трек"
+                  >
+                    <SkipBack className="w-5 h-5" />
+                  </button>
+                  <button
+                    onClick={() => musicStore.toggle(currentTrack)}
+                    className="w-12 h-12 rounded-full bg-brand text-black flex items-center justify-center hover:bg-brand-hover transition-colors cursor-pointer shadow-lg shadow-brand/20"
+                    aria-label={player.playing ? 'Пауза' : 'Играть'}
+                  >
+                    {player.playing ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5 ml-0.5" />}
+                  </button>
+                  <button
+                    onClick={() => musicStore.next()}
+                    className="p-2.5 rounded-full bg-white/5 border border-white/10 text-white/80 hover:text-brand hover:border-brand/40 transition-colors cursor-pointer"
+                    aria-label="Следующий трек"
+                  >
+                    <SkipForward className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Track list */}
             <div className="space-y-3">

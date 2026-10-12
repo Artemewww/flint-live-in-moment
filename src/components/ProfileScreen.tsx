@@ -6,10 +6,11 @@ import {
 } from 'lucide-react';
 import { getInitData, isInsideTelegram, haptic, getTelegramUser } from '../telegram';
 import GearShelf from './GearShelf';
-import ClubShelf from './ClubShelf';
 import Avatar from './Avatar';
-import FoodSelectionPanel from './FoodSelectionPanel';
 import CampingChecklist from './CampingChecklist';
+import ClubRating, { useClubRating } from './ClubRating';
+import HomeScreenButton from './HomeScreenButton';
+import { createPortal } from 'react-dom';
 
 /**
  * Личный кабинет участника. Акценты сверху вниз (пожелание владельца — «как на
@@ -156,6 +157,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
   const past = useMemo(() => events.filter((e) => !e.upcoming), [events]);
   const nearest = upcoming.length ? [...upcoming].sort((a, b) => String(a.date).localeCompare(String(b.date)))[0] : null;
 
+  const [showRating, setShowRating] = useState(false);
+  const rating = useClubRating(!!p && isInsideTelegram());
   const level = (p?.attended || 0) > 0 ? Math.floor((p?.points || 0) / 500) + 1 : 1;
   const levelTitle = (p?.attended || 0) === 0 ? 'Не начато'
     : level <= 2 ? 'Новичок' : level <= 5 ? 'Участник' : level <= 10 ? 'Ветеран' : 'Мастер';
@@ -349,6 +352,29 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               </div>
             </div>
           )}
+
+          {/* Рейтинг клуба и ярлык на «Домой» — по мотивам 360 Padel. */}
+          {p && (
+            <div className="mt-3 space-y-2">
+              <button
+                type="button"
+                onClick={() => { haptic('success'); setShowRating(true); }}
+                className="flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-left cursor-pointer"
+              >
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-lg">🏆</span>
+                <span className="min-w-0 flex-1">
+                  <span className="block text-[14px] font-bold text-white">Рейтинг клуба</span>
+                  <span className="block text-[12px] text-white/50">
+                    {rating?.me ? `Ты на ${rating.me.place}-м месте из ${rating.total}` : 'Кто больше всех в движении'}
+                  </span>
+                </span>
+                {rating?.me && <span className="shrink-0 rounded-full bg-brand px-2.5 py-1 text-[12px] font-black text-black">#{rating.me.place}</span>}
+              </button>
+              <HomeScreenButton />
+            </div>
+          )}
+          {showRating && typeof document !== 'undefined' && createPortal(
+            <ClubRating data={rating} onClose={() => setShowRating(false)} />, document.body)}
         </div>
 
         {/* ── Вкладки: текст с подчёркиванием, как в банковском профиле ── */}
@@ -423,9 +449,14 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
             <div className="space-y-5">
               {/* Своё снаряжение с фото и «что есть у круга» — сверху: это то,
                   за чем сюда приходят. Реестр клуба — ниже. */}
+              {/**
+               * ClubShelf («Имущество клуба») убран: он читает тот же
+               * club_inventory, что и вкладка «Склад клуба» внутри GearShelf,
+               * и оба рисовались подряд — одна и та же вещь дважды, в двух
+               * разных оформлениях. Теперь реестр клуба ровно один, и в нём
+               * же работают правка и удаление.
+               */}
               <GearShelf />
-              {/* Имущество клуба: у кого вещь, чья и кто вложился — с фото. */}
-              {p && <ClubShelf myId={p.telegramId} />}
 
               {/* Чек-лист на 131 пункт разворачивался прямо в списке и
                   занимал пол-экрана гармошкой. Он нужен раз перед выездом,
@@ -484,7 +515,20 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                         <button
                           key={t.key}
                           type="button"
-                          onClick={() => { if (t.key === 'birthday') { setTab('settings'); haptic('success'); } }}
+                          onClick={() => {
+                            /**
+                             * Раньше здесь мог тап делал ровно один
+                             * действие, и если человек упёр в пустом на профиль
+                             * и обратив сюда вовсе. Теперь каждый пункт ведёт
+                             * куда решать его.
+                             */
+                            haptic('success');
+                            if (t.key === 'birthday' || t.key === 'phone' || t.key === 'gender') { setTab('settings'); return; }
+                            if (t.key.startsWith('pay-') || t.key.startsWith('tr-')) {
+                              setTab('events');
+                              openEvent(t.key.replace(/^[a-z]+-/, ''));
+                            }
+                          }}
                           className={`w-full text-left rounded-2xl border p-3.5 flex items-start gap-3 cursor-pointer transition-all ${
                             t.tone === 'warn' ? 'bg-rose-500/10 border-rose-500/30 hover:bg-rose-500/15' : 'bg-white/5 border-white/10 hover:bg-white/10'
                           }`}
@@ -747,12 +791,24 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                           <span className="shrink-0 text-[9px] font-mono text-white/50">{fmtDate(e.date)}</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
-                          <div className={`rounded-lg px-2.5 py-2 border flex items-center gap-1.5 ${
-                            e.paymentStatus === 'paid' ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : 'bg-rose-500/10 border-rose-500/25 text-rose-300'
-                          }`}>
-                            <CreditCard className="w-3.5 h-3.5 shrink-0" />
-                            {e.paymentStatus === 'paid' ? 'Взнос внесён' : 'Взнос не внесён'}
-                          </div>
+                          {/**
+                           * Взнос показываем ТОЛЬКО, если есть чем платить.
+                           * Раньше плашка была в карточке любого события,
+                           * и человек читал, зачем не внесенный взнос — платить
+                           * некому, а воздушались, что наказать.
+                           */}
+                          {(e.priceAmount || e.priceLabel) && (
+                            <div className={`rounded-lg px-2.5 py-2 border flex items-center gap-1.5 ${
+                              e.paymentStatus === 'paid'
+                                ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
+                                : 'bg-amber-500/10 border-amber-500/25 text-amber-300'
+                            }`}>
+                              <CreditCard className="w-3.5 h-3.5 shrink-0" />
+                              {e.paymentStatus === 'paid'
+                                ? 'Взнос внесён'
+                                : `Взнос ${e.priceAmount ? `${e.priceAmount} Br` : 'не внесён'}`}
+                            </div>
+                          )}
                           <div className="rounded-lg px-2.5 py-2 border bg-white/5 border-white/10 text-white/60 flex items-center gap-1.5">
                             <Truck className="w-3.5 h-3.5 shrink-0" />
                             <span className="truncate">{e.hasTransport ? (e.transportDetails || 'Своё авто') : e.transportDetails || 'Не указано'}</span>
@@ -768,7 +824,6 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                             </div>
                           )}
                         </div>
-                        {e.roles && <div className="text-[10px] text-white/45 font-mono">Роли: {e.roles}</div>}
                       </div>
                     ))}
                   </section>
@@ -830,28 +885,13 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                     <h3 className="text-[9px] font-mono uppercase tracking-widest text-white/40 flex items-center gap-1.5">
                       <UtensilsCrossed className="w-3.5 h-3.5" /> Питание на событиях
                     </h3>
-                    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-1">
-                      <div className="text-[10px] text-white/40 font-mono uppercase tracking-widest">Мои предпочтения</div>
-                      <div className="text-[13px]">{DIET_RU[p.dietary] || 'не указано'}</div>
-                    </div>
-                    {(data.food || []).length > 0 && (
-                      <div className="space-y-2">
-                        {(data.food || []).map((f: any, i: number) => (
-                          <div key={i} className="bg-white/5 border border-white/10 rounded-2xl p-3.5 flex items-center justify-between gap-3">
-                            <div className="min-w-0">
-                              <div className="text-[13px] truncate">{f.emoji} {f.name}</div>
-                              <div className="text-[10px] text-white/40 font-mono truncate">{f.eventTitle}</div>
-                            </div>
-                            <span className="shrink-0 text-[11px] font-mono text-brand">{f.quantity} {f.unit}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    {nearest && (
-                      <div className="bg-white/[0.03] border border-white/10 rounded-2xl p-3">
-                        <FoodSelectionPanel eventId={nearest.eventId} telegramId={p.telegramId} eventTitle={nearest.title} />
-                      </div>
-                    )}
+                    {/*
+                     * Питание: один вопрос — «я ем», один переключатель и
+                     * одна кнопка. Раньше здесь стояли ещё два блока (список
+                     * «что беру с собой» по событиям и панель «Продукты» с
+                     * поиском по каталогу) — рядом с ними ответ на вопрос про
+                     * питание терялся. */}
+                    <DietPicker />
                   </section>
                 </>
               )}
@@ -863,6 +903,75 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
   );
 }
 
+/**
+ * «Я ем» — единственный блок про питание в профиле.
+ *
+ * Раньше рядом с ним стояли список «что беру с собой» по каждому событию и
+ * панель «Продукты» с поиском по каталогу из сотен позиций. На вопрос «что ты
+ * ешь» человек получал три разных списка рядом, и ответ тонул. Остался один
+ * переключатель и одна кнопка.
+ */
+function DietPicker() {
+  const [diet, setDiet] = useState<string>('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [err, setErr] = useState('');
+
+  // Текущее значение берём из профиля один раз: без этого блок мигал бы
+  // «всё ем» до загрузки, и человек успевал нажать «Сохранить» зря.
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/profile', { headers: { 'X-Telegram-Init-Data': getInitData() } })
+      .then((r) => r.json())
+      .then((j) => { if (alive) setDiet(String((j && j.dietary) || 'all')); })
+      .catch(() => { if (alive) setDiet('all'); });
+    return () => { alive = false; };
+  }, []);
+
+  const save = async () => {
+    setSaving(true); setErr('');
+    try {
+      const r = await fetch('/api/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'save_settings', initData: getInitData(), dietary: diet }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j.ok) { setErr(j.error || 'Не сохранилось'); haptic('error'); }
+      else { haptic('success'); setSaved(true); setTimeout(() => setSaved(false), 2200); }
+    } catch { setErr('Нет связи с сервером'); haptic('error'); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-2xl p-3.5 space-y-2.5">
+      <div className="text-[10px] text-white/40 font-mono uppercase tracking-widest">Я ем</div>
+      <div className="grid grid-cols-3 gap-1.5">
+        {(['all', 'veg', 'vegan'] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => setDiet(k)}
+            className={`rounded-xl border px-2 py-3 text-[11px] font-black uppercase tracking-wider transition-colors cursor-pointer ${
+              diet === k ? 'border-brand bg-brand text-black' : 'border-white/10 bg-white/5 text-white/60'
+            }`}
+          >
+            {(DIET_RU as any)[k] || k}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        disabled={saving}
+        onClick={save}
+        className="w-full rounded-xl bg-brand text-black py-3.5 text-[11px] font-black uppercase tracking-widest disabled:opacity-50"
+      >
+        {saving ? 'Сохраняем…' : saved ? 'Сохранено ✓' : 'Сохранить всё'}
+      </button>
+      {err && <p className="text-[11px] text-rose-300">{err}</p>}
+    </div>
+  );
+}
 /** Настройки: то, что участник вправе менять сам (статус/очки — только костяк). */
 function SettingsTab({ profile, onSaved }: { profile: any; onSaved: () => void }) {
   const [firstName, setFirstName] = useState(profile.firstName || '');

@@ -1,7 +1,7 @@
 /**
  * Загрузчик СМИ прямо из мини-апп. Файл читаем в base64 (стандартный
  * FileReader — работает везде, включая Telegram WebView). Фото/видео,
- * превышающие лимит Vercel (~4 МБ), пробуем сжать через <canvas>; если
+ * превышающие лимит (3 МБ), пробуем сжать через <canvas>; если
  * canvas в среде недоступен — просто предупреждаем и грузим как есть.
  *
  * Логотип FLINT накладывается ПОВЕРХ медиа при просмотре (в карточке и
@@ -14,7 +14,8 @@ export interface CompressedShot {
   mime: string; // image/jpeg | video/mp4
 }
 
-const MAX_BYTES = 4 * 1024 * 1024; // Vercel free лимит тела ~4.5 МБ
+// Vercel free: лимит тела ~4.5 МБ, а файл уходит в base64 (+33%) — потолок 3 МБ.
+const MAX_BYTES = 3 * 1024 * 1024;
 
 /** Читает любой файл в base64 полностью. */
 async function fileToBase64(file: File): Promise<string> {

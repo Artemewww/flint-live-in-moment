@@ -1,0 +1,44 @@
+name: CI
+
+# Проверки гоняются на каждом пуше и PR. До этого папка .github была пустой,
+# а 97 тестов и tsc запускались только вручную — то есть сломанная сборка
+# спокойно уезжала в прод и обнаруживалась уже на телефонах участников.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Новые коммиты отменяют предыдущий прогон: для push это экономит минуты CI,
+# для PR важно не отменять проверку, пока на коммит висят ревью.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  check:
+    name: Типы, тесты, сборка
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Версия зафиксирована: смена LTS в node меняет таргинг esbuild
+          # и однажды может собрать по-другому без изменения кода.
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Установка зависимостей
+        run: npm ci
+
+      - name: Проверка типов (tsc --noEmit)
+        run: npm run lint
+
+      - name: Тесты
+        run: npm test -- --ci
+
+      - name: Сборка
+        run: npm run build

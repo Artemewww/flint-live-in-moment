@@ -148,6 +148,42 @@ function tg(method: string, payload: unknown) {
   }).then((r) => r.json());
 }
 
+/** Подпись страницы галереи — та же схема, что в api/events.ts (gallerySig). */
+function gallerySigOf(eventId: string): string {
+  return crypto.createHmac('sha256', BOT_TOKEN).update(`gallery:${eventId}`).digest('hex').slice(0, 16);
+}
+
+/**
+ * Окно, когда кадры из чата события идут в его галерею: канун старта —
+ * неделя после конца. Эталон — inMediaWindow в api/_lib/recap.ts (под тестами).
+ */
+function inMediaWindowRt(ev: { date?: string | null; date_end?: string | null } | null): boolean {
+  if (!ev?.date) return false;
+  const shift = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10); };
+  const today = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const last = ev.date_end && String(ev.date_end) > String(ev.date) ? String(ev.date_end) : String(ev.date);
+  return today >= shift(String(ev.date), -1) && today <= shift(last, 7);
+}
+
+/**
+ * Пинок воркфлоу итогов (.github/workflows/recap.yml), чтобы не ждать его
+ * планового запуска. Без GH_DISPATCH_TOKEN молча ничего не делает — тогда
+ * шаг подхватит ближайший плановый прогон (раз в 2 часа).
+ */
+async function dispatchRecap(eventId: string): Promise<boolean> {
+  const token = process.env.GH_DISPATCH_TOKEN || '';
+  const repo = process.env.GH_REPO || 'Artemewww/flint-live-in-moment';
+  if (!token) return false;
+  try {
+    const r = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/recap.yml/dispatches`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ref: 'main', inputs: { event_id: eventId } }),
+    });
+    return r.status === 204;
+  } catch { return false; }
+}
+
 function esc(s: any): string {
   return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
@@ -1119,6 +1155,33 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
         });
       } catch {}
     }
+    /**
+     * И в ЛИЧКУ владельцу. Раньше заявка из бота жила только в групповом чате, а
+     * чат админов на mute — запись всплывала сама собой лишь тогда, когда он
+     * заходил в админку проверять. Теперь уведомление приходит сразу в личку.
+     */
+    try {
+      const { data: core } = await supabase.from('members').select('telegram_id,role').eq('is_core', true);
+      const { data: owners } = await supabase.from('members').select('telegram_id').eq('role', 'owner');
+      const targets = new Set<number>();
+      for (const c of [...(core || []), ...(owners || [])]) {
+        const cid = Number((c as any).telegram_id);
+        if (Number.isFinite(cid) && cid > 0 && cid !== telegramId) targets.add(cid);
+      }
+      for (const cid of targets) {
+        try {
+          await tg('sendMessage', {
+            chat_id: cid,
+            parse_mode: 'HTML',
+            text:
+              `🟢 <b>Новая запись на событие</b>\n\n` +
+              `📌 ${esc(ev.title)}\n` +
+              `👤 ${esc(from.first_name || '')} ${from.username ? '@' + esc(from.username) : ''}\n` +
+              `<i>Записался через бота. Состав — в админке.</i>`,
+          });
+        } catch { /* один получатель не сорвал остальных */ }
+      }
+    } catch { /* уведомление — best-effort */ }
     return 'ok';
   } catch {
     return 'error';
@@ -1483,6 +1546,15 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 
 /**
+ * Клавиатура — или её отсутствие.
+ *
+ * Пустой `inline_keyboard: []` Telegram принимает, но поле отправлять незачем:
+ * для записанного участника кнопок в карточке теперь нет вообще, и лишний
+ * пустой объект в каждом сообщении — шум в коде и риск на стороне Telegram.
+ */
+function kbOpt(rows: any[]) { return rows && rows.length ? { inline_keyboard: rows } : undefined; }
+
+/**
  * Кнопка ответа под сообщением ОТ организатора участнику. Обязательна на каждом
  * таком сообщении: без неё переписка односторонняя — участник видит ответ, но
  * ответить ему нечем (см. колбэк 'usreply').
@@ -1746,41 +1818,35 @@ function eventRow(ev: any, site: string) {
 
 async function sendWelcome(chatId: number, openBtn: any, isCoreUser = false, isOrgUser = false) {
   /**
-   * ОДНО короткое сообщение вместо ленты карточек и десяти кнопок.
+   * /start — это дверь в приложение, а не страница про клуб.
    *
-   * Курс владельца (28.08): вся работа — в мини-приложении, Telegram остаётся
-   * каналом коротких уведомлений. Раньше на /start прилетала афиша с фото,
-   * пять кнопок-событий, четыре кнопки организатора, кнопка приложения и
-   * отдельное «Меню всегда снизу» — восемь экранов прокрутки, из которых
-   * человеку нужен один тап. Ближайшее событие теперь одной строкой в тексте,
-   * подробности — внутри приложения, где для них есть место.
+   * Здесь раньше печаталось приветствие, ближайшее событие (которое к тому
+   * моменту могло быть уже в прошлом — «уже прошло» в афише выглядит как
+   * ошибка), число событий и объяснение, где искать приложение. Пять строк,
+   * из которых человек всё равно уходил в меню и искал синюю кнопку.
+   *
+   * Теперь сообщение ровно одно: войти. Всё, что раньше печаталось здесь,
+   * приложение показывает лучше — с фото, программой и кнопкой записи.
+   *
+   * Клавиатуру (SOS) шлём ОТДЕЛЬНЫМ сообщением: в reply_markup Telegram
+   * принимает либо keyboard, либо inline_keyboard, но не оба сразу — вместе
+   * они молча ломают разметку и кнопка входа не появляется.
    */
-  const site = openBtn?.web_app?.url || APP_URL;
-  const today = new Date().toISOString().slice(0, 10);
-  const { data: raw } = await supabase
-    .from('events')
-    .select('id,title,date,date_end')
-    .eq('status', 'open')
-    .order('date', { ascending: true })
-    .limit(12);
-  const evs = (raw || []).filter((e: any) => isUpcomingEvent(e, today));
-
-  const lines = ['👋 <b>«Живи в моменте»</b> — трезвый клуб живых встреч.'];
-  if (evs.length) {
-    const [first] = evs;
-    lines.push('', `Ближайшее: <b>${esc(first.title)}</b> · ${esc(whenPhrase(first.date))}` +
-      (evs.length > 1 ? `\nВсего в афише: ${evs.length}` : ''));
-  }
-  lines.push('', 'Афиша, запись, логистика и профиль — в приложении: кнопка <b>«Открыть FLINT»</b> слева от поля ввода.');
-
-  // Клавиатура ставится этим же сообщением: вход в приложение и SOS уже в ней,
-  // поэтому инлайн-кнопки не нужны, а отдельное «Меню всегда снизу 👇» —
-  // лишнее сообщение, которое мы убрали.
+  /**
+   * ПАЛЕЦ ВНИЗ, ОДНА КНОПКА.
+   *
+   * В сообщении были две входа: сам палец и ещё отдельная кнопка
+   * «Открыть FLINT». Вылезающий вряд — два пальца в одну строке, и воздушной
+   * непонятно. Теперь палец вниз (⌄) указывает па кнопку
+   * «Приложение» слева от фильа и любой текст строки.
+   */
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
-    text: lines.join('\n'),
-    reply_markup: mainMenu(isCoreUser || isOrgUser),
+    text: '👇 <b>Открывай приложение</b>',
   });
+  try {
+    await tg('sendMessage', { chat_id: chatId, text: ' ', reply_markup: mainMenu(isCoreUser || isOrgUser) });
+  } catch { /* клавиатура не критична — вход уже есть кнопкой выше */ }
 }
 
 /**
@@ -1862,13 +1928,11 @@ async function sendMyEvents(chatId: number, tgId: number, openBtn: any) {
 }
 
 /**
- * Экран «Ближайшие события» — кнопка меню и команда /events. С фото —
- * только САМОЕ БЛИЖАЙШЕЕ, остальные текстовой строкой (без картинок),
- * иначе при большом числе открытых событий список превращается в спам
- * из фото-сообщений. Прошедшие события отфильтрованы (см. isUpcomingEvent).
+ * Экран «Ближайшие события» — кнопка меню и команда /events.
+ * Теперь это ОДНО сообщение с одной кнопкой (см. пояснение внутри).
+ * Прошедшие события отфильтрованы (см. isUpcomingEvent).
  */
 async function sendEventsList(chatId: number, openBtn: any) {
-  const site = openBtn?.web_app?.url || '';
   const today = new Date().toISOString().slice(0, 10);
   const { data: raw } = await supabase
     .from('events').select('id,title,date,date_end,location,image,telegram_image,status')
@@ -1878,38 +1942,46 @@ async function sendEventsList(chatId: number, openBtn: any) {
     await tg('sendMessage', { chat_id: chatId, text: 'Пока нет открытых событий. Загляни позже.' });
     return;
   }
-  const [first, ...rest] = evs;
-  await sendEventCard(chatId, first, site);
-  const nextFew = rest.slice(0, 4);
-  const more = rest.length - nextFew.length;
-  const rows = nextFew.map((e: any) => eventRow(e, site));
-  rows.push([openBtn as any]);
+  /**
+   * Одно сообщение, одна кнопка — вместо карточки с фото плюс списка из
+   * пяти кнопок-событий и ещё одного сообщения «Ещё ближайшее».
+   *
+   * Причина: список событий в чате всё равно приходилось читать глазами и
+   * выбирать кнопку, а потом приложение показывало тот же список лучше —
+   * с фото, программой и фильтрами. Человек делал два выбора вместо
+   * одного и уходил с ощущением, что его заставили искать.
+   */
+  const [first] = evs;
+  const rest = evs.length - 1;
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
-    text: !nextFew.length
-      ? '📅 Полная афиша с программой и фильтрами:'
-      : (more > 0 ? `📅 Ещё ${more} — в афише, там же фильтры и вся программа:` : '📅 Ещё ближайшее:'),
-    reply_markup: kb(rows),
+    text: `📅 <b>${esc(first.title)}</b> · ${esc(whenPhrase(first.date))}` +
+      (rest > 0 ? `\n\nВсего открытых: <b>${evs.length}</b>` : '') +
+      '\n<i>Программа, состав и запись — в приложении.</i>',
+    reply_markup: kb([[openBtn as any]]),
   });
 }
 
 /** Экран «Помощь» — кнопка меню и команда /help. */
-async function sendHelp(chatId: number) {
+async function sendHelp(chatId: number, openBtn?: any) {
+  /**
+   * Помощь — это ссылка на приложение, а не пересказ приложения.
+   *
+   * Раньше здесь жили девять пунктов с описанием логистики, задач,
+   * голосований, галереи и профиля — больше экрана текста. Тот, кто
+   * спрашивал «как мне записаться», получал инструкцию на два экрана
+   * и по-прежнему не знал, с чего начать. Нужна была одна кнопка.
+   */
   await tg('sendMessage', {
     chat_id: chatId, parse_mode: 'HTML',
-    text:
-      '📖 <b>Как всё работает в боте</b>\n\n' +
-      '<b>1. События.</b> «Все события» — список. Открываешь карточку → «✅ Записаться». Отвечаешь на пару вопросов (питание, снаряжение, транспорт) — они нужны для закупки и логистики.\n\n' +
-      '<b>2. После записи</b> всё приходит сюда: точный адрес и координаты, программа, напоминания за 7/3/1 день, изменения события.\n\n' +
-      '<b>3. 🚗 Логистика.</b> «Еду на машине» — предложить места (за это +баллы). «Нужна попутка» — встать в очередь, придёт уведомление, когда появится машина. Водитель подтверждает или высаживает с причиной.\n\n' +
-      '<b>4. 📋 Задачи и 🗳 Голосования</b> в карточке события — берёшь задачу или голосуешь за программу/локацию.\n\n' +
-      '<b>5. 📸 Фото/видео</b> события — в его карточке (только для участников).\n\n' +
-      '<b>6. ❓ Спросить / 💡 Идея</b> в карточке — вопрос или предложение организатору.\n\n' +
-      '<b>7. 👤 Профиль</b> (/profile) — баллы, статус, что бот о тебе знает (питание, снаряжение, авто, кого везёшь), реф-ссылка. Приглашай друзей — баллы за первое их событие.\n\n' +
-      '<b>8. 🆘 SOS</b> в профиле — срочный сигнал организаторам с твоим контактом.\n\n' +
-      '<b>9. 💬 Поддержка</b> — напиши, ответят сюда.\n\n' +
-      '<i>Питание и предпочтения: /diet и /preferences.</i>',
-    reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }], [{ text: '🆘 SOS', callback_data: 'sos' }]]),
+    text: '📖 <b>Всё остальное — в приложении</b>\n\n' +
+      'Афиша, запись, логистика, чек-лист и профиль — там, где для них есть место.\n\n' +
+      '<i>Что-то не нашлось — напиши в личку, отвечу сразу.</i>',
+    reply_markup: kb([
+      [openBtn || { text: '🚀 Открыть FLINT', web_app: { url: APP_URL } }],
+      [{ text: '💬 Написать в поддержку', callback_data: 'support' }],
+      [{ text: '🆘 SOS', callback_data: 'sos' }],
+    ]),
   });
 }
 
@@ -2008,69 +2080,72 @@ async function enrichPointName(coords: string): Promise<string> {
   } catch { return ''; }
 }
 
-function eventCardButtons(ev: any, openBtn: any, registered = false): any[] {
-  // Незаписанному — только запись и базовая информация. Рабочие инструменты
-  // (логистика/задачи/голосования/чат) открываются после регистрации.
-  if (!registered) {
-    const rows: any[] = [[{ text: '✅ Записаться', callback_data: `reg_${ev.id}` }]];
-    const nav0: any[] = [];
-    if ((ev.program || []).length) nav0.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
-    if (ev.logistics?.prep) nav0.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
-    if (nav0.length) rows.push(nav0);
-    rows.push([{ text: '📤 Позвать', callback_data: `share_${ev.id}` }]);
-    rows.push([openBtn]);
-    return rows;
-  }
-  const rows: any[] = [[
-    { text: '✅ Ты записан', callback_data: `myreg_${ev.id}` },
-    { text: '❌ Отказаться', callback_data: `regcancel_${ev.id}` },
-  ]];
-  // Фото/чат — одной строкой; telegram_bot_url = инвайт-ссылка группы (привязка /link).
-  const mediaRow: any[] = [{ text: '📸 Фото и видео', callback_data: `media_${ev.id}` }];
-  if (ev.telegram_bot_url) mediaRow.push({ text: '💬 Чат события', url: ev.telegram_bot_url });
-  rows.push(mediaRow);
+/**
+ * Челлендж это или выезд.
+ *
+ * Флаг живёт в events.notifications (`_format`/`is_challenge`), а не в отдельной
+ * колонке — об этом стоит помнить: проверка «а не челлендж ли это?» нужна сразу
+ * в трёх местах (карточка события, крон, главная), и раньше она нигде не стояла,
+ * из-за чего на челлендж прилетала просьба прислать фото с «события», на
+ * котором никто не был и куда никто не ездил.
+ */
+function isChallengeEvent(ev: any): boolean {
+  const n = (ev && (ev.notifications || ev.notif)) || {};
+  return n._format === 'challenge' || n.is_challenge === true;
+}
 
-  // Точки выезда и прибытия — одной строкой. Тап по точке сразу шлёт
-  // форвардируемое сообщение (место+координаты+состав).
-  const lg = ev?.logistics || {};
-  const pointsRow: any[] = [];
-  if (lg.assemblyPoint) pointsRow.push({ text: '🚩 Точка выезда', callback_data: `sharepoint_dep_${ev.id}` });
-  if (lg.arrivalPoint) pointsRow.push({ text: '🏁 Точка прибытия', callback_data: `sharepoint_arr_${ev.id}` });
-  if (pointsRow.length) rows.push(pointsRow);
+/**
+ * Кнопки карточки события в боте.
+ *
+ * Раньше под сообщением висело до десятка кнопок: «Ты записан», «Отказаться»,
+ * «Программа», «Buddy», «Голосования», «Задачи», «Вопросы», «Идеи», «Позвать»,
+ * «Открыть FLINT». Это мусор: всё это уже есть в мини-приложении, где для
+ * этого и сделано, а в Telegram такая простыня занимала пол-экрана чата.
+ *
+ * Теперь бот — канал уведомлений: короткая строка «что изменилось» и вход в
+ * приложение. Вход есть и в клавиатуре (setChatMenuButton), поэтому записанному
+ * человеку кнопки в карточке не нужны вообще.
+ */
+function eventCardButtons(ev: any, openBtn: any, registered = false, site?: string): any[] {
+  /**
+   * Одна кнопка, и та — web_app.
+   *
+   * Раньше незаписанному висела «✅ Записаться» с callback_data `reg_<id>`,
+   * а та в ответ слала ЕЩЁ ОДНО сообщение («Открой анкету — 2-3 минуты»)
+   * с кнопкой. Два сообщения и два тапа до анкеты — на первом человек уже
+   * передумывал. Течас тап сразу открывает приложение на карточке события,
+   * где кнопка записи и так на первом экране.
+   *
+   * Записанному кнопок не даём: вход в приложение есть в клавиатуре чата
+   * (setChatMenuButton), а под сообщением он был третьей копией «Открыть».
+   */
+  if (registered) return [];
+  const base = site || openBtn?.web_app?.url || APP_URL;
+  return [[{ text: '✅ Записаться', web_app: { url: `${base}/?ev=${encodeURIComponent(ev.id)}` } }]];
+}
 
-  // Маршрут — фолбэк, ПОКА точка прибытия не задана организатором (как только
-  // она появится в панели, эта кнопка сама уступает место точке выше).
-  const nav: any[] = [];
-  if (!lg.arrivalPoint) {
-    const route = itineraryRouteUrl(itineraryOf(ev)) || routeUrl(ev);
-    if (route) nav.push({ text: '🧭 Маршрут', url: route });
-  }
-  if ((ev.program || []).length) nav.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
-  if (ev.logistics?.prep) nav.push({ text: '🎒 Как готовиться', callback_data: `prep_${ev.id}` });
-  if (nav.length) rows.push(nav);
-
-  // Статистика + логистика + оплата
-  const logi: any[] = [];
-  logi.push({ text: '📊 Кто', callback_data: `stats_${ev.id}` });
-  // Бади — там же, где состав: «кто едет» и «за кого я отвечаю» это один вопрос.
-  logi.push({ text: '🤝 Бади', callback_data: `buddy_${ev.id}` });
-  if (featureOn(ev, 'rides') || featureOn(ev, 'tents')) logi.push({ text: '🚗 Лог', callback_data: `logi_${ev.id}` });
-  if (ev.price_type === 'paid') logi.push({ text: '💳', callback_data: `pay_${ev.id}` });
-  if (logi.length) rows.push(logi);
-
-  // Голосования и задачи
-  rows.push([
-    { text: '🗳 Голосования', callback_data: `polls_${ev.id}` },
-    { text: '📋 Задачи', callback_data: `tasks_${ev.id}` },
-  ]);
-  // Нижние кнопки: спрос/предложение + позвать
-  rows.push([
-    { text: '❓', callback_data: `ask_${ev.id}` },
-    { text: '💡', callback_data: `idea_${ev.id}` },
-    { text: '📤 Позвать', callback_data: `share_${ev.id}` },
-  ]);
-  rows.push([openBtn]);
-  return rows;
+/**
+ * Короткая карточка события для чата. Полную (программа, состав, медицинские
+ * требования) человек читает в приложении — в Telegram она превращалась в
+ * простыню, которую никто не дочитывал.
+ */
+function eventCardShort(ev: any): string {
+  const when = whenPhrase(ev.date);
+  const day = dayPhrase(ev.date);
+  /**
+   * Две строки, не больше.
+   *
+   * Эта карточка — ответ на нажатие кнопки в чате. Раньше здесь ещё были
+   * программа, состав, требования и логистика, и сообщение превращалось в
+   * простыню, которую никто не дочитывал, а человек всё равно уходил в
+   * приложение. Смысл карточки — напомнить, ЧТО это и КОГДА, и дать одну
+   * кнопку; всё остальное живёт в Mini App.
+   */
+  return (
+    `<b>${esc(ev.title)}</b>` +
+    (day ? ` · ${esc(day)}` : '') +
+    (when ? ` · ${esc(when)}` : '')
+  );
 }
 
 /**
@@ -3439,6 +3514,21 @@ async function executeAssistant(from: any, actions: any[]): Promise<string[]> {
   for (const a of actions) {
     try {
       if (a.type === 'task') {
+        /**
+         * Задача на прошедшее событие не создаётся.
+         *
+         * Именно так они и появлялись: организатор (или ИИ-ассистент по старой
+         * переписке) ставил задачу на выезд двухнедельной давности, и она
+         * улетала в личку участникам сегодня. Задача без конца в прошлом
+         * бессмысленна, поэтому отказ — сразу, до вставки в базу.
+         */
+        const { data: evChk } = await supabase
+          .from('events').select('date,date_end').eq('id', a.evId).maybeSingle();
+        const endChk = String((evChk as any)?.date_end || (evChk as any)?.date || '');
+        if (endChk && endChk < new Date().toISOString().slice(0, 10)) {
+          res.push(`⚠️ «${esc(a.evTitle)}» уже завершилось — задачу не создавала.`);
+          continue;
+        }
         const rows = (a.people.length ? a.people : [null]).map((p: any) => ({
           event_id: a.evId, title: a.title, taken_by: p?.id || null, done: false, created_by: uid, assigned_by: p ? uid : null, due_at: a.due, helpers: [],
         }));
@@ -3597,7 +3687,7 @@ async function runSetup(req: any, res: any) {
     drop_pending_updates: false,
   });
   const menu = await tg('setChatMenuButton', {
-    menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } },
+    menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } },
   });
   const me = await tg('getMe', {});
 
@@ -4751,6 +4841,117 @@ export default async function handler(req: any, res: any) {
       }
 
       /**
+       * ИТОГИ СОБЫТИЯ (оркестратор — scripts/recap/orchestrate.mts в GitHub Actions).
+       *
+       * mc_<pub|club|no>_<eventId> — согласие участника на использование кадров
+       *   с ним. Спрашиваем после события, а не в анкете: в анкете это мелкий
+       *   шрифт, а после выезда человек знает, что именно снимали.
+       * mcall_pub — «можно всегда», больше не спрашивать.
+       */
+      if (/^mc_(pub|club|no)_/.test(data) || data === 'mcall_pub') {
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Записал, спасибо!' });
+        const LABEL: Record<string, string> = {
+          pub: '✅ Можно везде (и в соцсетях клуба)', club: '👥 Только внутри клуба', no: '🙅 Без моих кадров',
+        };
+        if (data === 'mcall_pub') {
+          await supabase.from('app_config').upsert({ key: `media_consent_default:${tgId}`, value: { choice: 'pub', at: new Date().toISOString() } }, { onConflict: 'key' });
+          try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+          await tg('sendMessage', { chat_id: chatId, text: '🤝 Понял: кадры с тобой можно использовать всегда. Передумаешь — напиши «кадры» организатору.' });
+          return res.status(200).json({ ok: true });
+        }
+        const [, choice, ...rest] = data.split('_');
+        const evIdC = rest.join('_');
+        await supabase.from('app_config').upsert(
+          { key: `media_consent:${evIdC}:${tgId}`, value: { choice, at: new Date().toISOString() } }, { onConflict: 'key' });
+        // Сразу открываем приём кадров в личке: «скинь сюда» должно работать
+        // без поиска нужной кнопки (обработчик — сессия media_upload ниже).
+        if (choice !== 'no') await setSession(tgId, 'media_upload', { eventId: evIdC });
+        try {
+          await tg('editMessageReplyMarkup', {
+            chat_id: chatId, message_id: msgId,
+            reply_markup: choice === 'no' ? { inline_keyboard: [] } : { inline_keyboard: [[{ text: '♾ Можно всегда, не спрашивай', callback_data: 'mcall_pub' }]] },
+          });
+        } catch { /* no-op */ }
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: `Записал: <b>${LABEL[choice] || choice}</b>.` + (choice === 'no'
+            ? '\n\nТвои фото и видео в ролик не попадут, а организатор проверит, чтобы тебя не было в публичных постах.'
+            : '\n\nСкидывай свои кадры в чат события — соберу всё в ролик, и он придёт каждому участнику 🎬'),
+        });
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
+       * rc_<build|wait|skip|pub|redo>_<eventId> — решения организатора по
+       * ролику. Сами тяжёлые шаги (монтаж, рассылка) делает GitHub Actions:
+       * на Vercel нет ffmpeg и 60 с на функцию. Отсюда — только смена стадии
+       * и «пинок» воркфлоу, чтобы не ждать его планового запуска.
+       */
+      if (/^rc_(build|wait|skip|pub|redo)_/.test(data)) {
+        const [, act, ...rest] = data.split('_');
+        const evIdR = rest.join('_');
+        const { data: evR } = await supabase.from('events').select('title,deputy_id').eq('id', evIdR).maybeSingle();
+        const allowed = tgId === 377551019 || tgId === Number((evR as any)?.deputy_id) || await isOrganizer(tgId);
+        if (!allowed) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Это решает организатор события', show_alert: true });
+          return res.status(200).json({ ok: true });
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const key = `recap:${evIdR}`;
+        const { data: curR } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle();
+        const st: any = { ...((curR as any)?.value || {}) };
+        const nowIso = new Date().toISOString();
+        let reply = '';
+        if (act === 'build' || act === 'redo') {
+          st.stage = 'build';
+          st.seed = (Number(st.seed) || 0) + (act === 'redo' ? 1 : 0);
+          st.requested_by = tgId;
+          reply = act === 'redo'
+            ? '🔁 Соберу другую версию — другой порядок и кадры. Пришлю сюда минут через 5–10.'
+            : '🎬 Запускаю монтаж. Пришлю ролик сюда на проверку минут через 5–10.';
+        } else if (act === 'wait') {
+          st.stage = 'collect';
+          st.review_at = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          reply = '⏳ Ок, ждём ещё сутки — люди досылают кадры. Напомню завтра.';
+        } else if (act === 'skip') {
+          st.stage = 'skipped';
+          reply = '🚫 Ролик для этого события не делаем. Фото и видео остаются в галерее события.';
+        } else if (act === 'pub') {
+          if (!st.preview?.url) {
+            await tg('sendMessage', { chat_id: chatId, text: 'Сначала нужен готовый ролик — нажми «Смонтировать».' });
+            return res.status(200).json({ ok: true });
+          }
+          st.stage = 'publish';
+          st.published_by = tgId;
+          reply = '🚀 Публикую: ролик встанет первым в карточку события, а участникам и клубу уйдёт рассылка в течение нескольких минут.';
+        }
+        st.updated_at = nowIso;
+        await supabase.from('app_config').upsert({ key, value: st }, { onConflict: 'key' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: reply });
+        if (act !== 'wait' && act !== 'skip') await dispatchRecap(evIdR);
+        return res.status(200).json({ ok: true });
+      }
+
+      /** rr_<fire|ok|meh>_<eventId> — оценка выезда из итоговой рассылки. */
+      if (/^rr_(fire|ok|meh)_/.test(data)) {
+        const [, rate, ...rest] = data.split('_');
+        const evIdT = rest.join('_');
+        // Та же таблица, что у «⭐ Оставить отзыв»: одна оценка на человека и событие.
+        const stars = rate === 'fire' ? 5 : rate === 'ok' ? 4 : 3;
+        await supabase.from('feedback').upsert({ event_id: evIdT, telegram_id: tgId, rating: stars }, { onConflict: 'event_id,telegram_id' });
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: rate === 'meh' ? 'Спасибо за честность' : 'Спасибо! 🔥' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        if (rate === 'meh') {
+          await setSession(tgId, 'recap_fb', { evId: evIdT });
+          await tg('sendMessage', { chat_id: chatId, text: '🙏 Что улучшить в следующий раз? Напиши одним сообщением — передам организатору лично.' });
+        } else {
+          await tg('sendMessage', { chat_id: chatId, text: rate === 'fire' ? '🔥 Записал! Ждём на следующем выезде.' : '👍 Спасибо! Если есть идея, как сделать лучше, — просто напиши сюда.' });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      /**
        * Ответ на задачу, вытащенную из переписки. Три кнопки вместо одной:
        * «не я» — важнее остальных, иначе ошибка разбора превращается в
        * несправедливо висящий долг перед кругом.
@@ -4870,14 +5071,14 @@ export default async function handler(req: any, res: any) {
           gender, agreed_pd: true, status: 'approved',
         }).eq('telegram_id', tgId);
         // Онбординг завершён → включаем мини-апп «Афиша» для этого чата.
-        try { await tg('setChatMenuButton', { chat_id: chatId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ }
+        try { await tg('setChatMenuButton', { chat_id: chatId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }); } catch { /* no-op */ }
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
         await tg('sendMessage', { chat_id: chatId, text: '✅ Профиль заполнен, добро пожаловать! Двери клуба открыты.' });
         if (ctx.evPayload && String(ctx.evPayload).startsWith('event_')) {
           const ev = await getEvent(String(ctx.evPayload).slice('event_'.length));
           if (ev) {
             const registered = await hasActiveReg(ev.id, tgId);
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCardShort(ev), reply_markup: kbOpt(eventCardButtons(ev, openBtn, registered)) });
           }
         } else {
           await sendWelcome(chatId, openBtn, await isCore(tgId), await isOrganizer(tgId));
@@ -4959,7 +5160,7 @@ export default async function handler(req: any, res: any) {
       // Помощь / гайд по боту из профиля.
       if (data === 'helpguide') {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
-        await sendHelp(chatId);
+        await sendHelp(chatId, openBtn);
         return res.status(200).json({ ok: true });
       }
       // Питание из профиля.
@@ -5126,7 +5327,7 @@ export default async function handler(req: any, res: any) {
         try {
           if (approve) {
             // Показать web-кнопку «Афиша» только принятым участникам.
-            try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ }
+            try { await tg('setChatMenuButton', { chat_id: targetId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }); } catch { /* no-op */ }
             // Одно сообщение: поздравление + клавиатура с входом в приложение.
             // Список событий сюда больше не вываливаем — он в афише приложения,
             // и человеку не нужно выбирать из шести кнопок в первую же секунду.
@@ -5354,7 +5555,7 @@ export default async function handler(req: any, res: any) {
           await tg('editMessageText', {
             chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
             text: `✅ Готово! Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>». Детали придут сюда.`,
-            reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+            reply_markup: kbOpt(eventCardButtons(ev, openBtn, true)),
           });
         }
         return res.status(200).json({ ok: true });
@@ -5388,6 +5589,34 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '📋 Задачи доступны участникам события. Сначала запишись 👇', reply_markup: kb([[{ text: '✅ Записаться', callback_data: `reg_${evId}` }]]) });
           return res.status(200).json({ ok: true });
         }
+        /**
+         * Событие прошло — доску не показываем.
+         *
+         * Жалоба владельца: вылетает «задача», жмёшь — а там ничего
+         * непонятно, потому что это доска выезда месячной давности. Вместо
+         * мёртвого списка предлагаем закрыть его одним нажатием: задачи
+         * остаются в истории, но перестают висеть открытыми.
+         */
+        const { data: evNow } = await supabase
+          .from('events').select('id,title,date,date_end').eq('id', evId).maybeSingle();
+        const todayStr2 = new Date().toISOString().slice(0, 10);
+        const endStr = String((evNow as any)?.date_end || (evNow as any)?.date || '');
+        if (evNow && endStr && endStr < todayStr2) {
+          const { count: openCnt } = await supabase
+            .from('tasks').select('id', { count: 'exact', head: true }).eq('event_id', evId).eq('done', false);
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📋 <b>«${esc((evNow as any).title)}» — событие уже завершилось</b>\n\n` +
+              (openCnt
+                ? `Осталось невыполненных задач: <b>${openCnt}</b>. Можно закрыть — они останутся в истории.`
+                : `Все задачи закрыты.`),
+            reply_markup: openCnt
+              ? kb([[{ text: '✅ Закрыть все задачи', callback_data: `taskcloseall_${evId}` }]])
+              : undefined,
+          });
+          return res.status(200).json({ ok: true });
+        }
+
         const { data: tasks } = await supabase
           .from('tasks').select('id,title,taken_by,done,created_by').eq('event_id', evId).order('id', { ascending: false }).limit(15);
         const rows: any[] = [];
@@ -5404,6 +5633,20 @@ export default async function handler(req: any, res: any) {
           chat_id: chatId, parse_mode: 'HTML',
           text: (tasks || []).length ? '📋 <b>Задачи события</b>\n🆕 свободна · 🙋 в работе · ✅ сделана' : '📋 <b>Задач пока нет</b>\nПоставь задачу (напр. «забрать проектор») — прилетит всем, кто-то возьмёт.',
           reply_markup: kb(rows),
+        });
+        return res.status(200).json({ ok: true });
+      }
+      // Закрыть все задачи закрытого события одним нажатием.
+      if (data.startsWith('taskcloseall_')) {
+        const evId = data.slice('taskcloseall_'.length);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id });
+        const { data: evT } = await supabase.from('events').select('title').eq('id', evId).maybeSingle();
+        const { error } = await supabase.from('tasks').update({ done: true }).eq('event_id', evId).eq('done', false);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: error
+            ? '❌ Не удалось: ' + esc(error.message)
+            : `✅ Задачи «${esc((evT as any)?.title || 'события')}» закрыты — больше не вылетают.`,
         });
         return res.status(200).json({ ok: true });
       }
@@ -6864,8 +7107,27 @@ export default async function handler(req: any, res: any) {
             return res.status(200).json({ ok: true });
           }
         }
+        /**
+         * Одна строка и одна кнопка «Открыть».
+         *
+         * Раньше по нажатию вылетала карточка с названием, датой, местом,
+         * абзацем «программа — в приложении» и кнопкой «Записаться», которая
+         * сама слала ещё одно сообщение. Три сообщения на одно действие —
+         * человек успевал передумать дважды. Теперь тап ведёт сразу в
+         * приложение на это событие: там и карточка, и запись.
+         *
+         * Клавиатура у людей остаётся закэшированной, поэтому старый
+         * callback живёт — просто отвечает одним сообщением.
+         */
         const registered = await hasActiveReg(ev.id, tgId);
-        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: eventCardShort(ev),
+          reply_markup: kb([[{
+            text: registered ? '📋 Открыть в приложении' : '✅ Открыть и записаться',
+            web_app: { url: `${site}/?ev=${encodeURIComponent(ev.id)}` },
+          }]]),
+        });
         return res.status(200).json({ ok: true });
       }
 
@@ -6883,7 +7145,7 @@ export default async function handler(req: any, res: any) {
         // Общий облачный альбом, если кто-то кинул ссылку в чат события.
         const { data: evAlb } = await supabase.from('events').select('logistics').eq('id', evId).maybeSingle();
         const album = String(((evAlb as any)?.logistics || {}).albumUrl || '');
-        const rows: any[] = [[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}` } }]];
+        const rows: any[] = [[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}&g=${gallerySigOf(evId)}` } }]];
         if (album) rows.unshift([{ text: '☁️ Общий альбом участников', url: album }]);
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
@@ -6989,47 +7251,50 @@ export default async function handler(req: any, res: any) {
         const link = `${site}/e/${ev.id}${code ? `?ref=${code}` : ''}`;
         const botLink = `https://t.me/${BOT_USERNAME}?start=${code ? `ref_${code}_ev_${ev.id}` : `event_${ev.id}`}`;
 
-        const telegramImage = ev.telegram_image || ev.telegramImage || '';
+        // Картинка шаринга — горизонтальный баннер 1200×630 с логотипом FLINT.
+        // Раньше уходила вертикальная афиша, и в пересылке она выглядела
+        // обрезанным куском фото. Фолбэк на обычное фото, если баннер не собрался.
         const ts = Date.now();
-        const photo = telegramImage
-          ? `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&kind=telegram&t=${ts}`
-          : `${site}/api/events?action=image&id=${encodeURIComponent(ev.id)}&t=${ts}`;
+        const banner = `${site}/api/events?action=share_image&id=${encodeURIComponent(ev.id)}&t=${ts}`;
+        const photo = banner;
 
         const dateLine = `${dayPhrase(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}`;
         const whenStr = whenPhrase(ev.date);
-        const whenLine = whenStr ? ` · ${whenStr}` : '';
+        const whenLine = whenStr ? ` · ${esc(whenStr)}` : '';
         const locationStr = ev.location
           ? ev.location.toLowerCase().includes('ислочь')
             ? 'Поляна на реке Ислочь'
             : ev.location
           : '';
 
+        /**
+         * Ссылка ЗАШИТА В ТЕКСТ, а не лежит кнопкой.
+         *
+         * Кнопка `url:` не пересылается: друг получил картинку с красивой
+         * подписью — и кнопки под ней нет, а значит нет пути внутрь. Раньше
+         * это отправляло человека в никуда, и он просто закрывал пересылку.
+         *
+         * Telegram умеет прятать ссылку под произвольный текст (`<a href>`),
+         * и такая ссылка ПЕРЕЖИВАЕТ пересылку вместе с подписью. Поэтому в
+         * тексте одна короткая строка «Открыть и записаться», а под ней —
+         * кнопка для тех, кто пересылает не от руки.
+         */
         const caption =
-          `🎉 <b>${esc(ev.title)} — едем вместе!</b>\n\n` +
+          `🎉 <b>${esc(ev.title)}</b>\n\n` +
           `📅 ${esc(dateLine)}${esc(whenLine)}\n` +
           (locationStr ? `📍 ${esc(locationStr)}\n` : '') +
           (ev.price_type === 'free' || !ev.price_type
             ? `💳 Каждый платит за себя\n`
             : ev.price_label ? `💳 ${esc(ev.price_label)}\n` : `💳 Каждый платит за себя\n`) +
-          `\n🔗 <a href="${esc(botLink)}">Открыть и забронировать</a>\n\n` +
-          `📤 Перешли эту карточку другу — ссылка в тексте сохранится.`;
+          `\n<a href="${esc(link)}">👉 Открыть и записаться</a>`;
 
-        // Программа · Правила · Забронировать место — для тебя (кнопки не пересылаются).
-        const buttons: any[] = [];
-        const progRow: any[] = [];
-        if (ev.program && Array.isArray(ev.program) && ev.program.length > 0) {
-          progRow.push({ text: '📋 Программа', callback_data: `prog_${ev.id}` });
-        }
-        if (ev.logistics?.prep) {
-          progRow.push({ text: '⚠️ Правила', callback_data: `prep_${ev.id}` });
-        }
-        if (progRow.length > 0) buttons.push(progRow);
-        buttons.push([{ text: '✅ Забронировать место', url: link }]);
-        const markup = kb(buttons);
+        // Только кнопка записи: программа, правила и «позвать» уехали в
+        // мини-приложение, где им и место.
+        const markup = kb([[{ text: '✅ Забронировать место', url: botLink }]]);
 
-        const sentPhoto = (telegramImage || ev.image)
-          ? await tg('sendPhoto', { chat_id: chatId, photo, parse_mode: 'HTML', caption, reply_markup: markup })
-          : null;
+        // Баннер собирается всегда (даже без фото — фирменный фон), поэтому
+        // отправляем картинку безусловно; текстовый фолбэк — если не собралась.
+        const sentPhoto = await tg('sendPhoto', { chat_id: chatId, photo, parse_mode: 'HTML', caption, reply_markup: markup });
         if (!sentPhoto || (sentPhoto as any).ok !== true) {
           await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: caption, reply_markup: markup });
         }
@@ -8199,9 +8464,14 @@ export default async function handler(req: any, res: any) {
       const botAdded = (msg.new_chat_members as any[]).some((u) => u?.is_bot && String(u.username || '').toLowerCase() === BOT_USERNAME.toLowerCase());
       const linkedId = await autoLinkGroup(msg.chat, { announce: true, askIfUnsure: botAdded });
       if (linkedId) {
-        const { data: ev } = await supabase.from('events').select('id,title,date,status').eq('id', linkedId).maybeSingle();
+        const { data: ev } = await supabase.from('events').select('id,title,date,status,notifications').eq('id', linkedId).maybeSingle();
         const people = (msg.new_chat_members as any[]).filter((u) => u && !u.is_bot);
         if (ev && people.length) {
+          // Челлендж и выезд — разные миры: на выезд едут и отмечают��ься
+          // «Еду», в челленже никуда ехать не надо, только отмечаться.
+          // Раньше оба случая говорили одно и то же, и человек в челленже
+          // честно отвечал на вопрос, которого там не было.
+          const chIsChallenge = isChallengeEvent(ev);
           const ids = people.map((u) => Number(u.id));
           const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', (ev as any).id).in('telegram_id', ids).neq('status', 'cancelled');
           const regSet = new Set((regs || []).map((r: any) => Number(r.telegram_id)));
@@ -8211,20 +8481,31 @@ export default async function handler(req: any, res: any) {
           const fresh = people.filter((u) => !regSet.has(Number(u.id)));
           const nameOf = (u: any) => esc(u.first_name || u.username || 'Участник');
           if (already.length) {
-            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML',
-              text: `👋 ${already.map(nameOf).join(', ')} — уже в списке едущих на «${esc((ev as any).title)}» ✅` });
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: chIsChallenge
+                ? `👋 ${already.map(nameOf).join(', ')} — вы в челлендже «${esc((ev as any).title)}» ✅\n\nСюда, в чат: кружок, фото или слово. Каждый день засчитывается.`
+                : `👋 ${already.map(nameOf).join(', ')} — уже в списке едущих на «${esc((ev as any).title)}» ✅`,
+            });
           }
           if (fresh.length) {
             const guests = fresh.filter((u) => !memSet.has(Number(u.id)));
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
-              text: `👋 ${fresh.map(nameOf).join(', ')}, добро пожаловать в чат «${esc((ev as any).title)}»!\n\n` +
-                `Едешь? Отметься кнопкой — так ты появишься в составе, получишь бади, машину и все напоминания.` +
-                (guests.length ? `\n\n${guests.map(nameOf).join(', ')}: ты ещё не в клубе — сначала напиши боту в личку, это пара минут.` : ''),
+              text: chIsChallenge
+                ? `👋 ${fresh.map(nameOf).join(', ')}, это чат челленджа «${esc((ev as any).title)}».\n\n` +
+                  `Ехать никуда не надо — каждый встаёт у себя дома. Сюда, в чат: кружок, фото или слово за день.` +
+                  (guests.length ? `\n\n${guests.map(nameOf).join(', ')}: отметься кнопкой ниже, чтобы попасть в зачёт.` : '')
+                : `👋 ${fresh.map(nameOf).join(', ')}, добро пожаловать в чат «${esc((ev as any).title)}»!\n\n` +
+                  `Едешь? Отметься кнопкой — так ты появишься в составе, получишь бади, машину и все напоминания.` +
+                  (guests.length ? `\n\n${guests.map(nameOf).join(', ')}: ты ещё не в клубе — сначала напиши боту в личку, это пара минут.` : ''),
               reply_markup: kb([[
-                { text: '✅ Еду', callback_data: `grpgo_${(ev as any).id}` },
+                // Для челленджа «Не еду» — бессмысленная кнопка:
+                // там некуда ехать, и её нажатие читалось бы отказом
+                // от участия.
+                { text: chIsChallenge ? '✅ Участвую' : '✅ Еду', callback_data: `grpgo_${(ev as any).id}` },
                 { text: '🤔 Думаю', callback_data: `grpmaybe_${(ev as any).id}` },
-                { text: '❌ Не еду', callback_data: `grpno_${(ev as any).id}` },
+                ...(chIsChallenge ? [] : [{ text: '❌ Не еду', callback_data: `grpno_${(ev as any).id}` }]),
               ]]),
             });
           }
@@ -8234,11 +8515,20 @@ export default async function handler(req: any, res: any) {
     }
 
     /**
-     * КРУЖОЧКИ (video_note) И ВИДЕО В ЧАТЕ ЧЕЛЛЕНДЖА: УТРЕННИЙ ЧЕК-ИН
-     * Участник присылает утреннее видео-подтверждение подъёма.
-     * Проверяем, привязан ли чат к челленджу, фиксируем чек-ин дня и начисляем баллы.
+     * КРУЖКИ, ВИДЕО И ФОТО В ЧАТЕ ЧЕЛЛЕНДЖА: УТРЕННИЙ ЧЕК-ИН.
+     *
+     * Фото принято с 03.10 — раньше условие «пришли кружок ИЛИ текст» было
+     * единственным, и это было ровно то, из-за чего в челлендж не шли:
+     * снимать видео лень, а слово «ок» не чувствуется отчётом. Человек,
+     * который сделал 30 отжиманий и сфоткал телефон, отчитывался так же
+     * честно — но бот молчал, и человек думал, что его не засчитали.
+     *
+     * Все три способа равноправны: баллы, серия и запись в app_config
+     * считаются одинаково.
      */
-    if (msg && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup') && msg.from && !msg.from.is_bot && (msg.video_note || msg.video)) {
+    /** Файл-документом («отправить без сжатия») — тоже фото/видео, если тип медийный. */
+    const mediaDoc = msg?.document && /^(image|video)\//.test(String(msg.document.mime_type || '')) ? msg.document : null;
+    if (msg && (msg.chat?.type === 'group' || msg.chat?.type === 'supergroup') && msg.from && !msg.from.is_bot && (msg.video_note || msg.video || msg.photo || mediaDoc)) {
       try {
         const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', msg.chat.id).eq('active', true).maybeSingle();
         if (gl && (gl as any).event_id) {
@@ -8248,7 +8538,8 @@ export default async function handler(req: any, res: any) {
           const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
           
           if (isChallenge) {
-            const todayStr = new Date().toISOString().slice(0, 10);
+            // Дата по Минску (UTC+3), как и при чтении серии ниже (todayMinsk).
+            const todayStr = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
             const tgId = Number(msg.from.id);
             const firstName = esc(msg.from.first_name || msg.from.username || 'Участник');
             const checkinKey = `challenge_checkin:${evId}:${tgId}:${todayStr}`;
@@ -8258,7 +8549,16 @@ export default async function handler(req: any, res: any) {
             if (!existing) {
               const now = new Date();
               const timeStr = now.toLocaleTimeString('ru-RU', { timeZone: 'Europe/Minsk', hour: '2-digit', minute: '2-digit' });
-              
+              // Документ без сжатия в челлендже не участвует как раньше — только
+              // кружок/видео/фото. Ниже src берётся из них.
+              if (!(msg.video_note || msg.video || msg.photo)) throw new Error('doc_in_challenge');
+              // Telegram присылает фото МАССИВОМ размеров — берём последний
+              // (он самый большой и самый резкий). Раньше фото сюда не доходило
+              // вообще: условие было только video_note || video.
+              const photo = Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null;
+              const src = msg.video_note || msg.video || photo;
+              const srcType = msg.video_note ? 'video_note' : msg.video ? 'video' : 'photo';
+
               await supabase.from('app_config').upsert({
                 key: checkinKey,
                 value: {
@@ -8267,33 +8567,42 @@ export default async function handler(req: any, res: any) {
                   event_id: evId,
                   date: todayStr,
                   time: timeStr,
-                  file_id: (msg.video_note || msg.video).file_id,
-                  type: msg.video_note ? 'video_note' : 'video'
+                  file_id: src.file_id,
+                  type: srcType
                 }
               });
 
               // Начисляем +10 баллов за честный утренний чек-ин
               const newPoints = await awardPoints(tgId, 10);
               
-              // Подсчитываем текущий стрик участника
+              /**
+               * Серия ПОДРЯД, а не число отметок за всё время: раньше пропуск
+               * недели не обрывал «День подряд». Эталон — streakFrom в
+               * api/_lib/recap.ts (под тестами), здесь рантайм-копия.
+               */
               const { data: allUserCheckins } = await supabase
                 .from('app_config')
                 .select('key')
                 .ilike('key', `challenge_checkin:${evId}:${tgId}:%`);
-              const streak = (allUserCheckins || []).length;
+              const doneDays = new Set((allUserCheckins || []).map((r: any) => String(r.key).slice(-10)));
+              let streak = 0;
+              for (let cur = new Date(`${todayStr}T00:00:00Z`); streak < 1000; cur.setUTCDate(cur.getUTCDate() - 1)) {
+                if (!doneDays.has(cur.toISOString().slice(0, 10))) break;
+                streak += 1;
+              }
 
-              // Сохраняем видео в галерею события
-              const srcFile = msg.video_note || msg.video;
-              if (srcFile?.file_id) {
-                // Дубль кружка (тот же file_unique_id) — не ошибка: человек
-                // мог переслать видео повторно, галерея уже его видела.
+              // Сохраняем файл в галерею события — с правильным media_type, иначе фото
+              // попадёт в ленту как видео и не откроется.
+              if (src?.file_id) {
+                // Дубль (тот же file_unique_id) — не ошибка: человек мог
+                // переслать файл повторно, галерея уже его видела.
                 try {
                   await supabase.from('event_media').insert({
                     event_id: evId,
                     telegram_id: tgId,
-                    file_id: srcFile.file_id,
-                    file_unique_id: srcFile.file_unique_id || `vn_${Date.now()}`,
-                    media_type: 'video'
+                    file_id: src.file_id,
+                    file_unique_id: src.file_unique_id || `vn_${Date.now()}`,
+                    media_type: srcType === 'photo' ? 'photo' : 'video'
                   });
                 } catch { /* 23505 / временная ошибка — чек-ин важнее галереи */ }
               }
@@ -8313,10 +8622,40 @@ export default async function handler(req: any, res: any) {
                       `🏆 +10 баллов репутации (Баланс: ${newPoints || 'обновлён'})`
               });
             }
+          } else if (inMediaWindowRt(ev as any)) {
+            /**
+             * СБОР КАДРОВ ИЗ ЧАТА СОБЫТИЯ.
+             * До этого медиа из чатов обычных событий не сохранялись вообще —
+             * только текст. На Ислочи 2026 «скиньте фото видео в группу пж» —
+             * и всё, что скинули, нигде, кроме ленты чата, не осталось: ролик
+             * собирали руками из личек. Теперь каждый кадр молча уходит в
+             * галерею события (её же берёт автомонтаж итогов), а бот ставит
+             * реакцию 🔥 — видно, что принял, и чат не засоряется ответами.
+             */
+            const photo = Array.isArray(msg.photo) ? msg.photo[msg.photo.length - 1] : null;
+            const src: any = msg.video || msg.video_note || photo || mediaDoc;
+            const isVid = Boolean(msg.video || msg.video_note || (mediaDoc && /^video\//.test(String(mediaDoc.mime_type))));
+            if (src?.file_id) {
+              const { error: insErr } = await supabase.from('event_media').insert({
+                event_id: evId,
+                telegram_id: Number(msg.from.id),
+                file_id: src.file_id,
+                file_unique_id: src.file_unique_id || `grp_${msg.chat.id}_${msg.message_id}`,
+                media_type: isVid ? 'video' : 'photo',
+              });
+              if (!insErr) {
+                try {
+                  await tg('setMessageReaction', {
+                    chat_id: msg.chat.id, message_id: msg.message_id,
+                    reaction: [{ type: 'emoji', emoji: '🔥' }],
+                  });
+                } catch { /* реакции выключены в чате — не страшно */ }
+              }
+            }
           }
         }
       } catch (err) {
-        console.warn('[challenge_checkin] failed to process:', err);
+        if ((err as Error)?.message !== 'doc_in_challenge') console.warn('[group_media] failed to process:', err);
       }
     }
 
@@ -8337,7 +8676,8 @@ export default async function handler(req: any, res: any) {
           const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
 
           if (isChallenge) {
-            const todayStr = new Date().toISOString().slice(0, 10);
+            // Дата по Минску (UTC+3), как и при чтении серии ниже (todayMinsk).
+            const todayStr = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
             const tgId = Number(msg.from.id);
             const checkinKey = `challenge_checkin:${evId}:${tgId}:${todayStr}`;
 
@@ -8558,10 +8898,13 @@ export default async function handler(req: any, res: any) {
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
             reply_to_message_id: msg.message_id,
-            text: (doneToday
-              ? `🔥 <b>${who}, день ${dayNo} засчитан.</b>\nСерия: <b>${streak}</b> дн. подряд.`
-              : `🌅 <b>${who}, сегодня отметки пока нет.</b>\nСерия: <b>${streak}</b> дн. Отправь кружок или текстовый отчёт сюда — засчитаю.`)
-              + `\nВсего дней: <b>${myDates.size}</b>.`,
+            // Ответ — две строки. Три способа вместо двух: раньше человек, которому лень
+          // снимать видео, видел только «кружок или текст» и думал, что фото
+          // не считается — а оно считается.
+          text: (doneToday
+            ? `✅ <b>${who}, день ${dayNo} засчитан.</b>\n🔥 Серия: <b>${streak}</b> дн. подряд.`
+            : `✊ <b>${who}, отметься.</b>\n🔥 Серия: <b>${streak}</b> дн. Кружок, фото или слово — сюда.`)
+              + `\nДней всего: <b>${myDates.size}</b>.`,
           });
           return res.status(200).json({ ok: true });
         }
@@ -9115,6 +9458,84 @@ export default async function handler(req: any, res: any) {
         }
 
         /**
+         * 6½. ОБРАЩЕНИЕ К БОТУ ПО ИМЕНИ.
+         * С Ислочи: «Бот найди плиз спальник» — без «?» и без вопросительного
+         * слова в начале; бот промолчал, и Олег ответил «Получается я бот».
+         * Из челленджа: «Бот ты не справедливо зачитал очки» — «ты» помечало
+         * сообщение как вопрос человеку, жалоба потерялась.
+         * Эталон выражений — api/_lib/recap.ts (isAddressedToBot, gearAsk).
+         */
+        const replyToBot = Boolean(msg.reply_to_message?.from?.is_bot
+          && String(msg.reply_to_message.from.username || '').toLowerCase() === BOT_USERNAME.toLowerCase());
+        const addressedToBot = replyToBot
+          || /^\s*(@?campsflint_bot|бот(ик|яра)?|bot|флинт-?бот)(?![а-яёa-z0-9_])/i.test(text)
+          || text.toLowerCase().includes(`@${BOT_USERNAME.toLowerCase()}`);
+        let botHandled = false;
+        if (linkedEvent && addressedToBot) {
+          const evIdB = String((linkedEvent as any).id);
+          // Жалоба на начисление — человеку, а не модели: снимать баллы вправе
+          // только организатор.
+          if (/(очк|балл)/i.test(text) && /(сним|снять|неправильн|несправедлив|не\s+справедлив|ошиб|верни|лишн|не\s+засчит|зачит|засчит)/i.test(text)) {
+            botHandled = true;
+            const { data: evO } = await supabase.from('events').select('deputy_id,title').eq('id', evIdB).maybeSingle();
+            const orgIds = Array.from(new Set([Number((evO as any)?.deputy_id) || 0, 377551019].filter(Boolean)));
+            const link = String(chatId).startsWith('-100') ? `https://t.me/c/${String(chatId).slice(4)}/${msg.message_id}` : '';
+            for (const oid of orgIds) {
+              try {
+                await tg('sendMessage', {
+                  chat_id: oid, parse_mode: 'HTML',
+                  text: `⚖️ <b>Спор по баллам</b> · ${esc((evO as any)?.title || '')}\n\n${esc(msg.from.first_name || 'Участник')}: «${esc(text.slice(0, 300))}»${link ? `\n\n<a href="${link}">Открыть сообщение в чате</a>` : ''}`,
+                });
+              } catch { /* организатор не открыл бота */ }
+            }
+            await tg('sendMessage', {
+              chat_id: chatId, reply_to_message_id: msg.message_id, parse_mode: 'HTML',
+              text: '⚖️ Принял. Баллы правит только организатор — уже передал ему, разберётся.',
+            });
+          } else {
+            // «Найди спальник», «нужна электропила», «у кого есть триммер».
+            const gm = text.match(/(?:найди(?:те)?|нужн[аоы]?|нужен|ищу|ищем|где\s+взять|одолжи(?:те)?|у\s+кого\s+(?:есть|будет|найд[её]тся)|есть\s+у\s+кого|кто\s+(?:может\s+)?(?:взять|дать|одолжить))\s+(?:(?:плиз|пожалуйста|пж|мне|нам|кому-?нибудь|ли|бы|ещ[её]|тут|здесь)\s+)*([а-яёa-z][а-яёa-z-]*(?:\s+[а-яёa-z][а-яёa-z-]*){0,2})/i);
+            const gWords: string[] = [];
+            for (const w of String(gm?.[1] || '').toLowerCase().split(/\s+/)) {
+              if (/^(и|в|во|на|с|со|для|по|к|у|из|от|до|за|под|над|плиз|пж|пожалуйста)$/.test(w)) break;
+              if (w) gWords.push(w);
+            }
+            const item = gWords.slice(0, 2).join(' ').replace(/[^а-яёa-z\s-]/gi, '').trim();
+            const stopW = /^(что|кто|как|где|когда|место|места|машина|попутка|помощь|время|сегодня|завтра|ехать|взять|быть|чтобы|это|всё|все)$/;
+            if (item.length >= 3 && !stopW.test(gWords[0] || '')) {
+              botHandled = true;
+              const longest = item.split(/\s+/).sort((a, b) => b.length - a.length)[0];
+              const stem = longest.length > 6 ? longest.slice(0, -2) : longest.slice(0, Math.max(3, longest.length - 1));
+              const { data: gear } = await supabase
+                .from('member_equipment').select('telegram_id,item,quantity,access_level')
+                .ilike('item', `%${stem}%`).neq('access_level', 'private').limit(10);
+              const ownerIds = Array.from(new Set((gear || []).map((g: any) => Number(g.telegram_id)).filter(Boolean)));
+              const { data: owners } = ownerIds.length
+                ? await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ownerIds)
+                : { data: [] as any[] };
+              const { data: goingRegs } = await supabase
+                .from('registrations').select('telegram_id').eq('event_id', evIdB).in('status', ['pending', 'confirmed']);
+              const going = new Set((goingRegs || []).map((r: any) => Number(r.telegram_id)));
+              const nameOf = new Map((owners || []).map((o: any) => [Number(o.telegram_id), o.username ? `@${o.username}` : (o.first_name || 'участник')]));
+              const lines = (gear || []).map((g: any) =>
+                `• ${esc(nameOf.get(Number(g.telegram_id)) || 'участник')} — ${esc(g.item)}${Number(g.quantity) > 1 ? ` ×${g.quantity}` : ''}${going.has(Number(g.telegram_id)) ? ' · <b>едет с нами</b>' : ''}`);
+              await tg('sendMessage', {
+                chat_id: chatId, reply_to_message_id: msg.message_id, parse_mode: 'HTML',
+                text: lines.length
+                  ? `🎒 <b>${esc(item)}</b> есть в клубе:\n${lines.join('\n')}\n\nНапишите владельцу — договоритесь, кто привезёт.`
+                  : `🎒 «${esc(item)}» никто в клубе пока не отметил в снаряжении.\n\nУ кого есть — ответьте на это сообщение 🙌\n<i>Своё снаряжение можно добавить в профиле в приложении — тогда в следующий раз найду сразу.</i>`,
+              });
+              try {
+                await supabase.from('bot_group_actions').insert({
+                  chat_id: chatId, event_id: evIdB, action_type: 'gear_lookup',
+                  trigger_text: text.slice(0, 300), response_text: item.slice(0, 500),
+                });
+              } catch { /* лог не важнее ответа */ }
+            }
+          }
+        }
+
+        /**
          * 7. ОТВЕТЫ НА ОРГВОПРОСЫ.
          * Организатор отвечал в чате на одно и то же: во сколько выезд, где
          * сбор, что взять, кто едет, сколько стоит. У бота вся эта информация
@@ -9150,7 +9571,8 @@ export default async function handler(req: any, res: any) {
         const addressedToPerson = /^@?[А-ЯЁ][а-яё]{2,}\s*[,!]/.test(text.trim())
           || /(?<![а-яёa-z])(ты|тебя|тебе|тобой|твой|твоя|твои|тво[ёе])(?![а-яёa-z])/i.test(text);
         const replyToPerson = Boolean(msg.reply_to_message && !msg.reply_to_message.from?.is_bot);
-        if (linkedEvent && looksLikeQuestion && orgTopic.test(text) && !addressedToPerson && !replyToPerson && text.length > 8 && !aiUsed) {
+        // К боту обратились по имени — отвечаем, даже если нет «?» и есть «ты».
+        if (linkedEvent && !botHandled && (addressedToBot || (looksLikeQuestion && orgTopic.test(text) && !addressedToPerson && !replyToPerson)) && text.length > 8 && !aiUsed) {
           const { data: lastReply } = await supabase
             .from('bot_group_actions').select('created_at')
             .eq('chat_id', chatId).eq('action_type', 'info_reply')
@@ -9564,7 +9986,7 @@ export default async function handler(req: any, res: any) {
           // Код верный — показываем карточку
           await clearSession(msg.from.id);
           const registered = await hasActiveReg(ev.id, msg.from.id);
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCard(ev), reply_markup: kb(eventCardButtons(ev, openBtn, registered)) });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: eventCardShort(ev), reply_markup: kbOpt(eventCardButtons(ev, openBtn, registered)) });
           return res.status(200).json({ ok: true });
         }
 
@@ -9668,6 +10090,26 @@ export default async function handler(req: any, res: any) {
          * нажал кнопку меню, это не должно улететь в парсер даты и выдать
          * «не понял дату» на нажатие «Профиль».
          */
+        /** Отзыв «что улучшить» после итоговой рассылки — организатору лично. */
+        if (sess && sess.state === 'recap_fb' && text && !text.startsWith('/') && !MENU_BTNS.has(text)) {
+          await clearSession(msg.from.id);
+          const evIdF = String(sess.context?.evId || '');
+          const { data: evF } = await supabase.from('events').select('title,deputy_id').eq('id', evIdF).maybeSingle();
+          const orgIds = Array.from(new Set([Number((evF as any)?.deputy_id) || 0, 377551019].filter(Boolean)));
+          for (const oid of orgIds) {
+            try {
+              await tg('sendMessage', {
+                chat_id: oid, parse_mode: 'HTML',
+                text: `💬 <b>Отзыв после события</b> · ${esc((evF as any)?.title || '')}\n\n${esc(msg.from.first_name || 'Участник')}: «${esc(text.slice(0, 1500))}»`,
+              });
+            } catch { /* no-op */ }
+          }
+          if (evIdF) {
+            try { await supabase.from('feedback').update({ comment: text.slice(0, 2000) }).eq('event_id', evIdF).eq('telegram_id', msg.from.id); } catch { /* отзыв уже у организатора */ }
+          }
+          await tg('sendMessage', { chat_id: msg.chat.id, text: '🙏 Передал организатору. Спасибо, что помогаешь делать выезды лучше!' });
+          return res.status(200).json({ ok: true });
+        }
         if (sess && sess.state === 'set_birthday') {
           if (MENU_BTNS.has(text)) {
             await clearSession(msg.from.id);
@@ -10369,7 +10811,7 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
               text: `✅ Готово! Авто: <b>${esc(car || '—')}</b>. Ты записан(а) на «<b>${esc(ev?.title || 'событие')}</b>».`,
-              reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+              reply_markup: kbOpt(eventCardButtons(ev, openBtn, true)),
             });
           }
           // Мягкая проверка задним числом — не задерживает основной ответ выше.
@@ -10425,8 +10867,8 @@ export default async function handler(req: any, res: any) {
               chat_id: chatId, parse_mode: 'HTML',
               text: `✅ Готово! Ты записан(а)${n > 0 ? ` (+${n} гост${n === 1 ? 'ь' : 'я'})` : ''} на «<b>${esc(ev?.title || 'событие')}</b>».` +
                 (n > 0 ? '\n<i>За гостей отвечаешь и оплачиваешь ты.</i>' : '') +
-                '\n\nЛогистика, снаряжение и оплата — кнопки ниже.',
-              reply_markup: kb(eventCardButtons(ev, openBtn, true)),
+                '\n\nЛогистика, снаряжение и оплата — в приложении.',
+              reply_markup: kbOpt(eventCardButtons(ev, openBtn, true)),
             });
           }
           return res.status(200).json({ ok: true });
@@ -10480,7 +10922,7 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
         if (text === 'ℹ️ Как это работает' || text === 'ℹ️ Помощь' || text === '❓ Помощь') {
-          await sendHelp(chatId);
+          await sendHelp(chatId, openBtn);
           return res.status(200).json({ ok: true });
         }
         if (text === '🆘 SOS') {
@@ -10611,7 +11053,7 @@ export default async function handler(req: any, res: any) {
         try {
           const approvedNow = await isApproved(msg.from.id);
           await tg('setChatMenuButton', approvedNow
-            ? { chat_id: chatId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }
+            ? { chat_id: chatId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }
             : { chat_id: chatId, menu_button: { type: 'default' } });
         } catch { /* no-op */ }
         // /start всегда обрывает недоделанный диалог. Иначе человек, начавший
@@ -10735,6 +11177,46 @@ export default async function handler(req: any, res: any) {
           return res.status(200).json({ ok: true });
         }
 
+        /**
+         * ПРИХОД ПО ПУБЛИЧНОЙ ССЫЛКЕ /e/<id> — «подать заявку» с сохранением
+         * события.
+         *
+         * Ссылка /e/<id> публична (это og-превью, его видят мессенджеры), и
+         * раньше она работала как обходной вход: страница сама кидала в бота
+         * через start=event_<id>, и человек, не состоящий в клубе, оказывался
+         * в клубском сценарии. Теперь решение принимает бот — он знает,
+         * член человек или нет:
+         *   • члену — сразу карточка события, ничего лишнего;
+         *   • новичку — заявка с id события, и после одобрения он попадёт
+         *     именно на этот выезд, а не в общую афишу.
+         */
+        if (payload.startsWith('verify_ev_')) {
+          const evIdWanted = payload.slice('verify_ev_'.length);
+          const evWanted = await getEvent(evIdWanted);
+          if (await isApproved(msg.from.id)) {
+            if (evWanted) {
+              await tg('sendMessage', {
+                chat_id: chatId, parse_mode: 'HTML',
+                text: eventCardShort(evWanted),
+                reply_markup: kbOpt(eventCardButtons(evWanted, openBtn, await hasActiveReg(evWanted.id, msg.from.id))),
+              });
+              return res.status(200).json({ ok: true });
+            }
+          } else {
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text:
+                `📋 <b>Заявка в клуб</b>\n\n` +
+                (evWanted
+                  ? `Ты пришёл по приглашению на «${esc(evWanted.title)}». Клуб закрытый, поэтому сначала заявка: кодекс, короткое знакомство и данные для логистики — 2–3 минуты.\n`
+                  : 'Клуб закрытый, поэтому сначала заявка: кодекс, знакомство и данные для логистики — 2–3 минуты.\n') +
+                'Костяк рассмотрит её и ответит сюда.',
+              reply_markup: kb([[appBtn('📋 Заполнить заявку', site, { apply: '1', ...(evWanted ? { ev: evWanted.id } : {}) })]]),
+            });
+            return res.status(200).json({ ok: true });
+          }
+        }
+
         if (payload.startsWith('event_')) {
           const ev = await getEvent(payload.slice('event_'.length));
           if (ev) {
@@ -10742,8 +11224,8 @@ export default async function handler(req: any, res: any) {
             await tg('sendMessage', {
               chat_id: chatId,
               parse_mode: 'HTML',
-              text: eventCard(ev),
-              reply_markup: kb(eventCardButtons(ev, openBtn, registered)),
+              text: eventCardShort(ev),
+              reply_markup: kbOpt(eventCardButtons(ev, openBtn, registered)),
             });
             return res.status(200).json({ ok: true });
           }
@@ -10797,7 +11279,7 @@ export default async function handler(req: any, res: any) {
                 : '🚪 К сожалению, заявка в клуб отклонена. Если это ошибка — напиши в поддержку.',
               reply_markup: approve ? kb([[openBtn]]) : kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
             });
-            if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Открыть FLINT', web_app: { url: site } } }); } catch { /* no-op */ } }
+            if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }); } catch { /* no-op */ } }
           } catch { /* заявитель мог не начинать чат */ }
         }
         return res.status(200).json({ ok: true });
@@ -10813,7 +11295,7 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
       if (cmd === '/help') {
-        await sendHelp(chatId);
+        await sendHelp(chatId, openBtn);
         return res.status(200).json({ ok: true });
       }
       // Панель организатора в боте: сплит, должники, пинг незаполнивших.

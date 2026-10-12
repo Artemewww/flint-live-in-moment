@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { X, Send, CheckCircle2, ShieldCheck, Bell, Sparkles, Loader2, Bot, Info, Users, Copy, Check, Truck, Package } from 'lucide-react';
 import { CommunityEvent, Registration } from '../types';
 import { isInsideTelegram, getTelegramUser, getStartParam, haptic } from '../telegram';
-import { submitRegistration } from '../api';
+import { submitRegistration, getPrefillData } from '../api';
 import RegistrationGate from './RegistrationGate';
 
 interface RegistrationModalProps {
@@ -97,6 +97,14 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
   const [consentGiven, setConsentGiven] = useState(false);
   /** Анкета подставлена из профиля/прошлой записи — говорим об этом человеку. */
   const [prefilled, setPrefilled] = useState(false);
+  /**
+   * ЭКСПРЕСС-ЗАПИСЬ для тех, кто уже ездил. Подсмотрено у 360 Padel: там
+   * запись — одно касание. У нас постоянный участник проходил ту же длинную
+   * анкету, что и новичок, только с подставленными полями: прокрутить, найти
+   * галочки, нажать. Теперь — сводка «как в прошлый раз» + только вопросы
+   * ЭТОГО события. Полная анкета — по кнопке «Изменить».
+   */
+  const [express, setExpress] = useState(false);
   // Строгий допуск: правила клуба + программа события приняты поэтапно.
   // Пока не пройдено — к формам записи не пускаем.
   const [gatePassed, setGatePassed] = useState(false);
@@ -119,7 +127,9 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
       // Автозаполнение из профиля + последней регистрации
       (async () => {
         try {
-          const { getPrefillData } = await import('../api');
+          // Статический импорт: модуль '../api' и так уже подтянут в бандл
+          // верхним импортом (submitRegistration), и Vite не может вынести его
+          // в отдельный кусок. Динамический импорт тут был иллюзией оптимизации.
           const prefill = await getPrefillData();
           if (prefill.ok && prefill.prefill) {
             const p = prefill.prefill;
@@ -135,7 +145,7 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
              */
             setFormData(prev => ({
               ...prev,
-              transportMode: p.hasTransport ? 'car' : prev.transportMode,
+              transportMode: p.transportMode || (p.hasTransport ? 'car' : prev.transportMode),
               transportDetails: p.transportDetails || prev.transportDetails,
               transportSeats: p.transportSeats || prev.transportSeats,
               hasLicense: p.hasLicense || prev.hasLicense,
@@ -147,6 +157,10 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
             // Показываем, что данные подставлены — иначе человек не понимает,
             // почему поля уже заполнены, и заполняет их заново.
             if (p.hasHistory || p.phone) setPrefilled(true);
+            if (p.agreedPd) setConsentGiven(true);
+            // Экспресс — только когда о человеке известно всё нужное: он уже
+            // записывался, есть имя, телефон и пол. Иначе — обычная анкета.
+            if (isMember && !isClosedEvent && p.hasHistory && p.name && p.phone && p.category) setExpress(true);
           }
         } catch (err) {
           // Не критично — просто не автозаполнится
@@ -366,6 +380,116 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
         <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] overflow-y-auto flex-1 min-h-0 md:flex-none md:max-h-[75vh]" id="modal-scroll-area">
           {!isDone && !gatePassed ? (
             <RegistrationGate event={event} onAccept={() => setGatePassed(true)} onClose={onClose} />
+          ) : !isDone && express ? (
+            <div className="space-y-4 font-sans">
+              <div>
+                <span className="block text-[11px] font-mono uppercase tracking-widest text-brand font-black">Быстрая запись</span>
+                <h3 className="mt-1 text-lg font-black text-white leading-tight">Всё как в прошлый раз — проверь и жми</h3>
+              </div>
+
+              <div className="rounded-2xl border border-white/10 bg-[#181818] divide-y divide-white/5">
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="text-[12px] text-white/45">Участник</span>
+                  <span className="text-right text-[14px] font-bold text-white">{fullName}{phone ? <span className="block text-[12px] font-normal text-white/50">{phone.replace(/(\d{2})(\d{2})$/, '••$2')}</span> : null}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3 px-4 py-3">
+                  <span className="text-[12px] text-white/45">Питание</span>
+                  <span className="text-[14px] font-bold text-white">{formData.dietary === 'vegan' ? 'Веган' : formData.dietary === 'vegetarian' ? 'Вегетарианец' : 'Ем всё'}</span>
+                </div>
+              </div>
+
+              {needRides && (
+                <div className="space-y-2">
+                  <span className="block text-[12px] font-bold text-white/70">Как добираешься на этот раз?</span>
+                  <div className="flex flex-wrap gap-2">
+                    {([
+                      ['car', formData.transportDetails ? `🚗 На своей · ${formData.transportDetails.split(',')[0]}` : '🚗 На своей машине'],
+                      ['seek', '🙋 Ищу попутку'],
+                      ['self', '🚶 Доберусь сам'],
+                    ] as const).map(([mode, label]) => (
+                      <button key={mode} type="button"
+                        onClick={() => setFormData((f) => ({ ...f, transportMode: mode }))}
+                        className={`rounded-full px-3.5 py-2 text-[13px] font-bold border cursor-pointer ${
+                          formData.transportMode === mode || (mode === 'car' && formData.transportMode === 'carsharing')
+                            ? 'bg-brand text-black border-brand' : 'bg-white/5 text-white/70 border-white/10'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {(formData.transportMode === 'car' || formData.transportMode === 'carsharing') && (
+                    <div className="flex items-center justify-between rounded-xl bg-white/5 px-3 py-2">
+                      <span className="text-[12px] text-white/60">Свободных мест в машине</span>
+                      <div className="flex items-center gap-2">
+                        <button type="button" aria-label="Меньше мест" onClick={() => setFormData((f) => ({ ...f, transportSeats: Math.max(0, f.transportSeats - 1) }))}
+                          className="h-8 w-8 rounded-full border-none bg-white/10 text-white cursor-pointer">−</button>
+                        <span className="w-5 text-center text-[15px] font-black text-brand">{formData.transportSeats}</span>
+                        <button type="button" aria-label="Больше мест" onClick={() => setFormData((f) => ({ ...f, transportSeats: Math.min(8, f.transportSeats + 1) }))}
+                          className="h-8 w-8 rounded-full border-none bg-white/10 text-white cursor-pointer">+</button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {needLicense && (
+                <div className="space-y-2">
+                  <span className="block text-[12px] font-bold text-white/70">Есть водительские права?</span>
+                  <div className="flex gap-2">
+                    {(['yes', 'no'] as const).map((v) => (
+                      <button key={v} type="button" onClick={() => setFormData((f) => ({ ...f, hasLicense: v }))}
+                        className={`rounded-full px-4 py-2 text-[13px] font-bold border cursor-pointer ${formData.hasLicense === v ? 'bg-brand text-black border-brand' : 'bg-white/5 text-white/70 border-white/10'}`}>
+                        {v === 'yes' ? 'Да' : 'Нет'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {costModel === 'food_share' && (
+                <div className="space-y-2">
+                  <span className="block text-[12px] font-bold text-white/70">Общий стол на этом выезде</span>
+                  <div className="flex flex-wrap gap-2">
+                    {([[false, '🍲 Скидываюсь на общий'], [true, '🥪 Еду со своей едой']] as const).map(([v, label]) => (
+                      <button key={String(v)} type="button" onClick={() => setFoodOptOut(v)}
+                        className={`rounded-full px-3.5 py-2 text-[13px] font-bold border cursor-pointer ${foodOptOut === v ? 'bg-brand text-black border-brand' : 'bg-white/5 text-white/70 border-white/10'}`}>
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center justify-between rounded-xl bg-white/5 px-3 py-2">
+                <span className="text-[12px] text-white/60">Беру с собой гостей</span>
+                <div className="flex items-center gap-2">
+                  <button type="button" aria-label="Меньше гостей" onClick={() => setFormData((f) => ({ ...f, guestCount: Math.max(0, f.guestCount - 1) }))}
+                    className="h-8 w-8 rounded-full border-none bg-white/10 text-white cursor-pointer">−</button>
+                  <span className="w-5 text-center text-[15px] font-black text-brand">{formData.guestCount}</span>
+                  <button type="button" aria-label="Больше гостей" onClick={() => setFormData((f) => ({ ...f, guestCount: Math.min(5, f.guestCount + 1) }))}
+                    className="h-8 w-8 rounded-full border-none bg-white/10 text-white cursor-pointer">+</button>
+                </div>
+              </div>
+
+              {!consentGiven && (
+                <label className="flex items-start gap-2.5 text-[12px] text-white/60 cursor-pointer">
+                  <input type="checkbox" checked={consentGiven} onChange={(e) => setConsentGiven(e.target.checked)} className="mt-0.5 h-4 w-4 accent-[#E6FD3A]" />
+                  Согласен на обработку персональных данных для организации выезда
+                </label>
+              )}
+
+              {error && <p className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px] text-rose-300">{error}</p>}
+
+              <button type="button" disabled={isSubmitting}
+                onClick={() => handleSubmit({ preventDefault() {} } as React.FormEvent)}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border-none bg-brand py-4 text-[15px] font-black uppercase text-black cursor-pointer disabled:opacity-60">
+                {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <Send className="h-5 w-5" />}
+                Записаться
+              </button>
+              <button type="button" onClick={() => { setExpress(false); setError(''); }}
+                className="w-full border-none bg-transparent py-1 text-[13px] font-bold text-white/50 underline cursor-pointer">
+                Изменить анкету полностью
+              </button>
+            </div>
           ) : !isDone ? (
             <div className="space-y-5">
               
@@ -816,16 +940,18 @@ export default function RegistrationModal({ event, isMember = false, onClose, on
 
               <div className="space-y-1.5">
                 <span className="text-[9px] uppercase font-mono tracking-widest text-[#E6FD3A] bg-[#E6FD3A]/10 px-3 py-1 rounded-full font-black">
-                  {alreadyReg ? 'Вы уже записаны' : 'Гость в базе • Синхронизация завершена'}
+                  {alreadyReg ? 'Вы уже записаны' : isMember ? 'Заявка принята' : 'Гость в базе • Синхронизация завершена'}
                 </span>
                 <h4 className="font-display font-black text-2xl text-white uppercase tracking-tight">
-                  {alreadyReg ? 'Вы уже в списке!' : 'Добро пожаловать в круг!'}
+                  {alreadyReg ? 'Вы уже в списке!' : isMember ? 'Ты в списке!' : 'Добро пожаловать в круг!'}
                 </h4>
                 <p className="text-xs text-white/70 max-w-sm mx-auto font-sans leading-relaxed">
                   {alreadyReg ? (
                     <>Вы уже записаны на «{event.title}». Повторная заявка не нужна — ждите деталей и напоминаний. Подтвердить участие можно в боте ниже.</>
                   ) : (
-                    <>Поздравляем! Вы записаны по приглашению от <strong className="text-[#E6FD3A] font-mono">{inviter}</strong>. Ваш аккаунт <strong className="text-brand">@{tgUsername}</strong> в заявке на «{event.title}».</>
+                    <>{inviter.trim()
+                      ? <>Поздравляем! Вы записаны по приглашению от <strong className="text-[#E6FD3A] font-mono">{inviter}</strong>.</>
+                      : 'Записал тебя.'} Ваш аккаунт <strong className="text-brand">@{tgUsername}</strong> в заявке на «{event.title}».</>
                   )}
                 </p>
               </div>

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Info, CheckCircle2 } from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl } from '../types';
+import { CommunityEvent, getYandexMapsUrl, isEventOver } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { AvatarStack } from './Avatar';
 import { getToday } from '../data';
@@ -30,15 +30,33 @@ export default function InfoSection({
   const today = getToday();
   // Не прошедшее = ещё не закончился последний день (dateEnd), иначе идущий
   // многодневный выезд пропадал с главной на своём же втором дне.
-  const notPast = (e: CommunityEvent) => (e.dateEnd || e.date) >= today;
+  const notPast = (e: CommunityEvent) => !isEventOver(e, today);
+  /**
+   * Челлендж из баннера ИСКЛЮЧЁН. Он идёт месяцами, поэтому «ближайшее
+   * событие» по дате — это всегда был он, и главную встречал человек с
+   * таймером до старта 90-дневного челленджа вместо ближайшего выезда.
+   * Таймер и место в обложке — за настоящим событием; сам челлендж живёт
+   * отдельной карточкой выше (см. App.tsx, ChallengeCard).
+   */
+  const real = (e: CommunityEvent) => notPast(e) && !e.isChallenge;
   const featuredEvent = events && events.length > 0
     ? (events
-        .filter(e => notPast(e) && e.status === 'open')
+        .filter(e => real(e) && e.status === 'open')
+        .sort((a, b) => a.date.localeCompare(b.date))[0]
+      || events
+        .filter(real)
         .sort((a, b) => a.date.localeCompare(b.date))[0]
       || events
         .filter(notPast)
         .sort((a, b) => a.date.localeCompare(b.date))[0]
-      || events[0])
+      /**
+       * Дальше — НИЧЕГО. Раньше тут стояло `|| events[0]`, и это ломало всю
+       * задумку выше: когда в афише остаётся один челлендж и всё прошедшее,
+       * в обложку «ближайшего события» попадал либо уже начавшийся челлендж,
+       * либо минувший выезд. Человек видел счётчик до начала события, которое
+       * уже идёт, и считал это поломкой.
+       */
+      )
     : null;
 
   // Если событий нет - ничего не показываем
@@ -58,6 +76,16 @@ export default function InfoSection({
   const eventDateStr = `${featuredEvent.date}T19:00:00`;
   const targetDate = new Date(eventDateStr).getTime();
   const [timeLeft, setTimeLeft] = useState({ days: '00', hours: '00', minutes: '00', seconds: '00' });
+  /**
+   * Событие уже началось — таймер до старта бессмысленен.
+   *
+   * Раньше он просто останавливался на 00:00:00:00 и продолжал звать
+   * «ДО ТВОЕЙ СЛЕДУЮЩЕЙ ПЕРЕЗАГРУЗКИ ОСТАЛОСЬ...».
+   * Читало ноль тот компонент и выглядел как ошибка — жалоба вовсе читающиеся.
+   */
+  const [alreadyStarted, setAlreadyStarted] = useState(false);
+  /** Обложка не загрузилась — рисуем градиент, а не дыру с alt-текстом. */
+  const [coverBroken, setCoverBroken] = useState(false);
 
   useEffect(() => {
     const updateTimer = () => {
@@ -65,9 +93,11 @@ export default function InfoSection({
       const diff = targetDate - now;
 
       if (diff <= 0) {
+        setAlreadyStarted(true);
         setTimeLeft({ days: '00', hours: '00', minutes: '00', seconds: '00' });
         return;
       }
+      setAlreadyStarted(false);
 
       const days = Math.floor(diff / (1000 * 60 * 60 * 24));
       const hours = Math.floor((diff / (1000 * 60 * 60)) % 24);
@@ -97,12 +127,21 @@ export default function InfoSection({
       >
         {/* Background artwork */}
         <div className="absolute inset-0 z-0">
-          <img 
-            src={featuredEvent.image} 
-            alt={featuredEvent.title}
-            className="w-full h-full object-cover brightness-[0.65] contrast-[1.10] transition-transform duration-700 ease-out select-none pointer-events-none"
-            referrerPolicy="no-referrer"
-          />
+          {/**
+           * Битая картинка — это был тот самый «текст как ошибка» сверху.
+           * Браузер без картинки рисует alt-текст заголовка самого события:
+           * длинное название размашивало выести экран и затем и падает.
+           * Теперь alt пустой: заголовок уже есть ниже по титулу.
+           */}
+          {featuredEvent.image && !coverBroken && (
+            <img
+              src={featuredEvent.image}
+              alt=""
+              onError={() => setCoverBroken(true)}
+              className="w-full h-full object-cover brightness-[0.65] contrast-[1.10] transition-transform duration-700 ease-out select-none pointer-events-none"
+              referrerPolicy="no-referrer"
+            />
+          )}
           <div className="absolute inset-0 bg-gradient-to-t from-[#0A0A0A] via-black/10 to-transparent" />
           <div className="absolute top-0 right-0 w-80 h-80 bg-brand/10 rounded-full blur-3xl pointer-events-none" />
         </div>
@@ -110,6 +149,7 @@ export default function InfoSection({
         {/* TOP RAIL: Alert/Countdown and Club tag */}
         <div className="relative z-10 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-end w-full">
           {/* Majestic Countdown Box */}
+          {!alreadyStarted && (
           <div className="bg-black/70 border border-brand/35 backdrop-blur-md rounded-2xl p-3 sm:px-5 sm:py-2.5 max-w-sm flex flex-col text-left">
             <span className="text-white/50 font-bold uppercase tracking-widest text-[9px] mb-1 block">
               До твоей следующей перезагрузки осталось...
@@ -136,6 +176,7 @@ export default function InfoSection({
               </div>
             </div>
           </div>
+          )}
         </div>
 
         {/* MIDDLE / BOTTOM CORE META SECTION */}

@@ -155,8 +155,18 @@ export function getToday(): string {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Событие закончилось: прошёл последний день ИЛИ организатор нажал
+ * «Завершить» (checklist.finished). Раньше смотрели только на дату, и
+ * завершённое в свой последний день событие висело в ленте до полуночи —
+ * «Завершить» в ленте ничего не меняло.
+ */
+export function isEventOver(event: Pick<CommunityEvent, 'date' | 'dateEnd' | 'checklist'>, today: string = getToday()): boolean {
+  return event.checklist?.finished === true || (event.dateEnd || event.date) < today;
+}
+
 export function getEventPhase(event: CommunityEvent, today: string = getToday()): EventPhase {
-  if ((event.dateEnd || event.date) < today) return 'past';
+  if (isEventOver(event, today)) return 'past';
   if (event.status === 'closed') return 'closed';
   if (event.status === 'locked') return 'locked';
   if (event.maxParticipants && event.participantsCount >= event.maxParticipants) return 'full';

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, Suspense } from 'react';
 import Avatar from './Avatar';
 import EventTasks from './EventTasks';
 import EventContributions from './EventContributions';
@@ -7,19 +7,26 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 , UserPlus} from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
-import { haptic } from '../telegram';
+import { eventShareLink } from '../site';
+import { haptic, getInitData, openBot } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 import CampingChecklist from './CampingChecklist';
 import LiveMedia from './LiveMedia';
-import SnapModal from './SnapModal';
+import { lazyWithRetry } from '../lazy';
 import { getEventGuide } from '../eventGuide';
 import { LogisticsPanel } from './LogisticsPanel';
 import { EventRules } from './EventRules';
 import ChallengeProgress from './ChallengeProgress';
 import ChallengeStories from './ChallengeStories';
+
+/**
+ * Окно съёмки открывается по кнопке и почти никогда не нужно. Статический
+ * импорт тянул его в чанк карточки события, а через неё — в бандл афиши.
+ */
+const SnapModal = lazyWithRetry(() => import('./SnapModal'));
 
 /**
  * Настоящий ли это чат события.
@@ -210,7 +217,7 @@ export default function EventDetailModal({
   const isLocked = phase === 'locked';
   // Идёт ли событие прямо сейчас (период [date..dateEnd] включает сегодня) — «маячок в моменте».
   const today = getToday();
-  const isLiveNow = (event.date || today) <= today && (event.dateEnd || event.date) >= today;
+  const isLiveNow = (event.date || today) <= today && !isEventOver(event, today);
   const guide = getEventGuide(event);
 
   // Сигнал спроса «Мне интересно» → уходит организаторам в группу.
@@ -244,6 +251,25 @@ export default function EventDetailModal({
   const [promoActive, setPromoActive] = useState(false);
   /** Открыта ли «всплывашка» «Снять фото/видео» из кнопок под баннером. */
   const [showSnap, setShowSnap] = useState(false);
+  /** Идёт ли отправка приглашения в личку — на время запроса кнопка гасится. */
+  const [shareSending, setShareSending] = useState(false);
+  const tg = (window as any).Telegram?.WebApp;
+  /**
+   * Человек вступил в чат события.
+   *
+   * Telegram не сообщает, что человек ушёл по инвайт-ссылке, поэтому факт
+   * вступления запоминаем сами: один раз нажал «Вступил» (или «Уже в чате») —
+   * и предложение больше не вылетает. Ключ — по событию, чтобы, придя на
+   * следующий выезд, человек снова получил призыв.
+   */
+  const chatKey = `flint_chat_joined_${event.id}`;
+  const [chatJoined, setChatJoined] = useState<boolean>(() => {
+    try { return localStorage.getItem(chatKey) === '1'; } catch { return false; }
+  });
+  const markChatJoined = () => {
+    setChatJoined(true);
+    try { localStorage.setItem(chatKey, '1'); } catch { /* приватный режим */ }
+  };
   /** Фокус сторис: тап по точке в таблице прогресса открывает кружок этого дня. */
   const [storyFocus, setStoryFocus] = useState<{ telegramId: number; date: string } | null>(null);
   const medicalNote = String(logi.medical || '').trim();
@@ -265,22 +291,17 @@ export default function EventDetailModal({
    * возвращался. Теперь число видно ДО перехода — и оно же зовёт добавить
    * первым, когда пусто.
    */
+  // Счётчик берём из того же запроса, что грузит ленту (LiveMedia → onLoaded):
+  // раньше карточка дублировала media_list отдельным fetch.
   const [mediaCount, setMediaCount] = useState<{ photo: number; video: number } | null>(null);
-  useEffect(() => {
-    let alive = true;
-    fetch(`/api/events?action=media_list&id=${encodeURIComponent(event.id)}`)
-      .then((r) => r.json())
-      .then((d) => {
-        if (!alive) return;
-        const items = (d && d.items) || [];
-        setMediaCount({
-          photo: items.filter((i: any) => i.media_type !== 'video').length,
-          video: items.filter((i: any) => i.media_type === 'video').length,
-        });
-      })
-      .catch(() => {});
-    return () => { alive = false; };
-  }, [event.id]);
+  const [galleryUrl, setGalleryUrl] = useState<string | null>(null);
+  const onMediaLoaded = useCallback((items: { media_type: string }[], signedGallery?: string | null) => {
+    if (signedGallery) setGalleryUrl(signedGallery);
+    setMediaCount({
+      photo: items.filter((i) => i.media_type !== 'video').length,
+      video: items.filter((i) => i.media_type === 'video').length,
+    });
+  }, []);
 
   // Prevent scroll behind modal
   useEffect(() => {
@@ -289,6 +310,52 @@ export default function EventDetailModal({
       document.body.style.overflow = '';
     };
   }, []);
+
+  /**
+   * Положить готовое приглашение в личку.
+   *
+   * Через `t.me/share/url` сообщение выходило текстом сверху, а ссылкой
+   * в превью снизу — ровно наоборот, как просили: обложки сверху не было,
+   * а ссылка шла отдельной карточкой, а не внутри текста. Плюс человек
+   * уходил в стороннее окно выбора чата и терял нить разговора.
+   *
+   * Теперь сервер кладёт сообщение прямо в личку (api/events.ts,
+   * action=share): баннер-обложка сверху, подпись, ссылка спрятана под
+   * словами «Открыть и записаться». Дальше — обычное «переслать».
+   *
+   * Одна функция на обе кнопки — «позвать» в шапке карточки и «Поделиться»
+   * у прошедшего события. Разница в действии нулевая, значит не должно быть
+   * и разницы в коде.
+   */
+  const sendInvite = async () => {
+    if (shareSending) return;
+    setShareSending(true);
+    const fallback = () => {
+      let ref = '';
+      try { ref = localStorage.getItem('flint_ref') || ''; } catch { /* приватный режим */ }
+      const link = eventShareLink(event.id, ref);
+      const text = `Еду на «${event.title}» с FLINT. Присоединяйся!`;
+      openBot(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`);
+    };
+    try {
+      const r = await fetch('/api/events', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'share', eventId: event.id, initData: getInitData() }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (j.ok) {
+        haptic('success');
+        tg.showAlert?.('Готово. Приглашение лежит в чате с ботом — перешли его другу 👆');
+      } else {
+        fallback();
+      }
+    } catch {
+      fallback();
+    } finally {
+      setShareSending(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center md:p-4" id="event-detail-modal-root">
@@ -311,33 +378,12 @@ export default function EventDetailModal({
         className="bg-[#121212] md:rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white"
         id="detail-card-panel"
       >
-        {/* Пригласить друга — иконкой рядом с крестиком.
-            Отдельная плитка «Позвать» занимала целую клетку бенто-сетки, а в
-            блоке «Твоё участие» жила ВТОРАЯ кнопка с тем же действием. Одно
-            действие — один элемент, и тот в углу, где ему и место.
 
-            Ссылка ведёт на СТРАНИЦУ СОБЫТИЯ `/e/<id>`, а не на бота. Раньше
-            здесь был `?start=ev_<id>`: Telegram открывал превью бота — белое
-            окно с кнопкой «START», без афиши, даты и описания. У `/e/<id>`
-            есть og-разметка (картинка 1200×630, название, дата, место) — её и
-            видят друзья в пересылке, а кнопка на странице уже ведёт в бота. */}
         <button
           type="button"
-          onClick={() => {
-            let ref = '';
-            try { ref = localStorage.getItem('flint_ref') || ''; } catch { /* приватный режим */ }
-            const link = `${window.location.origin}/e/${event.id}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-            const text = `Еду на «${event.title}» с FLINT. Присоединяйся!`;
-            const tgApp = (window as any).Telegram?.WebApp;
-            // t.me/share/url не передаёт `startapp`/бота — только url+text, зато
-            // разворачивает превью ссылки: то, что нужно для афиши.
-            const shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
-            haptic('success');
-            if (tgApp?.openTelegramLink) tgApp.openTelegramLink(shareUrl);
-            else if (navigator.share) navigator.share({ text: `${text} ${link}` }).catch(() => {});
-            else { navigator.clipboard?.writeText(`${text} ${link}`); alert(`Ссылка скопирована — отправь её другу:\n${link}`); }
-          }}
-          className="absolute top-4 right-[4.25rem] z-30 p-2.5 rounded-full bg-black/60 border border-white/10 hover:border-brand/40 text-white/70 hover:text-[#E6FD3A] hover:scale-105 transition-all outline-none cursor-pointer"
+          disabled={shareSending}
+          onClick={() => { haptic('success'); void sendInvite(); }}
+          className="absolute top-4 right-[4.25rem] z-30 p-2.5 rounded-full bg-black/60 border border-white/10 hover:border-brand/40 text-white/70 hover:text-[#E6FD3A] hover:scale-105 transition-all outline-none cursor-pointer disabled:opacity-60"
           title="Пригласить друга"
         >
           <UserPlus className="w-5 h-5" />
@@ -397,9 +443,12 @@ export default function EventDetailModal({
               одно и то же окно, что и плитка «Снять» ниже. Три входа в одно
               действие — это не удобство, а шум поверх картинки события. */}
 
-          {/* Маячок «событие в моменте» — пульсирующий индикатор LIVE, пока событие идёт */}
+          {/* Маячок «событие в моменте» — пульсирующий индикатор LIVE, пока событие идёт.
+              СЛЕВА, а не справа: справа в этом же углу висят крестик и «позвать
+              друга», и маячок накрывался на них — на узком экране (а это в
+              Telegram всегда узкий экран) кнопки просто не попадали в кадр. */}
           {isLiveNow && (
-            <div className="absolute top-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 shadow-lg shadow-brand/30">
+            <div className="absolute top-4 left-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 shadow-lg shadow-brand/30">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-black opacity-60"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-black"></span>
@@ -458,7 +507,10 @@ export default function EventDetailModal({
                   ДЛЯ ЧЕЛЛЕНДЖА скрываем: кружки участников — в ChallengeStories. */}
               {!isChallenge && (
               <a
-                href={`/api/events?action=gallery&id=${encodeURIComponent(event.id)}`}
+                // Страница галереи требует подпись (g=…), без неё — 403. Подписанную
+                // ссылку отдаёт media_list; пока её нет, плитка не кликабельна.
+                href={galleryUrl || undefined}
+                aria-disabled={!galleryUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-brand border border-brand/30 hover:bg-brand/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
@@ -478,8 +530,10 @@ export default function EventDetailModal({
               </a>
               )}
               {/* Снять фото/видео ПРЯМО из карточки — не ждать всплывашки.
-                  ДЛЯ ЧЕЛЛЕНДЖА скрываем: отчёты идут в чат, не в галерею. */}
-              {!isChallenge && (
+                  ДЛЯ ЧЕЛЛЕНДЖА скрываем: отчёты идут в чат, не в галерею.
+                  Записанному — не главная: зелёный свет должен гореть на чате
+                  события, ведь это главное действие после записи, а не галерея. */}
+              {!isChallenge && !isRegistered && (
               <button
                 type="button"
                 onClick={() => setShowSnap(true)}
@@ -492,26 +546,42 @@ export default function EventDetailModal({
                 </span>
               </button>
               )}
-              {/* Чат события: для челленджа — ГЛАВНАЯ зелёная кнопка (пусть горит),
-                  для остальных — обычная нейтральная. */}
+              {!isChallenge && isRegistered && (
+              <button
+                type="button"
+                onClick={() => setShowSnap(true)}
+                className="flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider text-white/70 border border-white/15 hover:bg-white/10 rounded-xl px-2 py-3 transition-all text-center leading-tight"
+              >
+                <span className="text-base leading-none">📷</span>
+                Добавить
+                <span className="text-[9px] font-normal text-white/45 normal-case tracking-normal">
+                  снять или из галереи
+                </span>
+              </button>
+              )}
+              {/* Чат события — ГЛАВНАЯ зелёная кнопка для всех, кто записан, и для
+                  челленджа. Раньше зелёный свет горел на «Добавить фото», а
+                  чат был серой: вроде и записался, а главное действие спрятано.
+                  Записавшемуся чат — это первое, что нужно: в нём состав,
+                  выезд и все вопросы. */}
               {isRealChatUrl(event.telegramBotUrl) && (
                 <a
                   href={event.telegramBotUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className={`flex flex-col items-center justify-center gap-1 text-[10px] font-black font-mono uppercase tracking-wider rounded-xl px-2 py-3 transition-all text-center leading-tight ${
-                    isChallenge
+                    isChallenge || isRegistered
                       ? 'bg-brand text-black hover:bg-brand-hover shadow-lg shadow-brand/30'
                       : 'text-white/70 border border-white/15 hover:bg-white/10'
                   }`}
                 >
                   <span className="text-base leading-none">💬</span>
                   Чат события
-                  {isChallenge && (
-                    <span className="text-[9px] font-normal text-black/70 normal-case tracking-normal">
-                      отправь кружок сюда
-                    </span>
-                  )}
+                  <span className={`text-[9px] font-normal normal-case tracking-normal ${
+                    isChallenge || isRegistered ? 'text-black/60' : 'text-white/40'
+                  }`}>
+                    {isChallenge ? 'отправь кружок сюда' : 'вступить и написать'}
+                  </span>
                 </a>
               )}
               {/* Навигация по самой странице: событие длинное, и до программы,
@@ -591,7 +661,7 @@ export default function EventDetailModal({
           {/* Живая лента фото/видео события — каждый poll обновляется, как в сторис.
               Фото шлют в бота (media_upload), здесь они сразу появляются и сохраняются в истории.
               ДЛЯ ЧЕЛЛЕНДЖА НЕ ПОКАЗЫВАЕМ: кружки живут в Telegram (file_id), лента — в ChallengeStories. */}
-          {!isChallenge && <LiveMedia eventId={event.id} />}
+          {!isChallenge && <LiveMedia eventId={event.id} live={isLiveNow} onLoaded={onMediaLoaded} />}
 
           {/* Grid of Essential Parameters. На мобильном узкие отступы — больше места контенту. */}
           <div className="p-4 sm:p-6 space-y-6">
@@ -612,9 +682,13 @@ export default function EventDetailModal({
                 челленджа скрываем: там нет ни локации, ни даты-времени-проведения,
                 ни взноса. Вместо него — блок «Как засчитывается день» ниже. */}
             {!isChallenge && (
-            <div className="grid grid-cols-2 grid-flow-row-dense gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-start
+            <div className="grid grid-cols-2 grid-flow-row-dense gap-2.5 sm:gap-4 font-mono text-[11px] sm:text-xs items-stretch
                             [&>div]:p-3 sm:[&>div]:p-4 [&>div]:min-w-0 [&>div]:overflow-hidden
                             [&>div>div]:min-w-0 [&>div>div]:break-words [&>div]:gap-2 sm:[&>div]:gap-3">
+              {/* Дата и локация стоят в одной колонке и тянутся друг под друга
+                  (items-stretch): раньше стоял items-start, и плитка даты была
+                  ниже верхнего края своей ячейки — под ней зияла пустота, а
+                  локация уезжала вниз. Теперь обе ровно одной высоты. */}
               <div className="row-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Calendar className="w-5 h-5 text-brand shrink-0" />
                 <div className="space-y-1">
@@ -703,12 +777,13 @@ export default function EventDetailModal({
                 </div>
               )}
 
-              <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
-                <Tag className="w-5 h-5 text-brand shrink-0" />
-                <div className="space-y-1">
-                  <span className="text-white/40 uppercase text-[9px] tracking-wider block">УСЛОВИЯ УЧАСТИЯ</span>
-                  <DynamicPrice event={event} />
-                </div>
+              {/* Условия участия (взнос) — УЗКОЙ ПОЛОСОЙ на всю ширину, а не плиткой в
+                  две строки. Раньше он занимал столько же места, сколько
+                  состояние мест, хотя внутри — одна строка; из-за этого в сетке
+                  зияла дыра и карточка уезжала вниз. */}
+              <div className="col-span-2 bg-white/5 border border-white/5 rounded-2xl px-3 py-2.5 flex items-center gap-2.5">
+                <Tag className="w-4 h-4 text-brand shrink-0" />
+                <DynamicPrice event={event} />
               </div>
 
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
@@ -753,6 +828,53 @@ export default function EventDetailModal({
                 </div>
               </div>
             </div>
+            )}
+
+            {/* ПРИЗЫВ ВСТУПИТЬ В ЧАТ — сразу после записи.
+                Человек только что записался и смотрит карточку; чат события в
+                этот момент важнее карты: там состав, выезд и все вопросы.
+                Блок висит, пока человек не нажмёт «Вступил» или не вступит сам,
+                поэтому предложение не теряется среди прочего. */}
+            {isRegistered && isRealChatUrl(event.telegramBotUrl) && !chatJoined && (
+              <div className="rounded-2xl border border-brand/40 bg-brand/10 p-4 space-y-3">
+                <div className="flex items-start gap-3">
+                  <span className="w-9 h-9 rounded-xl bg-brand text-black flex items-center justify-center text-lg shrink-0">💬</span>
+                  <div className="min-w-0">
+                    <b className="block text-sm text-white">Вступи в чат события</b>
+                    <span className="text-[11px] text-white/65 leading-snug">
+                      Там состав, точка и время выезда, задачи и все вопросы по выезду.
+                      Без чата организатор не достанет тебя в день события.
+                    </span>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <a
+                    href={event.telegramBotUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-1 rounded-xl bg-brand text-black py-3 text-xs font-black uppercase tracking-wider text-center no-underline"
+                    onClick={(e: React.MouseEvent<HTMLAnchorElement>) => {
+                      // Внутри Telegram обычная ссылка открылась бы СИСТЕМНЫМ
+                      // браузером поверх приложения: вернуться в чат события
+                      // было бы уже нечем. openBot внутри мессенджера открывает
+                      // инвайт во встроенном окне и оставляет нас на месте.
+                      e.preventDefault();
+                      openBot(String(event.telegramBotUrl || ''));
+                      markChatJoined();
+                      haptic('success');
+                    }}
+                  >
+                    Вступить в чат
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => { markChatJoined(); haptic('success'); }}
+                    className="rounded-xl border border-white/15 px-3 text-[11px] font-bold text-white/60 hover:text-white transition-colors cursor-pointer"
+                  >
+                    Уже в чате
+                  </button>
+                </div>
+              </div>
             )}
 
             <div id="sect-my" className="scroll-mt-4" />
@@ -953,21 +1075,55 @@ export default function EventDetailModal({
                 <span className="flex items-center gap-2 font-mono text-[10px] font-black uppercase tracking-widest text-amber-300">
                   <Clock className="w-3.5 h-3.5" /> Как засчитывается день
                 </span>
-                <ol className="space-y-2.5">
+                {/* ТРИ СПОСОБА, а не три абзаца правил. Человек ленивый: он
+                    не читает условия, он их сканирует. Раньше здесь был текст
+                    на 15 строк, из которого новичок выходил с мыслью «надо
+                    разобраться» — и не отмечался. Теперь видно три плитки,
+                    и любую из них можно сделать молча. */}
+                <div className="grid grid-cols-3 gap-2">
                   {[
-                    { n: '1', t: 'Сделай результат за день', d: '5 км, потянулся, брусья, пресс — выбери сам. Главное, чтобы был РЕЗУЛЬТАТ, а не просто подъём. Время подъёма не важно.' },
-                    { n: '2', t: 'Добавь любое действие по желанию', d: 'Хочешь — медитация, чтение, закаливание. Что считаешь нужным для себя сегодня.' },
-                    { n: '3', t: 'Отправь отчёт в чат челленджа', d: 'Кружок (видео) или текст — бот засчитает день, посчитает серию и начислит баллы. Кружок покажи в движении: процесс не важен, важен факт.' },
+                    { icon: '🎥', t: 'Кружок', d: 'Видео с телефона' },
+                    { icon: '📷', t: 'Фото', d: 'Одно фото' },
+                    { icon: '💬', t: 'Слово', d: 'Текстом в чат' },
                   ].map((s) => (
-                    <li key={s.n} className="flex gap-3">
-                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-amber-400 text-[10px] font-black text-black">{s.n}</span>
-                      <div className="space-y-0.5">
-                        <b className="block text-[13px] text-white">{s.t}</b>
-                        <span className="block text-[11px] leading-5 text-white/55">{s.d}</span>
-                      </div>
-                    </li>
+                    <div key={s.t} className="rounded-xl border border-amber-400/25 bg-black/30 p-2.5 text-center">
+                      <div className="text-2xl leading-none">{s.icon}</div>
+                      <b className="block text-[12px] text-white mt-1.5">{s.t}</b>
+                      <span className="block text-[9px] leading-3 text-white/45 mt-0.5">{s.d}</span>
+                    </div>
                   ))}
-                </ol>
+                </div>
+                <p className="text-[12px] leading-5 text-white/70">
+                  Сделал что-то для себя — и <b className="text-white">отправь это в чат</b>.
+                  Бот засчитает день сам. Видео не обязано быть красивым.
+                </p>
+                {/* ЗАЧЕМ. Раньше этого не было нигде, и человек честно спрашивал
+                    «а время подъёма реально не важно?» — потому что заголовок
+                    обещал подъём, а правила про движение. Ответ должен лежать
+                    на карточке, а не в переписке. */}
+                <p className="rounded-xl bg-black/30 border border-amber-400/20 px-3 py-2.5 text-[12px] leading-5 text-white/70">
+                  <b className="text-amber-300">Зачем это.</b> Не чтобы встать
+                  раньше мира. Чтобы 90 дней подряд сделать хотя бы одно движение
+                  для себя — и не разорвать серию. Утро, вечер, спортзал или
+                  просто растяжка: время не важно, важен факт.
+                </p>
+                {/* ОДНА большая кнопка сразу под плитками. Человек ленивый:
+                    он не дочитывает блок до конца, он ищет, куда нажать.
+                    Кнопка стоит ровно там, где заканчивается объяснение. */}
+                {isRealChatUrl(event.telegramBotUrl) ? (
+                  <button
+                    type="button"
+                    onClick={() => { haptic('success'); openBot(String(event.telegramBotUrl || '')); }}
+                    className="w-full rounded-xl bg-amber-400 text-black py-3.5 text-xs font-black uppercase tracking-widest cursor-pointer border-none flex items-center justify-center gap-2"
+                  >
+                    ✊ Отметить день
+                    <Send className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <p className="rounded-xl border border-amber-400/20 px-3 py-2.5 text-[11px] leading-4 text-white/55">
+                    Чат челленджа ещё не создан — спроси организатора, куда скидывать отчёт.
+                  </p>
+                )}
                 <p className="border-t border-white/10 pt-3 text-[11px] leading-5 text-white/50">
                   Пропустил день — серия обнуляется, но день из истории не исчезает. Ценно не «идеально», а то, что ты возвращаешься завтра.
                 </p>
@@ -1302,13 +1458,21 @@ export default function EventDetailModal({
               >
                 Оставить отзыв
               </button>
+              {/**
+               * «Поделиться» у прошедшего события.
+               *
+               * Раньше здесь открывалась отдельная карточка-постер (EventPoster)
+               * с одной кнопкой — то есть ещё одно окно поверх карточки
+               * события. Владелец попросил его убрать: «Поделиться» должно
+               * делать ровно то же, что «Позвать» на идущем событии — класть
+               * готовое приглашение с обложкой в чат. Разницы в действии нет,
+               * значит нет и лишнего экрана между человеком и результатом.
+               */}
               <button
                 type="button"
-                onClick={() => {
-                  onClose();
-                  window.dispatchEvent(new CustomEvent('openPoster', { detail: { eventId: event.id } }));
-                }}
-                className="flex-1 bg-white/5 border border-white/10 text-white/70 py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-white/10 hover:text-white transition-colors cursor-pointer font-mono flex items-center justify-center gap-2"
+                disabled={shareSending}
+                onClick={() => { onClose(); void sendInvite(); }}
+                className="flex-1 bg-white/5 border border-white/10 text-white/70 py-4 rounded-2xl text-xs font-bold uppercase tracking-widest hover:bg-white/10 hover:text-white transition-colors cursor-pointer font-mono flex items-center justify-center gap-2 disabled:opacity-60"
               >
                 <Share2 className="w-4 h-4" />
                 Поделиться
@@ -1441,12 +1605,14 @@ export default function EventDetailModal({
 
         {/* Снять фото / видео прямо из карточки события (живые кнопки) */}
         {showSnap && (
-          <SnapModal
-            eventId={event.id}
-            eventTitle={event.title}
-            onClose={() => setShowSnap(false)}
-            // Живая лента (LiveMedia) сама опрашивает сервер каждые ~12с — кадр появится автоматически.
-          />
+          <Suspense fallback={null}>
+            <SnapModal
+              eventId={event.id}
+              eventTitle={event.title}
+              onClose={() => setShowSnap(false)}
+              // Живая лента (LiveMedia) сама опрашивает сервер каждые ~12с — кадр появится автоматически.
+            />
+          </Suspense>
         )}
 
       </motion.div>

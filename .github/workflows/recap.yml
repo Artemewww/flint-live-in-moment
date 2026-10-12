@@ -1,0 +1,62 @@
+name: Итоги событий
+
+# Оркестратор итогов: сбор кадров после события → сводка организатору →
+# автомонтаж ролика → публикация и рассылка клубу. Логика — в
+# scripts/recap/orchestrate.mts, монтаж — tools/recap/montage.py.
+#
+# Почему здесь, а не на Vercel: монтаж — это ffmpeg на минуты, а у функции
+# Vercel 60 с и нет ffmpeg; крон Vercel на бесплатном тарифе — раз в сутки.
+#
+# Нужные секреты репозитория (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TELEGRAM_BOT_TOKEN
+# Чтобы кнопки бота запускали монтаж сразу, а не в ближайший плановый прогон,
+# в Vercel добавить GH_DISPATCH_TOKEN (fine-grained token: Actions: read & write
+# на этот репозиторий).
+
+on:
+  schedule:
+    # Раз в 2 часа: стадии «сбор» и «сводка» не требуют точности до минуты,
+    # а минуты Actions на приватном репозитории считаются.
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'ID события (пусто — все недавние)'
+        required: false
+        default: ''
+
+concurrency:
+  # Два прогона одновременно разослали бы ролик дважды.
+  group: recap
+  cancel-in-progress: false
+
+jobs:
+  recap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Зависимости
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
+          python3 -m pip install --quiet Pillow
+
+      - name: Оркестратор
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          RECAP_EVENT_ID: ${{ inputs.event_id }}
+        # Пока секреты не добавлены — тихо выходим, а не падаем каждые 2 часа.
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "Секреты SUPABASE_URL/TELEGRAM_BOT_TOKEN не заданы — пропускаю."; exit 0
+          fi
+          npx -y tsx scripts/recap/orchestrate.mts
