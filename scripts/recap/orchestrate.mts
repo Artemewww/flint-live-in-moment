@@ -70,9 +70,19 @@ async function tgVideoFile(chatId: number, path: string, caption: string, markup
   return r.json();
 }
 
+/**
+ * app_config.value — ТЕКСТОВАЯ колонка: объект при записи уезжает строкой
+ * JSON и строкой же возвращается. Без разбора `value.stage` всегда undefined,
+ * и оркестратор не видел бы ни одного состояния.
+ */
+function cfg(v: any): any {
+  if (typeof v !== 'string') return v ?? null;
+  try { return JSON.parse(v); } catch { return v; }
+}
+
 async function getState(evId: string): Promise<RecapState | null> {
   const { data } = await db.from('app_config').select('value').eq('key', `recap:${evId}`).maybeSingle();
-  return (data as any)?.value || null;
+  return cfg((data as any)?.value) || null;
 }
 async function setState(evId: string, st: RecapState) {
   st.updated_at = new Date().toISOString();
@@ -98,9 +108,9 @@ async function groupChats(evId: string): Promise<number[]> {
 async function consents(evId: string, ids: number[]): Promise<Map<number, Consent>> {
   const out = new Map<number, Consent>();
   const { data: def } = await db.from('app_config').select('key,value').like('key', 'media_consent_default:%');
-  for (const r of def || []) out.set(Number(String(r.key).split(':')[1]), (r as any).value?.choice);
+  for (const r of def || []) out.set(Number(String(r.key).split(':')[1]), cfg((r as any).value)?.choice);
   const { data } = await db.from('app_config').select('key,value').like('key', `media_consent:${evId}:%`);
-  for (const r of data || []) out.set(Number(String(r.key).split(':').pop()), (r as any).value?.choice);
+  for (const r of data || []) out.set(Number(String(r.key).split(':').pop()), cfg((r as any).value)?.choice);
   return out;
 }
 

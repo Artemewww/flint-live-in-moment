@@ -5,9 +5,11 @@ import { haptic } from '../telegram';
 export type NavKey = 'home' | 'events' | 'history' | 'gear' | 'profile';
 
 /**
- * Нижнее меню — как в банковских приложениях: пять главных мест под
- * большим пальцем. Активная вкладка — «таблеткой» с подписью, остальные —
- * иконками, чтобы меню не превращалось в строку мелкого текста.
+ * Нижнее меню — пять главных мест под большим пальцем.
+ * Раньше подпись была только у активной вкладки, остальные — голые иконки:
+ * коробка и хлопушка ничего не говорили, и до «Снаряжения» и «Истории»
+ * люди не доходили. Теперь, как в 360 Padel и банковских приложениях,
+ * у каждой вкладки иконка и подпись, активная — лаймовой «таблеткой».
  * Лежит ПОД модальными окнами (z-40): карточка события и профиль его
  * перекрывают, и нижние кнопки «Записаться» ничем не заслонены.
  */
@@ -25,7 +27,7 @@ export default function BottomNav({ active, onSelect, badge }: { active: NavKey;
       style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
       aria-label="Главное меню"
     >
-      <div className="mx-auto flex max-w-md items-center justify-between px-3 pt-2">
+      <div className="mx-auto grid max-w-md grid-cols-5 px-1 pt-1.5">
         {items.map(({ k, label, Icon }) => {
           const on = active === k;
           return (
@@ -35,14 +37,14 @@ export default function BottomNav({ active, onSelect, badge }: { active: NavKey;
               onClick={() => { haptic('success'); onSelect(k); }}
               aria-label={label}
               aria-current={on ? 'page' : undefined}
-              className={`relative flex h-11 items-center justify-center gap-1.5 rounded-full border-0 transition-all ${
-                on ? 'bg-brand px-4 text-black' : 'w-11 bg-transparent text-white/55'
-              }`}
+              className="relative flex min-h-[48px] flex-col items-center justify-center gap-0.5 border-0 bg-transparent cursor-pointer"
             >
-              <Icon className="h-5 w-5 shrink-0" />
-              {on && <span className="text-[12px] font-black">{label}</span>}
+              <span className={`flex h-7 w-12 items-center justify-center rounded-full transition-colors ${on ? 'bg-brand text-black' : 'text-white/55'}`}>
+                <Icon className="h-[19px] w-[19px] shrink-0" />
+              </span>
+              <span className={`text-[10.5px] leading-none ${on ? 'font-black text-brand' : 'font-medium text-white/50'}`}>{label}</span>
               {k === 'events' && !!badge && !on && (
-                <span className="absolute right-0.5 top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-black text-black">{badge}</span>
+                <span className="absolute left-1/2 top-0 ml-2 flex h-4 min-w-4 items-center justify-center rounded-full bg-brand px-1 text-[9px] font-black text-black">{badge}</span>
               )}
             </button>
           );

@@ -245,6 +245,24 @@ export default function EventFeed({
                         </p>
                       )}
 
+                      {/* Челлендж — не «места», а день из скольких: идёт ли он и сколько осталось. */}
+                      {!isPast && event.isChallenge && event.dateEnd ? (() => {
+                        const d0 = new Date(`${event.date}T00:00:00`).getTime();
+                        const total = Math.round((new Date(`${event.dateEnd}T00:00:00`).getTime() - d0) / 86400000) + 1;
+                        const day = Math.min(total, Math.max(0, Math.round((new Date(`${today}T00:00:00`).getTime() - d0) / 86400000) + 1));
+                        return (
+                          <div className="space-y-1.5">
+                            <div className="flex justify-between text-[11px]">
+                              <span className="text-white/45">{day > 0 ? 'Идёт челлендж' : 'Старт скоро'}</span>
+                              <span className="font-bold text-brand tabular-nums">{day > 0 ? `день ${day} из ${total}` : `${total} дней`}</span>
+                            </div>
+                            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                              <div className="h-full rounded-full bg-brand" style={{ width: `${Math.max(3, (day / total) * 100)}%` }} />
+                            </div>
+                          </div>
+                        );
+                      })() : null}
+
                       {/* Места: шкала заполнения. Пустую шкалу у «без лимита» не рисуем. */}
                       {!isPast && !event.isChallenge && event.maxParticipants ? (() => {
                         const max = event.maxParticipants;
@@ -286,9 +304,17 @@ export default function EventFeed({
                             <ChevronRight className="w-4 h-4 text-white/25 group-hover:text-brand transition-colors" />
                           ) : isRegistered ? (
                             <span className="flex items-center gap-1 rounded-full bg-emerald-500/15 px-3 py-1.5 text-[12px] font-bold text-emerald-300">
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Ты едешь
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> {event.isChallenge ? 'Ты в челлендже' : 'Ты едешь'}
                             </span>
-                          ) : phase === 'open' && !event.isChallenge ? (
+                          ) : phase === 'open' && event.isChallenge ? (
+                            <button
+                              type="button"
+                              onClick={(e) => { e.stopPropagation(); onRegisterClick(event); }}
+                              className="rounded-full border-none bg-brand px-4 py-1.5 text-[12px] font-black text-black cursor-pointer hover:bg-brand-hover"
+                            >
+                              ⚡ Участвовать
+                            </button>
+                          ) : phase === 'open' ? (
                             <button
                               type="button"
                               onClick={(e) => { e.stopPropagation(); onRegisterClick(event); }}

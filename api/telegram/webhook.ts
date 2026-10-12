@@ -4899,7 +4899,10 @@ export default async function handler(req: any, res: any) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id });
         const key = `recap:${evIdR}`;
         const { data: curR } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle();
-        const st: any = { ...((curR as any)?.value || {}) };
+        // app_config.value — текст: разбираем JSON, иначе spread строки даёт мусор.
+        const rawR = (curR as any)?.value;
+        let st: any = {};
+        try { st = typeof rawR === 'string' ? JSON.parse(rawR) : (rawR || {}); } catch { st = {}; }
         const nowIso = new Date().toISOString();
         let reply = '';
         if (act === 'build' || act === 'redo') {

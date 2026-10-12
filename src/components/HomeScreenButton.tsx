@@ -22,7 +22,10 @@ export default function HomeScreenButton({ variant = 'row' }: { variant?: 'row' 
 
   useEffect(() => { homeScreenStatus().then(setStatus); }, []);
 
-  if (status === 'unsupported' || status === 'unknown') return null;
+  // 'unknown' НЕ прячем: Telegram на iPhone не умеет сообщать статус ярлыка и
+  // отвечает «не знаю» — из-за этого кнопку не было видно вовсе. Прячем только
+  // там, где ярлык точно есть или клиент точно не умеет его добавлять.
+  if (status === 'unsupported') return null;
   if (variant === 'banner' && (status === 'added' || dismissed)) return null;
 
   const add = async () => {

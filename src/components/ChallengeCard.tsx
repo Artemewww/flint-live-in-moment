@@ -113,44 +113,41 @@ export default function ChallengeCard({
       id={`challenge-card-${event.id}`}
       onClick={() => { haptic('success'); onOpenDetails(event); }}
       title={stats.doneToday ? 'Посмотреть челлендж' : 'Открыть и отметить день'}
-      className="relative overflow-hidden rounded-2xl border border-amber-500/30 bg-gradient-to-br from-[#141007] via-[#0F0D08] to-[#0A0A0A] shadow-lg animate-pulse w-full text-left cursor-pointer block"
+      className="relative overflow-hidden rounded-2xl border border-brand/30 bg-gradient-to-br from-[#141007] via-[#0F0D08] to-[#0A0A0A] shadow-lg animate-pulse w-full text-left cursor-pointer block"
     >
       {/* Пульс: мягкое дыхание фона — челлендж живой, он идёт прямо сейчас. */}
-      <span className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-amber-500/10 blur-3xl" />
+      <span className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-brand/10 blur-3xl" />
       <span className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(255,176,0,0.08),transparent_55%)]" />
 
       <span className="relative flex items-center gap-3 p-2.5 pr-3">
         {/* Обложка квадратом 76px (как FundraiserBanner) */}
-        <span className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-amber-500/30 to-amber-600/10 flex items-center justify-center">
-          <span className="text-3xl">🔥</span>
-          <span className="absolute left-1 top-1 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-amber-300">челлендж</span>
+        <span className="relative h-[76px] w-[76px] shrink-0 overflow-hidden rounded-xl bg-gradient-to-br from-brand/25 to-brand/5 flex items-center justify-center">
+          <Zap className="h-8 w-8 fill-brand text-brand" />
+          <span className="absolute left-1 top-1 rounded-md bg-black/70 px-1.5 py-0.5 font-mono text-[9px] font-bold uppercase tracking-wider text-brand">челлендж</span>
         </span>
 
         {/* Основной контент */}
         <span className="min-w-0 flex-1 space-y-1">
           <span className="flex items-center justify-between gap-2">
             <span className="line-clamp-1 text-[13px] font-black uppercase leading-tight">{event.title}</span>
-            <span className="shrink-0 font-mono text-[10px] uppercase tracking-wider text-white/40">
-              {stats.dayNo}/{stats.totalDays}
-            </span>
           </span>
 
           {/* Три топ-метрики: день, серия, статус */}
           <span className="flex flex-wrap items-center gap-2 text-[11px]">
             <span className="inline-flex items-center gap-1 rounded-md bg-white/[.06] px-1.5 py-0.5">
-              <Target className="h-3 w-3 text-amber-300" />
-              <b className="text-white">День {stats.dayNo}</b>
+              <Target className="h-3 w-3 text-brand" />
+              <b className="text-white">День {stats.dayNo}</b><span className="text-white/45">из {stats.totalDays}</span>
             </span>
             {stats.streak > 0 && (
               <span className="inline-flex items-center gap-1 rounded-md bg-white/[.06] px-1.5 py-0.5">
-                <Flame className="h-3 w-3 text-orange-400" />
+                <Flame className="h-3 w-3 text-brand" />
                 <b className="text-white">{stats.streak}</b>
                 <span className="text-white/50">подряд</span>
               </span>
             )}
-            <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ${stats.doneToday ? 'bg-amber-400/20' : 'bg-white/[.06]'}`}>
+            <span className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ${stats.doneToday ? 'bg-brand/20' : 'bg-white/[.06]'}`}>
               {stats.doneToday ? (
-                <><Zap className="h-3 w-3 text-amber-300" /><b className="text-amber-300">✓ Отмечен{lastTime ? ` ${lastTime}` : ''}</b></>
+                <><Zap className="h-3 w-3 text-brand" /><b className="text-brand">✓ Отмечен{lastTime ? ` ${lastTime}` : ''}</b></>
               ) : (
                 <><Video className="h-3 w-3 text-white/60" /><span className="text-white/60">Ждём отчёт</span></>
               )}
@@ -160,16 +157,17 @@ export default function ChallengeCard({
           {/* Прогресс-бар: пройдено дней */}
           <span className="flex items-center gap-2">
             <span className="flex-1 h-1.5 overflow-hidden rounded-full bg-white/10">
-              <span className="block h-full rounded-full bg-gradient-to-r from-amber-400 to-orange-500 transition-all duration-700" style={{ width: `${stats.percent}%` }} />
+              <span className="block h-full rounded-full bg-gradient-to-r from-brand to-brand transition-all duration-700" style={{ width: `${Math.min(100, Math.round((stats.daysDone / Math.max(1, stats.dayNo)) * 100))}%` }} />
             </span>
-            <span className="font-mono text-[10px] text-white/50">{stats.daysDone}/{stats.totalDays}</span>
+            {/* Не «13/94» без подписи: свои отчёты против ПРОШЕДШИХ дней — так видно, отстаёшь ли. */}
+            <span className="shrink-0 text-[10px] text-white/55"><b className="text-white">{stats.daysDone}</b> отчётов из {stats.dayNo} дн.</span>
           </span>
         </span>
 
         {/* Стрелка-CTA: осталась как указатель «сюда», но больше не единственная
             точка входа — вся карточка кликабельна. */}
         <span
-          className="shrink-0 p-2 rounded-xl bg-amber-400/10 border border-amber-400/30 text-amber-300"
+          className="shrink-0 p-2 rounded-xl bg-brand/10 border border-brand/30 text-brand"
           aria-hidden="true"
         >
           <ArrowRight className="h-4 w-4" />

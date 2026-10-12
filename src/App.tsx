@@ -6,6 +6,7 @@ import {
 import { CommunityEvent, Registration, getToday, isEventOver } from './types';
 import { getInitData, getStartParam, getTelegramUser, openBot } from './telegram';
 import { lazyWithRetry } from './lazy';
+import RecentRecaps from './components/RecentRecaps';
 import ErrorBoundary from './components/ErrorBoundary';
 import InfoSection from './components/InfoSection';
 import EventFeed from './components/EventFeed';
@@ -310,6 +311,7 @@ export default function App() {
   const [showBirthdayCalendar, setShowBirthdayCalendar] = useState<boolean>(false);
   const [showMusicPlayer, setShowMusicPlayer] = useState<boolean>(false);
   const [showHistory, setShowHistory] = useState<boolean>(false);
+  const [historyStartId, setHistoryStartId] = useState<string | null>(null);
   /** Событие, ради которого показана «всплывашка» «Снять фото/видео» (идёт сейчас). */
   const [promptEvent, setPromptEvent] = useState<CommunityEvent | null>(null);
   const [birthdays, setBirthdays] = useState<Array<{id: string, name: string, date: string, year?: number, telegram?: string}>>([]);
@@ -1393,6 +1395,9 @@ export default function App() {
               </section>
             )}
 
+            {/* Как прошли последние выезды — повод записаться на следующий. */}
+            <RecentRecaps onOpen={(id) => { setHistoryStartId(id); setShowHistory(true); }} />
+
             {/* Compact Calendar Grid with no headers */}
             <section id="calendar-widget-block" className="pt-2">
               <CalendarGrid
@@ -1721,7 +1726,7 @@ export default function App() {
       {/* HISTORY — видео прошедших событий сообщества */}
       {showHistory && (
         <LazyScreen area="история" label="Открываем историю…">
-          <HistoryStories onClose={() => setShowHistory(false)} />
+          <HistoryStories initialId={historyStartId} onClose={() => { setShowHistory(false); setHistoryStartId(null); }} />
         </LazyScreen>
       )}
 

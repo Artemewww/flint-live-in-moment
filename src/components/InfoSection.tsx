@@ -152,7 +152,8 @@ export default function InfoSection({
           {!alreadyStarted && (
           <div className="bg-black/70 border border-brand/35 backdrop-blur-md rounded-2xl p-3 sm:px-5 sm:py-2.5 max-w-sm flex flex-col text-left">
             <span className="text-white/50 font-bold uppercase tracking-widest text-[9px] mb-1 block">
-              До твоей следующей перезагрузки осталось...
+              {/* «Твоей» — только если человек правда записан: иначе это чужой выезд. */}
+              {isRegistered ? 'До твоей следующей перезагрузки осталось…' : 'До старта осталось…'}
             </span>
             <div className="flex items-center gap-2 font-mono text-xl sm:text-2xl font-black text-brand">
               <div className="flex flex-col items-center">

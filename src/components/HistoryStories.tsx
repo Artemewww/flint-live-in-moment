@@ -23,6 +23,8 @@ interface HistoryItem {
 
 interface HistoryStoriesProps {
   onClose: () => void;
+  /** Открыть сразу этот выезд (тап по истории на главной). */
+  initialId?: string | null;
 }
 
 /** Сколько фото показываем в просмотре: дальше всё равно лента вниз. */
@@ -46,7 +48,7 @@ const MAX_PHOTOS = 24;
  *
  * Плюс «кружки» — аватарки тех, кто был: событие видно не строкой, а составом.
  */
-export default function HistoryStories({ onClose }: HistoryStoriesProps) {
+export default function HistoryStories({ onClose, initialId }: HistoryStoriesProps) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
@@ -67,7 +69,15 @@ export default function HistoryStories({ onClose }: HistoryStoriesProps) {
     let alive = true;
     fetch('/api/events?action=archive', { headers: { 'X-Telegram-Init-Data': getInitData() } })
       .then((r) => (r.ok ? r.json() : Promise.reject(String(r.status))))
-      .then((j) => { if (alive) setItems(Array.isArray(j?.items) ? j.items : []); })
+      .then((j) => {
+        if (!alive) return;
+        const list: HistoryItem[] = Array.isArray(j?.items) ? j.items : [];
+        setItems(list);
+        if (initialId) {
+          const i = list.findIndex((x) => x.id === initialId);
+          if (i >= 0) setActive(i);
+        }
+      })
       .catch(() => { if (alive) setFailed(true); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };

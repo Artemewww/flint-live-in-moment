@@ -1443,6 +1443,51 @@ export default function EventDetailModal({
             У записанного действия нет: панель держала полосу экрана ради
             надписи «участие подтверждено» и двух ссылок, которые теперь живут
             плитками наверху. Сам факт записи виден в блоке «Твоё участие». */}
+        {/* ГЛАВНОЕ ДЕЙСТВИЕ ЗАПИСАННОГО — внизу, под большим пальцем.
+            Раньше у записанного нижней панели не было вовсе, а «Чат события» и
+            отчёт челленджа жили плитками в шапке: до них приходилось тянуться
+            через весь экран. В челлендже главное — отчитаться за сегодня. */}
+        {isRegistered && phase !== 'past' && !isLocked && (
+          <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-white/10 bg-[#161616] flex gap-2.5">
+            {isChallenge ? (
+              isRealChatUrl(event.telegramBotUrl) ? (
+                <a
+                  href={event.telegramBotUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => haptic('success')}
+                  className="flex-1 flex items-center justify-center gap-3 rounded-2xl bg-brand py-3.5 text-black shadow-lg shadow-brand/20 no-underline"
+                >
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-black text-brand text-2xl font-black leading-none">+</span>
+                  <span className="text-left leading-tight">
+                    <span className="block text-[15px] font-black uppercase">Отчёт за сегодня</span>
+                    <span className="block text-[12px] text-black/60">кружок, фото или текст в чат</span>
+                  </span>
+                </a>
+              ) : null
+            ) : (
+              <>
+                {isRealChatUrl(event.telegramBotUrl) && (
+                  <a
+                    href={event.telegramBotUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex-[2] flex items-center justify-center gap-2 rounded-2xl bg-brand py-3.5 text-[14px] font-black uppercase text-black no-underline shadow-lg shadow-brand/20"
+                  >
+                    💬 Чат события
+                  </a>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowSnap(true)}
+                  className="flex-1 flex items-center justify-center gap-2 rounded-2xl border border-white/15 bg-white/5 py-3.5 text-[14px] font-bold text-white cursor-pointer"
+                >
+                  📷 Кадры
+                </button>
+              </>
+            )}
+          </div>
+        )}
         {!(isRegistered && phase !== 'past' && !isLocked) && (
         <div className="p-4 sm:p-6 pb-[max(1rem,env(safe-area-inset-bottom))] sm:pb-6 border-t border-white/10 bg-[#161616] flex flex-col sm:flex-row gap-3 items-stretch justify-between snap-none">
           {phase === 'past' ? (
@@ -1591,6 +1636,9 @@ export default function EventDetailModal({
                     жмёт. Призыв должен называть ровно одно действие. */}
                 {spotsFull ? (
                   <span>Все места заняты</span>
+                ) : isChallenge ? (
+                  /* Челлендж — не поездка: мы не «едем», а действуем каждый день. */
+                  <>⚡ Вступить в челлендж</>
                 ) : (
                   <>
                     Записаться
