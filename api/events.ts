@@ -1127,8 +1127,9 @@ async function handleShareInvite(body: any, req: any, res: any) {
   // Реф-код пригласившего — без него пересланное приглашение ничего не приносит.
   let ref = '';
   const { data: m } = await supabase
-    .from('members').select('ref_code').eq('telegram_id', user.id).maybeSingle();
-  if (m?.ref_code) ref = String(m.ref_code);
+    .from('members').select('ref_code,status,is_core').eq('telegram_id', user.id).maybeSingle();
+  // Код не принятого участника не впускает — такую ссылку не раздаём.
+  if (m?.ref_code && ((m as any).status === 'approved' || (m as any).is_core === true)) ref = String(m.ref_code);
 
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app';
   const site = `https://${host}`;

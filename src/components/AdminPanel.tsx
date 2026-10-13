@@ -1328,6 +1328,15 @@ function ExpenseSplitter({ registrations, event }: { registrations: any[]; event
   );
 }
 
+/**
+ * «Не прошёл верификацию»: человек тронул бота (строка в members есть), но не
+ * вступил — ни в клубе, ни на модерации, ни отклонён. Раньше такие висели в
+ * общем списке как «новичок», и их путали с принятыми.
+ */
+function isUnverified(m: any): boolean {
+  return !m.isCore && !['approved', 'pending_review', 'blocked'].includes(String(m.status || 'pending'));
+}
+
 export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDeleteEvent, onClose, onViewSite }: AdminPanelProps) {
   const [isAuthenticated, setIsAuthenticated] = useState(readSession);
   // Вход по подписи Telegram: пока идёт проверка, вместо формы — ожидание.
@@ -1388,7 +1397,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   const [audienceQuery, setAudienceQuery] = useState('');
   /** Фильтр аудитории по категории. `botoff` — кто остановил бота: им не дойдёт
    *  ни одна рассылка, и это нужно видеть отдельно, а не гадать после отправки. */
-  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules' | 'nodata'>('all');
+  const [audienceFilter, setAudienceFilter] = useState<'all' | 'core' | 'unverified' | 'blocked' | 'male' | 'female' | 'botoff' | 'norules' | 'nodata'>('all');
+  // Список прокручен — фильтры сворачиваются в одну строку, место отдаём людям.
+  const [audienceScrolled, setAudienceScrolled] = useState(false);
   /** Сортировка аудитории. `newest`/`oldest` — по дате входа в клуб («сколько дней с нами»). */
   // По умолчанию — СНАЧАЛА НОВЫЕ. Дефолт «по баллам» прятал только что
   // принятого человека в середину списка из 68: у новичка 0 баллов, как и у
@@ -1743,6 +1754,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
     let list = ((audience?.members) || []).filter((m: any) => {
       if (audienceFilter === 'core' && !m.isCore) return false;
       if (audienceFilter === 'blocked' && m.status !== 'blocked') return false;
+      // Тронули бота, но дальше не пошли: не в клубе, не на модерации, не отклонены.
+      if (audienceFilter === 'unverified' && !isUnverified(m)) return false;
       if (audienceFilter === 'male' && m.gender !== 'male') return false;
       if (audienceFilter === 'female' && m.gender !== 'female') return false;
       if (audienceFilter === 'botoff' && m.botActive !== false) return false;
@@ -2230,6 +2243,32 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       });
     } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
     finally { setProfileSending(false); }
+  };
+
+  const [nudgeSending, setNudgeSending] = useState(false);
+  /** Напомнить «не прошедшим» дописать анкету — личным сообщением от бота. */
+  const nudgeUnverified = async (ids: number[]) => {
+    if (!ids.length || nudgeSending) return;
+    if (!window.confirm(`Отправить напоминание с кнопкой «Заполнить анкету» — ${ids.length} чел.?\nТем, кому писали меньше 3 дней назад, повторно не уйдёт.`)) return;
+    setNudgeSending(true);
+    try {
+      const res = await adminFetch('/api/admin/registrations?action=nudge_unverified', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ telegramIds: ids }),
+      });
+      if (res.status === 401) { handleLogout(); return; }
+      const j = await res.json();
+      const extra = [
+        j.skipped ? `${j.skipped} — уже писали недавно` : '',
+        j.failed ? `${j.failed} не дошло (бот остановлен)` : '',
+        j.notEligible ? `${j.notEligible} уже не нужно` : '',
+      ].filter(Boolean).join(' · ');
+      setActionMsg({
+        ok: !!j.ok || (!j.error && j.sent === 0),
+        text: j.error ? j.error : `Напоминание ушло ${j.sent} из ${j.total}${extra ? ` · ${extra}` : ''}`,
+      });
+    } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+    finally { setNudgeSending(false); }
   };
 
   const sendRulesToFiltered = async () => {
@@ -4522,21 +4561,23 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                 </div>
               </div>
               {audience && (audience.members || []).length > 0 && (
-                <div className="px-4 md:px-6 pt-3 space-y-2">
+                <div className={`px-4 md:px-6 transition-all ${audienceScrolled ? 'pt-2 space-y-1.5' : 'pt-3 space-y-2'}`}>
                   <input
                     type="text"
                     value={audienceQuery}
                     onChange={(e) => setAudienceQuery(e.target.value)}
                     placeholder="Поиск по имени или @нику"
-                    className="w-full bg-white/5 border border-white/10 rounded-xl p-2.5 text-white text-sm placeholder:text-white/30 focus:border-brand outline-none"
+                    className={`w-full bg-white/5 border border-white/10 rounded-xl text-white text-sm placeholder:text-white/30 focus:border-brand outline-none ${audienceScrolled ? 'p-2' : 'p-2.5'}`}
                   />
-                  <div className="flex flex-wrap gap-2">
-                    {([['all', 'Все'], ['core', 'Костяк'], ['norules', '📜 Без правил'], ['nodata', '📇 Без анкеты'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
+                  {/* Одна строка с горизонтальной прокруткой вместо 2–3 строк
+                      переноса: фильтры не съедают пол-экрана у списка людей. */}
+                  <div className="flex flex-nowrap gap-1.5 overflow-x-auto -mx-4 px-4 md:-mx-6 md:px-6 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {([['all', `Все · ${(audience.members || []).length}`], ['unverified', `🚧 Не прошли · ${(audience.members || []).filter(isUnverified).length}`], ['core', 'Костяк'], ['norules', '📜 Без правил'], ['nodata', '📇 Без анкеты'], ['blocked', 'Заблокированные'], ['male', '♂ Мужчины'], ['female', '♀ Женщины'], ['botoff', '⛔ Бот выкл.']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"
                         onClick={() => setAudienceFilter(key)}
-                        className={`text-[10px] px-2.5 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceFilter === key ? 'bg-brand text-black' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
+                        className={`shrink-0 whitespace-nowrap text-[10px] px-2.5 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceFilter === key ? 'bg-brand text-black' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
                       >
                         {label}
                       </button>
@@ -4545,7 +4586,21 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   {/* Дожать кодекс: список тех, кто не принял, и отправка им
                       правил кнопкой. Повторять можно сколько угодно — пока
                       человек не нажмёт «Принимаю» в боте. */}
-                  {audienceFilter === 'nodata' && (
+                  {audienceFilter === 'unverified' && !audienceScrolled && (
+                    <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
+                      <span className="text-[11px] text-orange-200">
+                        Нажали «Старт», но анкету не прошли: <b>{visibleAudience().length}</b>. Напомни — бот напишет каждому лично с кнопкой анкеты.
+                      </span>
+                      <button
+                        onClick={() => nudgeUnverified(visibleAudience().map((m: any) => Number(m.telegramId)).filter((n: number) => n > 0))}
+                        disabled={nudgeSending || visibleAudience().length === 0}
+                        className="text-[10px] px-3 py-1.5 rounded-lg bg-brand text-black font-black uppercase cursor-pointer border-none disabled:opacity-40"
+                      >
+                        {nudgeSending ? 'Отправляю…' : `📩 Напомнить (${visibleAudience().length})`}
+                      </button>
+                    </div>
+                  )}
+                  {audienceFilter === 'nodata' && !audienceScrolled && (
                     <div className="bg-sky-500/10 border border-sky-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[11px] text-sky-200">
                         Без пола или даты рождения: <b>{visibleAudience().length}</b>. Клуб не знает, кого зовёт на выезды.
@@ -4559,7 +4614,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                       </button>
                     </div>
                   )}
-                  {audienceFilter === 'norules' && (
+                  {audienceFilter === 'norules' && !audienceScrolled && (
                     <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-center justify-between gap-2 flex-wrap">
                       <span className="text-[11px] text-amber-200">
                         Не приняли правила: <b>{visibleAudience().length}</b>. Им закрыта запись на события.
@@ -4574,14 +4629,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     </div>
                   )}
 
-                  <div className="flex gap-2 items-center">
-                    <span className="text-[9px] text-white/30 uppercase font-mono">Сортировка:</span>
+                  <div className={`flex flex-nowrap gap-1.5 items-center overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${audienceScrolled ? 'hidden' : ''}`}>
+                    <span className="shrink-0 text-[9px] text-white/30 uppercase font-mono">Сортировка:</span>
                     {([['default', 'По умолч.'], ['newest', '🆕 Новички'], ['oldest', '⭐ Старожилы'], ['points', 'Баллы'], ['attended', 'Визиты'], ['name', 'Имя']] as const).map(([key, label]) => (
                       <button
                         key={key}
                         type="button"
                         onClick={() => setAudienceSort(key)}
-                        className={`text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceSort === key ? 'bg-white/20 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
+                        className={`shrink-0 whitespace-nowrap text-[10px] px-2 py-1 rounded-lg font-bold uppercase transition-all cursor-pointer border-none ${audienceSort === key ? 'bg-white/20 text-white' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}
                       >
                         {label}
                       </button>
@@ -4589,7 +4644,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   </div>
                 </div>
               )}
-              <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              <div className="flex-1 overflow-y-auto p-4 space-y-2"
+                onScroll={(e) => {
+                  // Гистерезис, чтобы шапка не «дрожала» на границе.
+                  const top = (e.currentTarget as HTMLDivElement).scrollTop;
+                  if (!audienceScrolled && top > 48) setAudienceScrolled(true);
+                  else if (audienceScrolled && top < 8) setAudienceScrolled(false);
+                }}>
                 {!audience ? (
                   <p className="text-white/40 text-xs text-center py-8">Загрузка…</p>
                 ) : audience.members?.length === 0 ? (
@@ -4638,9 +4699,16 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               : <span className="text-[9px] bg-amber-500/15 text-amber-300/80 px-1.5 py-0.5 rounded font-mono">ценности не подтверждены</span>}
                           </div>
                           <div className="flex items-center gap-2 mt-1 flex-wrap">
-                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${m.status === 'approved' ? 'bg-brand/15 text-brand' : m.status === 'blocked' ? 'bg-rose-500/15 text-rose-400' : 'bg-white/10 text-white/50'}`}>
-                              {m.status === 'approved' ? 'в клубе' : m.status === 'pending_review' ? 'на модерации' : m.status === 'blocked' ? 'отклонён' : 'новичок'}
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${m.status === 'approved' ? 'bg-brand/15 text-brand' : m.status === 'blocked' ? 'bg-rose-500/15 text-rose-400' : isUnverified(m) ? 'bg-orange-500/15 text-orange-300' : 'bg-white/10 text-white/50'}`}>
+                              {m.isCore ? 'костяк' : m.status === 'approved' ? 'в клубе' : m.status === 'pending_review' ? 'на модерации' : m.status === 'blocked' ? 'отклонён' : m.phone ? '🚧 анкета есть, не принят' : '🚧 не прошёл верификацию'}
                             </span>
+                            {isUnverified(m) && (
+                              <button type="button" onClick={() => nudgeUnverified([Number(m.telegramId)])} disabled={nudgeSending}
+                                className="text-[9px] bg-orange-500/15 text-orange-200 hover:bg-orange-500/25 px-1.5 py-0.5 rounded font-mono cursor-pointer border-none disabled:opacity-40"
+                                title="Бот напишет лично и даст кнопку анкеты">
+                                📩 напомнить
+                              </button>
+                            )}
                             {m.realTelegram && (
                               <span className={`text-[9px] font-mono ${m.botActive ? 'text-white/40' : 'text-rose-400'}`}>
                                 {m.botActive ? '🟢 бот активен' : '⛔ заблокировал бота'}
@@ -5817,8 +5885,13 @@ function AddEventModal({ onClose, onAdd }: {
     // Карточка для шеринга собирается сама: без неё пересланная ссылка
     // выглядит голой. Не получилось (нет обложки/сети) — событие всё равно создаём.
     let shareUrl = '';
+    // Не дольше 15 секунд: медленная сеть или зависшая обложка раньше держали
+    // кнопку в «Создаю…» бесконечно — событие так и не уходило на сервер.
     try {
-      shareUrl = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
+      shareUrl = await Promise.race([
+        makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image }),
+        new Promise<string>((_, rej) => setTimeout(() => rej(new Error('timeout')), 15000)),
+      ]);
     } catch { /* без карточки */ }
 
     const newEvent: CommunityEvent = {
@@ -5875,8 +5948,22 @@ function AddEventModal({ onClose, onAdd }: {
 
   const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30';
 
-  return (
-    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0E0E0E]" id="add-event-modal">
+  // Чего не хватает для создания — вслух, а не серой кнопкой без объяснений.
+  const missing = [
+    !formData.title && 'название',
+    !formData.date && 'дату',
+    !organizerId && 'организатора',
+  ].filter(Boolean) as string[];
+  const canCreate = missing.length === 0 && !creating;
+
+  /**
+   * Портал в body: панель админки — свой стекинг-контекст (z-50 + анимация
+   * motion), и окно внутри неё на телефоне оказывалось под чужими слоями —
+   * шапка с «Создать» перекрывалась, создать событие было нельзя.
+   */
+  return createPortal(
+    <div className="fixed inset-0 z-[90] flex flex-col bg-[#0E0E0E]" id="add-event-modal"
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       {/* Шапка на весь экран — как в Telegram: заголовок и «Создать» всегда
           под рукой, даже когда форма уехала вниз за скроллом. */}
       <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-[#121212]/95 px-4 py-3 backdrop-blur sm:px-8">
@@ -5885,7 +5972,7 @@ function AddEventModal({ onClose, onAdd }: {
           <p className="text-[10px] font-mono uppercase tracking-widest text-white/40">Создание</p>
           <h3 className="truncate font-bold text-base uppercase sm:text-lg">Новое мероприятие</h3>
         </div>
-        <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId || creating}
+        <button onClick={handleAdd} disabled={!canCreate}
           className="shrink-0 rounded-xl border-none bg-brand px-4 py-2.5 text-xs font-black uppercase text-black cursor-pointer hover:bg-brand-hover disabled:opacity-50">
           {creating ? 'Создаю…' : '✅ Создать'}
         </button>
@@ -5894,7 +5981,7 @@ function AddEventModal({ onClose, onAdd }: {
       {/* Весь экран под контент: промпт ИИ, превью и расширенный редактор
           вводятся в полноформатном окне, а не в маленькой карточке. */}
       <div className="flex-1 overflow-y-auto">
-        <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-28 sm:px-8">
+        <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-8 sm:px-8">
           <h3 className="sr-only">Новое мероприятие</h3>
 
         {/* ШАГ 1: Промпт ИИ (всегда виден) */}
@@ -6087,6 +6174,22 @@ function AddEventModal({ onClose, onAdd }: {
         </p>
         </div>
       </div>
-    </div>
+
+      {/* Главная кнопка — внизу, под большим пальцем, как во всём приложении.
+          Шапка остаётся запасным входом. */}
+      <div className="shrink-0 border-t border-white/10 bg-[#121212]/95 px-4 pt-3 backdrop-blur sm:px-8"
+        style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
+        <div className="mx-auto w-full max-w-3xl">
+          {missing.length > 0 && (
+            <p className="mb-2 text-center text-[11px] text-amber-300/90">Чтобы создать, укажи: {missing.join(', ')}</p>
+          )}
+          <button onClick={handleAdd} disabled={!canCreate}
+            className="w-full rounded-xl border-none bg-brand py-3.5 text-sm font-black uppercase text-black cursor-pointer hover:bg-brand-hover disabled:opacity-40">
+            {creating ? 'Создаю…' : '✅ Создать мероприятие'}
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
   );
 }

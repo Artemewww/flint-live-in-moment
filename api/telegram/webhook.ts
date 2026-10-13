@@ -1465,8 +1465,11 @@ async function notifyWaitlist(rideId: number, kind: 'car' | 'tent') {
 
 /** Реф-система: выдать участнику личный ref_code (если ещё нет). */
 async function ensureRefCode(tgId: number): Promise<string | null> {
-  const { data } = await supabase.from('members').select('ref_code').eq('telegram_id', tgId).maybeSingle();
-  if (data?.ref_code) return data.ref_code;
+  const { data } = await supabase.from('members').select('ref_code,status,is_core').eq('telegram_id', tgId).maybeSingle();
+  // Ссылку раздаём только тем, кто сам в клубе: ссылка не принятого не
+  // впускает, и приглашённый упирался в «пригласивший ещё не принят».
+  if (!data || !((data as any).status === 'approved' || (data as any).is_core === true)) return null;
+  if (data.ref_code) return data.ref_code;
   for (let i = 0; i < 5; i++) {
     const c = Math.random().toString(36).slice(2, 9);
     const { error } = await supabase.from('members').update({ ref_code: c }).eq('telegram_id', tgId);
@@ -1481,22 +1484,50 @@ async function ensureRefCode(tgId: number): Promise<string | null> {
  * отклонённый мог бы наплодить себе «клуб» из своей же ссылки.
  * Возвращает true, если человек принят в клуб по этой ссылке.
  */
-async function bindReferrer(from: any, code: string): Promise<boolean> {
+type RefResult = { ok: boolean; reason?: 'blocked' | 'bad_code' | 'self' | 'inviter_out' | 'pending_review'; inviter?: any };
+
+/**
+ * Код из ссылки → пригласивший. Если кода нет среди действующих (человек
+ * перевыпустил ссылку в профиле), ищем его в истории приглашений: старая
+ * ссылка, разосланная друзьям, не должна молча превращаться в «не действует».
+ */
+async function inviterByCode(code: string): Promise<any | null> {
+  const { data: inv } = await supabase
+    .from('members').select('telegram_id,status,is_core,first_name,username').eq('ref_code', code).maybeSingle();
+  if (inv) return inv;
+  const { data: old } = await supabase
+    .from('referrals').select('inviter_id').eq('ref_code', code).limit(1).maybeSingle();
+  if (!(old as any)?.inviter_id) return null;
+  const { data: byId } = await supabase
+    .from('members').select('telegram_id,status,is_core,first_name,username').eq('telegram_id', (old as any).inviter_id).maybeSingle();
+  return byId || null;
+}
+
+async function bindReferrer(from: any, code: string): Promise<RefResult> {
   await supabase.from('members').upsert(
     { telegram_id: from.id, username: from.username || null, first_name: from.first_name || null },
     { onConflict: 'telegram_id' }
   );
 
   const { data: me } = await supabase.from('members').select('referred_by,status,phone').eq('telegram_id', from.id).maybeSingle();
-  if ((me as any)?.status === 'blocked') return false;
+  if ((me as any)?.status === 'blocked') return { ok: false, reason: 'blocked' };
   // Уже внутри — ссылка ничего не меняет.
-  if ((me as any)?.status === 'approved') return true;
+  if ((me as any)?.status === 'approved') return { ok: true };
 
-  const { data: inv } = await supabase
-    .from('members').select('telegram_id,status,is_core').eq('ref_code', code).maybeSingle();
-  if (!inv || inv.telegram_id === from.id) return false;
+  const inv = await inviterByCode(code);
+  if (!inv) return { ok: false, reason: 'bad_code' };
+  if (inv.telegram_id === from.id) return { ok: false, reason: 'self' };
   const inviterInside = (inv as any).status === 'approved' || (inv as any).is_core === true;
-  if (!inviterInside) return false;
+  if (!inviterInside) {
+    // Пригласивший сам ещё не принят. Раньше человек получал «ссылка не
+    // действует» и пропадал, а в базе не оставалось даже следа, кто его звал.
+    // Теперь фиксируем атрибуцию и зовём костяк: решение — за ним.
+    if (!(me as any)?.referred_by) {
+      await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', from.id);
+      try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch { /* аудит */ }
+    }
+    return { ok: false, reason: 'inviter_out', inviter: inv };
+  }
 
   // Человек УЖЕ подал заявку на ручную модерацию (pending_review) — реф-ссылка НЕ
   // должна её обходить и впускать «в левую». Максимальное одобрение: пустит только
@@ -1506,7 +1537,7 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
       await supabase.from('members').update({ referred_by: inv.telegram_id }).eq('telegram_id', from.id);
       try { await supabase.from('referrals').insert({ ref_code: code, inviter_id: inv.telegram_id, invited_id: from.id }); } catch { /* audit */ }
     }
-    return false;
+    return { ok: false, reason: 'pending_review' };
   }
 
   // Реф-ссылка снимает МОДЕРАЦИЮ (доверие приглашающего), но НЕ этапы онбординга.
@@ -1541,7 +1572,7 @@ async function bindReferrer(from: any, code: string): Promise<boolean> {
       });
     } catch { /* мог не начинать чат */ }
   }
-  return true;
+  return { ok: true };
 }
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 
@@ -11095,13 +11126,40 @@ export default async function handler(req: any, res: any) {
 
         // Ссылка «позови друга» несёт и код, и событие: ref_<code>_ev_<eventId>.
         let invitedIn = false;
-        let invitedBy = false;   // ссылка была, но пригласивший сам не в клубе
+        let refFail: RefResult | null = null;   // ссылка была, но не впустила — почему
         if (payload.startsWith('ref_')) {
           const rest = payload.slice('ref_'.length);
           const sep = rest.indexOf('_ev_');
           const code = sep === -1 ? rest : rest.slice(0, sep);
-          invitedBy = true;
-          try { invitedIn = await bindReferrer(msg.from, code); } catch { /* реф — best-effort */ }
+          try {
+            const r = await bindReferrer(msg.from, code);
+            invitedIn = r.ok;
+            if (!r.ok) refFail = r;
+          } catch (e) {
+            slog('error', 'bindReferrer failed', { code, err: String(e) });
+            refFail = { ok: false, reason: 'bad_code' };
+          }
+          if (refFail) {
+            slog('warn', 'ref link did not admit', { tg: msg.from.id, code, reason: refFail.reason });
+            // Костяку — сразу, с кнопкой: застрявший по ссылке человек иначе
+            // уходит молча («человек по моей ссылке хотел попасть, а тут такое»).
+            if (refFail.reason === 'inviter_out' || refFail.reason === 'bad_code') {
+              const who = `<b>${esc(msg.from.first_name || 'Без имени')}</b>${msg.from.username ? ` @${esc(msg.from.username)}` : ''} (id ${msg.from.id})`;
+              const inv = refFail.inviter;
+              const invName = inv ? `<b>${esc(inv.first_name || 'участник')}</b>${inv.username ? ` @${esc(inv.username)}` : ''}` : '';
+              try {
+                await tg('sendMessage', {
+                  chat_id: process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570', parse_mode: 'HTML',
+                  text: refFail.reason === 'inviter_out'
+                    ? `🔗 ${who} пришёл по ссылке ${invName}, но пригласивший сам ещё не принят (статус: ${esc(String(inv?.status || '—'))}).\n\nПримешь пригласившего — ссылка заработает, новичку достаточно открыть её ещё раз.`
+                    : `🔗 ${who} пришёл по реф-ссылке с неизвестным кодом <code>${esc(code)}</code> — ссылка устарела или скопирована с ошибкой.`,
+                  ...(refFail.reason === 'inviter_out' && inv
+                    ? { reply_markup: kb([[{ text: `✅ Принять ${String(inv.first_name || 'пригласившего').slice(0, 20)}`, callback_data: `approve_${inv.telegram_id}` }]]) }
+                    : {}),
+                });
+              } catch { /* админ-чат недоступен — не роняем /start */ }
+            }
+          }
           payload = sep === -1 ? '' : `event_${rest.slice(sep + '_ev_'.length)}`;
           if (invitedIn) {
             // Реф-ссылка впускает без модерации (доверие приглашающего), но раньше
@@ -11156,11 +11214,15 @@ export default async function handler(req: any, res: any) {
               text: '🚪 <b>Доступ закрыт</b>\n\nТвоя заявка была отклонена. Если это ошибка — напиши нам, разберёмся.',
               reply_markup: kb([[{ text: '💬 Написать в поддержку', callback_data: 'support' }]]),
             });
-          } else if (invitedBy) {
-            // Пришёл по ссылке, но пригласивший сам ещё не в клубе.
+          } else if (refFail) {
+            // Пришёл по ссылке, но она не впустила. Человек не виноват — не
+            // отталкиваем, а говорим, что костяк уже в курсе и что делать.
+            const invName = refFail.inviter?.first_name ? `<b>${esc(refFail.inviter.first_name)}</b>` : 'пригласивший';
             await tg('sendMessage', {
               chat_id: chatId, parse_mode: 'HTML',
-              text: '🔒 <b>«Живи в моменте» — закрытый клуб</b>\n\nСсылка, по которой ты пришёл, пока не действует: пригласивший сам ещё не принят.\n\nМожешь подать заявку — костяк рассмотрит.',
+              text: refFail.reason === 'inviter_out'
+                ? `🔒 <b>«Живи в моменте» — закрытый клуб</b>\n\nТебя позвал ${invName} — мы это записали. Его участие в клубе ещё оформляется, поэтому ссылка пока не открыла двери сама.\n\nКостяк уже получил уведомление. Можешь не ждать — подай заявку, это 2–3 минуты.`
+                : '🔒 <b>«Живи в моменте» — закрытый клуб</b>\n\nСсылка-приглашение устарела или скопировалась не целиком. Попроси у друга свежую — или подай заявку, костяк рассмотрит.',
               reply_markup: kb([[{ text: '✅ Подать заявку', callback_data: 'verify_start' }]]),
             });
           } else {

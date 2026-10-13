@@ -364,6 +364,82 @@ export default async function handler(req: any, res: any) {
     }
   }
 
+  /**
+   * ДОЖАТЬ «НЕ ПРОШЕДШИХ»: нажали «Старт» в боте, но анкету не заполнили и в
+   * клуб не вступили. Пишем каждому лично, с кнопкой заявки. Статус
+   * перепроверяем здесь, а не верим списку из админки, — принятому или
+   * отклонённому такое письмо уйти не должно. Не чаще раза в 3 дня одному
+   * человеку: напоминание, а не спам.
+   */
+  if (req.method === 'POST' && req.query?.action === 'nudge_unverified') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const ids = (Array.isArray(body.telegramIds) ? body.telegramIds : [])
+        .map((v: unknown) => Number(v))
+        .filter((id: number) => Number.isFinite(id) && id > 0);
+      if (!ids.length) return res.status(400).json({ error: 'Не выбран ни один человек' });
+      const BOT = process.env.TELEGRAM_BOT_TOKEN || '';
+      if (!BOT) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
+
+      const { data: rows } = await supabase.from('members')
+        .select('telegram_id,first_name,status,is_core,referred_by,prefs').in('telegram_id', ids);
+      const COOLDOWN = 3 * 864e5;
+      const targets = (rows || []).filter((m: any) =>
+        !m.is_core && !['approved', 'pending_review', 'blocked'].includes(String(m.status || 'pending')));
+      const fresh = targets.filter((m: any) => {
+        const t = Date.parse(m.prefs?.verify_nudged_at || '');
+        return !(Number.isFinite(t) && Date.now() - t < COOLDOWN);
+      });
+
+      // Имена пригласивших — одним запросом: «тебя позвал Олег» работает лучше безличного письма.
+      const invIds = [...new Set(fresh.map((m: any) => Number(m.referred_by)).filter((n: number) => n > 0))];
+      const invName = new Map<number, string>();
+      if (invIds.length) {
+        const { data: invs } = await supabase.from('members').select('telegram_id,first_name').in('telegram_id', invIds);
+        for (const i of invs || []) if ((i as any).first_name) invName.set(Number((i as any).telegram_id), String((i as any).first_name));
+      }
+      const esc = (v: string) => v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      let sent = 0;
+      const failed: number[] = [];
+      for (const m of fresh as any[]) {
+        const name = m.first_name ? `, ${esc(String(m.first_name))}` : '';
+        const by = invName.get(Number(m.referred_by));
+        const text =
+          `👋 <b>Привет${name}!</b>\n\n` +
+          (by ? `Тебя позвал в клуб <b>${esc(by)}</b>. ` : 'Ты заглядывал в бот клуба «Живи в моменте». ') +
+          'Ты остановился в шаге от входа — анкета так и не дошла до костяка.\n\n' +
+          'Это 2–3 минуты: кодекс клуба, пара слов о себе и данные для логистики. ' +
+          'После этого костяк посмотрит заявку и ответит сюда.\n\n' +
+          'Если передумал — просто не отвечай, больше не потревожим.';
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${BOT}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: m.telegram_id, parse_mode: 'HTML', text, disable_web_page_preview: true,
+              reply_markup: { inline_keyboard: [[{ text: '✅ Заполнить анкету', callback_data: 'verify_start' }]] },
+            }),
+          });
+          const j = await r.json();
+          if (j?.ok) {
+            sent++;
+            await supabase.from('members')
+              .update({ prefs: { ...(m.prefs || {}), verify_nudged_at: new Date().toISOString() } })
+              .eq('telegram_id', m.telegram_id);
+          } else failed.push(m.telegram_id);
+        } catch { failed.push(m.telegram_id); }
+      }
+      return res.status(200).json({
+        ok: sent > 0, sent, total: ids.length,
+        skipped: targets.length - fresh.length,   // писали меньше 3 дней назад
+        notEligible: ids.length - targets.length, // уже приняты/на модерации/отклонены
+        failed: failed.length,
+      });
+    } catch (error) {
+      return res.status(500).json({ error: (error as Error).message });
+    }
+  }
+
   if (req.method === 'POST' && req.query?.action === 'send_rules') {
     try {
       const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};

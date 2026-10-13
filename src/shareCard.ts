@@ -66,7 +66,13 @@ function wrap(ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLine
 
 export async function renderShareCard(ev: { title: string; date?: string; dateEnd?: string; time?: string; location?: string; image?: string }): Promise<string> {
   // Фирменный шрифт должен успеть загрузиться, иначе canvas нарисует системный.
-  try { await Promise.all([document.fonts.load('900 64px Montserrat'), document.fonts.load('700 28px Montserrat')]); } catch { /* нет FontFace API */ }
+  // Образец текста обязателен: без него браузер грузит только латинский
+  // поднабор Google Fonts, кириллица рисуется запасным шрифтом, и переносы,
+  // посчитанные одним шрифтом, ложатся другим — текст «уезжает» с картинки.
+  const sample = 'АБВ абв 123 ABC';
+  try {
+    await Promise.all(['900 64px', '700 28px', '600 26px'].map((f) => document.fonts.load(`${f} Montserrat`, sample)));
+  } catch { /* нет FontFace API */ }
 
   const canvas = document.createElement('canvas');
   canvas.width = W; canvas.height = H;
@@ -116,7 +122,10 @@ export async function renderShareCard(ev: { title: string; date?: string; dateEn
   if (place) {
     ctx.font = '600 26px Montserrat, sans-serif';
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    ctx.fillText(place.length > 70 ? `${place.slice(0, 69)}…` : place, pad, y);
+    // Режем по ширине, а не по символам: «Ш» и «i» занимают разное место.
+    let p = place;
+    while (p.length > 1 && ctx.measureText(p).width > W - pad * 2) p = p.slice(0, -2) + '…';
+    ctx.fillText(p, pad, y);
     y -= 48;
   }
   ctx.font = '900 62px Montserrat, sans-serif';
@@ -130,20 +139,26 @@ export async function renderShareCard(ev: { title: string; date?: string; dateEn
     const bigW = ctx.measureText(dt.big).width;
     ctx.font = '700 22px Montserrat, sans-serif';
     const smallW = dt.small ? ctx.measureText(dt.small).width + 20 : 0;
-    const bw = bigW + smallW + 40, bh = 64, by = y - bh + 14;
+    // y сейчас — базовая линия «строки над названием»; плашку ставим с
+    // ровным отступом 18px над верхом заглавных букв первой строки.
+    const bw = bigW + smallW + 40, bh = 64, by = y + 70 - 46 - 18 - bh;
     ctx.fillStyle = BRAND;
     const r = 18;
     ctx.beginPath();
     ctx.moveTo(pad + r, by); ctx.arcTo(pad + bw, by, pad + bw, by + bh, r); ctx.arcTo(pad + bw, by + bh, pad, by + bh, r);
     ctx.arcTo(pad, by + bh, pad, by, r); ctx.arcTo(pad, by, pad + bw, by, r); ctx.closePath(); ctx.fill();
+    // Обе подписи — по общей средней линии плашки, иначе мелкая «ВС»
+    // проседала ниже крупной даты.
+    ctx.textBaseline = 'middle';
     ctx.fillStyle = '#000000';
     ctx.font = '900 40px Montserrat, sans-serif';
-    ctx.fillText(dt.big, pad + 20, by + 46);
+    ctx.fillText(dt.big, pad + 20, by + bh / 2 + 2);
     if (dt.small) {
       ctx.font = '700 22px Montserrat, sans-serif';
       ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillText(dt.small, pad + 20 + bigW + 20, by + 44);
+      ctx.fillText(dt.small, pad + 20 + bigW + 20, by + bh / 2 + 2);
     }
+    ctx.textBaseline = 'alphabetic';
   }
 
   return canvas.toDataURL('image/jpeg', 0.9);

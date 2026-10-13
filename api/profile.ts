@@ -64,7 +64,9 @@ function verifyInitData(initData: string): { id: number; username?: string; firs
 }
 
 async function ensureRefCode(telegramId: number, force = false): Promise<string | null> {
-  const { data: m } = await supabase.from('members').select('ref_code').eq('telegram_id', telegramId).maybeSingle();
+  const { data: m } = await supabase.from('members').select('ref_code,status,is_core').eq('telegram_id', telegramId).maybeSingle();
+  // Ссылку-приглашение выдаём только принятым: ссылка не принятого не впускает.
+  if (!m || !((m as any).status === 'approved' || (m as any).is_core === true)) return null;
   if (m?.ref_code && !force) return m.ref_code;
   for (let i = 0; i < 5; i++) {
     const code = Math.random().toString(36).slice(2, 9);
