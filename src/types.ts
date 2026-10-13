@@ -333,3 +333,23 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
   }
   return { price: perNow, label: `≈ ${perNow} Br/чел`, factors };
 }
+/**
+ * ЦЕНА ОДНОЙ СТРОКОЙ для карточки, ленты и приглашений.
+ * Раньше смотрели только на «взнос»: у бани во «Фристайле» взноса клубу нет,
+ * но каждый платит за себя — а карточка писала «Бесплатно». Модель оплаты
+ * (logistics.costModel) и ориентир (logistics.costEstimate) важнее «взноса».
+ */
+export function priceTag(e: Pick<CommunityEvent, 'priceType' | 'priceAmount' | 'priceLabel' | 'logistics'>): { short: string; note?: string } {
+  const lg: any = e.logistics || {};
+  const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  const note = typeof lg.costNote === 'string' && lg.costNote.trim() ? lg.costNote.trim() : undefined;
+  if (e.priceType === 'paid' && Number(e.priceAmount) > 0) return { short: `${e.priceAmount} Br`, note };
+  switch (lg.costModel) {
+    case 'self': return { short: est ? `≈${est} Br · каждый за себя` : 'Каждый за себя', note };
+    case 'pool': return { short: est ? `≈${est} Br · общий взнос` : 'Общий взнос', note };
+    case 'food_share': return { short: est ? `≈${est} Br · еда вскладчину` : 'Еда вскладчину', note };
+    case 'bring_own': return { short: 'Своё с собой', note };
+  }
+  if (e.priceType === 'paid') return { short: e.priceLabel && e.priceLabel.length <= 18 ? e.priceLabel : 'Платно', note };
+  return { short: 'Бесплатно', note };
+}

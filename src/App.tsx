@@ -831,8 +831,8 @@ export default function App() {
     }
   };
 
-  const handleDeleteRegistration = (eventId: string) => {
-    if (window.confirm('Вы действительно хотите отменить участие в этом событии?')) {
+  const handleDeleteRegistration = (eventId: string, confirmed = false) => {
+    if (confirmed || window.confirm('Вы действительно хотите отменить участие в этом событии?')) {
       // Внутри Telegram — снимаем заявку и в БД (иначе на перезагрузке вернётся).
       const initData = (typeof window !== 'undefined' && (window as any).Telegram?.WebApp?.initData) || '';
       if (initData) {
@@ -871,6 +871,22 @@ export default function App() {
       }
     }
   };
+
+  /**
+   * «Отказаться от участия» из карточки события. Карточка уже спросила
+   * подтверждение — здесь только снимаем запись (сервер уведомит
+   * организатора лично и освободит место в машине).
+   */
+  const deleteRegRef = useRef(handleDeleteRegistration);
+  deleteRegRef.current = handleDeleteRegistration;
+  useEffect(() => {
+    const onCancel = (e: any) => {
+      const id = String(e?.detail?.eventId || '');
+      if (id) deleteRegRef.current(id, true);
+    };
+    window.addEventListener('cancelRegistration', onCancel);
+    return () => window.removeEventListener('cancelRegistration', onCancel);
+  }, []);
 
   // Единые CRUD-обработчики событий для админки. Раньше эта ветка (вход админа
   // через гейт) меняла ТОЛЬКО локальный стейт и не писала в БД — событие

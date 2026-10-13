@@ -1154,7 +1154,26 @@ export default async function handler(req: any, res: any) {
       // Одинаковые очки — одно место: иначе из двух «по 0» один «хуже» другого.
       for (let i = 1; i < all.length; i += 1) if (all[i].points === all[i - 1].points) all[i].place = all[i - 1].place;
       const me = all.find((m) => m.me) || null;
-      return res.status(200).json({ ok: true, top: all.slice(0, 30), me, total: all.length });
+      // ПОЧЕМУ СТОЛЬКО БАЛЛОВ: журнал начислений по участникам списка. Раньше
+      // рейтинг показывал только цифру — непонятно, за что человек впереди.
+      // Тянем весь журнал и режем на куски по человеку (запросов на человека — 0).
+      const topIds = new Set([...all.slice(0, 30), ...(me ? [me] : [])].map((m) => m.id));
+      const reasons: Record<string, { points: number; text: string }[]> = {};
+      try {
+        const { data: pl } = await supabase
+          .from('points_log').select('telegram_id,points,reason,description')
+          .in('telegram_id', [...topIds].map(Number)).limit(1000);
+        for (const row of pl || []) {
+          const k = String((row as any).telegram_id);
+          if (!topIds.has(k)) continue;
+          (reasons[k] ||= []).push({
+            points: Number((row as any).points) || 0,
+            text: String((row as any).description || (row as any).reason || 'Баллы').slice(0, 120),
+          });
+        }
+        for (const k of Object.keys(reasons)) reasons[k] = reasons[k].slice(0, 8);
+      } catch { /* журнала ещё нет до миграции — рейтинг и так работает */ }
+      return res.status(200).json({ ok: true, top: all.slice(0, 30), me, total: all.length, reasons });
     }
 
     // === MY_EVENTS (история событий участника) ===
@@ -1928,6 +1947,27 @@ export default async function handler(req: any, res: any) {
         .eq('event_id', evId).eq('driver_id', user.id).eq('active', true);
       await supabase.from('ride_requests').update({ active: false })
         .eq('event_id', evId).eq('passenger_id', user.id);
+
+      // Организатору события — ЛИЧНО: отказ за день до выезда меняет машины,
+      // еду и расселение, а общий чат обычно на mute.
+      if (BOT_TOKEN) {
+        try {
+          const { data: evD } = await supabase.from('events').select('title,deputy_id').eq('id', evId).maybeSingle();
+          const dep = Number((evD as any)?.deputy_id);
+          const reason = String(body.reason || '').trim().slice(0, 300);
+          if (Number.isFinite(dep) && dep > 0 && dep !== Number(user.id)) {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                chat_id: dep, parse_mode: 'HTML',
+                text: `🔴 <b>Отказ от участия</b> · ${escHtml((evD as any)?.title || evId)}\n\n`
+                  + `${escHtml((reg as any).name || user.first_name || 'Участник')}${user.username ? ` (@${escHtml(user.username)})` : ''} больше не едет.`
+                  + (reason ? `\nПричина: ${escHtml(reason)}` : ''),
+              }),
+            });
+          }
+        } catch { /* уведомление не важнее самой отмены */ }
+      }
 
       // Костяку — сразу: состав меняется за день до выезда, и это их работа.
       if (BOT_TOKEN && ADMIN_CHAT_ID) {

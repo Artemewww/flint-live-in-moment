@@ -14,7 +14,13 @@ export interface RatingRow {
   me?: boolean;
 }
 
-interface RatingData { top: RatingRow[]; me: RatingRow | null; total: number }
+interface RatingData {
+  top: RatingRow[];
+  me: RatingRow | null;
+  total: number;
+  /** Журнал начислений: telegram_id → [{ points, text }] — «почему столько баллов». */
+  reasons?: Record<string, { points: number; text: string }[]>;
+}
 
 /** Один запрос на открытие профиля: и плашке «#N», и списку. */
 export function useClubRating(enabled: boolean) {
@@ -27,7 +33,7 @@ export function useClubRating(enabled: boolean) {
       body: JSON.stringify({ action: 'leaderboard', initData: getInitData() }),
     })
       .then((r) => (r.ok ? r.json() : null))
-      .then((j) => { if (alive && j?.ok) setData({ top: j.top || [], me: j.me || null, total: Number(j.total) || 0 }); })
+      .then((j) => { if (alive && j?.ok) setData({ top: j.top || [], me: j.me || null, total: Number(j.total) || 0, reasons: j.reasons || {} }); })
       .catch(() => { /* офлайн — плашка просто не появится */ });
     return () => { alive = false; };
   }, [enabled]);
@@ -36,24 +42,51 @@ export function useClubRating(enabled: boolean) {
 
 const MEDAL = ['🥇', '🥈', '🥉'];
 
-function Row({ r, sticky }: { r: RatingRow; sticky?: boolean }) {
+function Row({ r, sticky, reasons }: { r: RatingRow; sticky?: boolean; reasons?: { points: number; text: string }[] }) {
+  const [open, setOpen] = useState(false);
+  const hasWhy = !!reasons?.length;
   return (
-    <div className={`flex items-center gap-3 px-3 py-2.5 ${
-      sticky ? 'rounded-2xl bg-brand text-black shadow-lg shadow-brand/20'
-        : r.me ? 'rounded-2xl bg-brand/10 border border-brand/30' : ''
-    }`}>
-      <span className={`w-7 shrink-0 text-center text-sm font-black ${sticky ? 'text-black' : 'text-white/50'}`}>
-        {r.place <= 3 && !sticky ? MEDAL[r.place - 1] : r.place}
-      </span>
-      <Avatar name={r.name} src={r.avatar} size={36} />
-      <div className="min-w-0 flex-1">
-        {sticky && <div className="text-[10px] font-mono uppercase tracking-widest text-black/60">Твоя позиция</div>}
-        <div className={`truncate text-[14px] font-bold ${sticky ? 'text-black' : 'text-white'}`}>{r.name}</div>
-        <div className={`text-[11px] ${sticky ? 'text-black/60' : 'text-white/45'}`}>
-          Ур. {r.level}{r.trips ? ` · ${r.trips} ${r.trips % 10 === 1 && r.trips % 100 !== 11 ? 'выезд' : r.trips % 10 >= 2 && r.trips % 10 <= 4 && (r.trips % 100 < 10 || r.trips % 100 >= 20) ? 'выезда' : 'выездов'}` : ''}
+    <div className={sticky ? '' : ''}>
+      <button
+        type="button"
+        onClick={() => { if (hasWhy) { haptic('success'); setOpen((o) => !o); } }}
+        aria-expanded={hasWhy ? open : undefined}
+        className={`flex w-full items-center gap-3 px-3 py-2.5 text-left border-none bg-transparent cursor-pointer ${
+          hasWhy ? 'hover:bg-white/5' : 'cursor-default'
+        } ${sticky ? 'rounded-2xl bg-brand text-black shadow-lg shadow-brand/20'
+          : r.me ? 'rounded-2xl bg-brand/10 border border-brand/30' : ''}`}
+      >
+        <span className={`w-7 shrink-0 text-center text-sm font-black ${sticky ? 'text-black' : 'text-white/50'}`}>
+          {r.place <= 3 && !sticky ? MEDAL[r.place - 1] : r.place}
+        </span>
+        <Avatar name={r.name} src={r.avatar} size={36} />
+        <div className="min-w-0 flex-1">
+          {sticky && <div className="text-[10px] font-mono uppercase tracking-widest text-black/60">Твоя позиция</div>}
+          <div className={`truncate text-[14px] font-bold ${sticky ? 'text-black' : 'text-white'}`}>{r.name}</div>
+          <div className={`text-[11px] ${sticky ? 'text-black/60' : 'text-white/45'}`}>
+            Ур. {r.level}{r.trips ? ` · ${r.trips} ${r.trips % 10 === 1 && r.trips % 100 !== 11 ? 'выезд' : r.trips % 10 >= 2 && r.trips % 10 <= 4 && (r.trips % 100 < 10 || r.trips % 100 >= 20) ? 'выезда' : 'выездов'}` : ''}
+            {hasWhy && !open && <span className={sticky ? 'text-black/50' : 'text-brand/70'}> · почему?</span>}
+          </div>
         </div>
-      </div>
-      <span className={`shrink-0 text-lg font-black tabular-nums ${sticky ? 'text-black' : 'text-brand'}`}>{r.points}</span>
+        <span className={`shrink-0 text-lg font-black tabular-nums ${sticky ? 'text-black' : 'text-brand'}`}>{r.points}</span>
+        {hasWhy && (
+          <span className={`shrink-0 text-xs ${sticky ? 'text-black/60' : 'text-white/40'}`}>{open ? '▾' : '▸'}</span>
+        )}
+      </button>
+
+      {/* Раскрытая история начислений — ответ на «почему у него столько баллов». */}
+      {hasWhy && open && (
+        <ul className={`mx-3 mb-1 space-y-1 rounded-xl px-3 py-2 ${sticky ? 'bg-black/10' : 'bg-white/5'}`}>
+          {reasons!.map((w, i) => (
+            <li key={i} className="flex items-start gap-2 text-[11px] leading-snug">
+              <span className={`shrink-0 font-black tabular-nums ${sticky ? 'text-black' : 'text-brand'}`}>
+                +{w.points}
+              </span>
+              <span className={sticky ? 'text-black/70' : 'text-white/65'}>{w.text}</span>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -98,14 +131,14 @@ export default function ClubRating({ data, onClose }: { data: RatingData | null;
           <p className="py-16 text-center text-sm text-white/40">Пока пусто — первые очки дают выезды</p>
         ) : (
           <div className="space-y-1">
-            {data.top.map((r) => <Row key={r.id} r={r} />)}
+            {data.top.map((r) => <Row key={r.id} r={r} reasons={data.reasons?.[r.id]} />)}
           </div>
         )}
       </div>
 
       {me && (
         <div className="absolute inset-x-3 bottom-4 space-y-2" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-          <Row r={me} sticky />
+          <Row r={me} sticky reasons={data.reasons?.[me.id]} />
           {!meInTop && gapToTop > 0 && (
             <p className="text-center text-[11px] text-white/55">До топ-{data?.top.length}: <b className="text-brand">{gapToTop}</b> очков — это примерно один выезд</p>
           )}

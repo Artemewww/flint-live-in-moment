@@ -134,7 +134,15 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
               className={`rounded-lg border p-2 text-left text-[11px] font-bold ${v.costModel === k ? 'border-brand bg-brand/10 text-brand' : 'border-white/10 bg-transparent text-white/60'}`}>{l}</button>
           ))}
         </div>
-        <input value={v.costNote || ''} onChange={(e) => set('costNote', e.target.value)} placeholder="Пояснение (баня 300 BYN делим на всех, продукты ~25 BYN/чел)" className="w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+        {/* Ориентир суммы: «бесплатно» на карточке, когда каждый платит сам, —
+            обман ожиданий. Покажем «≈ 40 Br · каждый за себя». */}
+        <label className="flex items-center gap-2">
+          <span className="shrink-0 text-[11px] text-white/55">Ориентировочно, BYN с человека</span>
+          <input type="number" inputMode="decimal" min={0} value={v.costEstimate ?? ''} onChange={(e) => set('costEstimate', e.target.value === '' ? undefined : Number(e.target.value))}
+            placeholder="40" className="w-24 rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+        </label>
+        <textarea value={v.costNote || ''} onChange={(e) => set('costNote', e.target.value)} rows={2}
+          placeholder="Комментарий к стоимости: баня 300 BYN делим на всех; первым — купоны бесплатно; доплата за веник" className="w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
       </div>
       <Lines label="🎒 Что нужно привезти на общее (бот распределит)" hint="Мангал, котёл, колонка, веники" items={Array.isArray(v.needs) ? v.needs : []} onChange={(x) => set('needs', x)} />
 

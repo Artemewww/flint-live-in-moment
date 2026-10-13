@@ -1026,6 +1026,17 @@ export default async function handler(req: any, res: any) {
         return res.status(400).json({ error: 'Назначь организатора события', details: 'Без организатора событие не создаётся: выбери, кто за него отвечает.' });
       }
 
+      /**
+       * В списке событий картинки отдаются ССЫЛКОЙ на прокси (action=image), а
+       * не base64. Админка сохраняет событие целиком — и эта ссылка уезжала в
+       * базу вместо картинки: прокси перенаправлял сам на себя, и обложка
+       * пропадала везде (так сломалась афиша «Фристайла»). Ссылку на свой
+       * прокси не пишем — в базе остаётся настоящая картинка.
+       */
+      for (const k of ['image', 'telegram_image']) {
+        const v = String((eventData as any)[k] ?? '');
+        if (/^(https?:\/\/[^/]+)?\/api\/events\?action=image/.test(v)) delete (eventData as any)[k];
+      }
       let { data: event, error } = await supabase
         .from('events')
         .upsert(eventData, { onConflict: 'id' })

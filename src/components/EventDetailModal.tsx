@@ -7,7 +7,7 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 , UserPlus} from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, priceTag, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
 import { eventShareLink } from '../site';
@@ -79,14 +79,24 @@ function buildIcsDataUri(event: CommunityEvent, includeLocation: boolean): strin
 
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
-  const { price, label, factors } = calculateDynamicPrice(event);
-  
+  const { label, factors } = calculateDynamicPrice(event);
+  // Модель оплаты важнее «взноса»: при «каждый за себя» клубу не платят, но
+  // и бесплатным выезд не назовёшь — показываем ориентир и комментарий.
+  const tag = priceTag(event);
+  const model = (event.logistics as any)?.costModel;
+  const headline = event.priceType === 'paid' && event.priceAmount > 0 ? label : tag.short;
+  const sub = event.priceType === 'paid' && event.priceAmount > 0 ? 'Взнос на аренду — делится поровну на всех'
+    : model === 'self' ? 'Взноса клубу нет — каждый оплачивает себя на месте'
+    : model === 'pool' ? 'Общий взнос — делится поровну на всех'
+    : model === 'food_share' ? 'Еду покупаем вскладчину'
+    : model === 'bring_own' ? 'Каждый везёт своё'
+    : 'Полностью свободное участие';
+
   return (
     <div className="space-y-1">
-      <div className="text-brand font-black text-lg">{label}</div>
-      <div className="text-white/50 text-[10px]">
-        {event.priceType === 'free' ? 'Полностью свободное участие' : 'Взнос на аренду — делится поровну на всех'}
-      </div>
+      <div className="text-brand font-black text-lg">{headline}</div>
+      <div className="text-white/55 text-[11px]">{sub}</div>
+      {tag.note && <div className="text-white/75 text-[12px] leading-snug whitespace-pre-line">{tag.note}</div>}
       {factors.length > 0 && (
         <div className="space-y-0.5 mt-1.5">
           {factors.map((factor, idx) => (
@@ -1448,7 +1458,8 @@ export default function EventDetailModal({
             отчёт челленджа жили плитками в шапке: до них приходилось тянуться
             через весь экран. В челлендже главное — отчитаться за сегодня. */}
         {isRegistered && phase !== 'past' && !isLocked && (
-          <div className="p-3 sm:p-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-white/10 bg-[#161616] flex gap-2.5">
+          <div className="border-t border-white/10 bg-[#161616] pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <div className="p-3 sm:p-4 pb-1.5 sm:pb-2 flex gap-2.5">
             {isChallenge ? (
               isRealChatUrl(event.telegramBotUrl) ? (
                 <a
@@ -1486,6 +1497,22 @@ export default function EventDetailModal({
                 </button>
               </>
             )}
+          </div>
+          {/* Отказ — тихой ссылкой, не кнопкой рядом с главным действием: случайно
+              не нажмёшь, но и искать не придётся. Организатор узнает лично. */}
+          <button
+            type="button"
+            onClick={() => {
+              const q = isChallenge ? 'Выйти из челленджа? Твоя серия сохранится в истории.' : 'Точно не сможешь? Организатор получит уведомление, место освободится.';
+              if (!window.confirm(q)) return;
+              haptic('warning');
+              window.dispatchEvent(new CustomEvent('cancelRegistration', { detail: { eventId: event.id } }));
+              onClose();
+            }}
+            className="mx-auto block border-none bg-transparent px-3 py-1.5 text-[12px] text-white/40 underline cursor-pointer hover:text-white/70"
+          >
+            {isChallenge ? 'Выйти из челленджа' : 'Не смогу — отказаться от участия'}
+          </button>
           </div>
         )}
         {!(isRegistered && phase !== 'past' && !isLocked) && (

@@ -69,6 +69,25 @@ function deny(res: any) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
+/**
+ * Цена строкой для приглашений. «Взнос отсутствует» врал, когда каждый
+ * платит за себя на месте (баня во «Фристайле»). Зеркало priceTag из
+ * src/types.ts — серверу клиентский модуль не импортировать.
+ */
+function costLineOf(ev: any): string {
+  const lg = ev?.logistics || {};
+  const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  if (ev?.price_type === 'paid' && Number(ev?.price_amount) > 0) return `${ev.price_amount} BYN`;
+  switch (lg.costModel) {
+    case 'self': return est ? `≈${est} BYN, каждый платит за себя` : 'Каждый платит за себя';
+    case 'pool': return est ? `≈${est} BYN, общий взнос` : 'Общий взнос';
+    case 'food_share': return est ? `≈${est} BYN, еда вскладчину` : 'Еда вскладчину';
+    case 'bring_own': return 'Каждый везёт своё';
+  }
+  if (ev?.price_type === 'paid') return String(ev?.price_label || 'Платно');
+  return 'Бесплатно';
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
@@ -187,7 +206,7 @@ export default async function handler(req: any, res: any) {
       `✉️ <b>Тебя приглашают: ${esc(event?.title || 'событие FLINT')}</b>\n\n` +
       (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
       (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-      (event?.price_label ? `💰 ${esc(event.price_label)}\n` : '') +
+      `💰 ${esc(costLineOf(event))}\n` +
       `\nОткрой карточку и запишись — место держим за тобой.`;
 
     /**
@@ -253,7 +272,7 @@ export default async function handler(req: any, res: any) {
           : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
             (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
             (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-            (event?.price_label ? `\n💰 ${esc(event.price_label)}\n` : '') +
+            `\n💰 ${esc(costLineOf(event))}\n` +
             `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
 
     const site = `https://${req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app'}`;
@@ -267,7 +286,12 @@ export default async function handler(req: any, res: any) {
      */
     const markup = toPicked
       ? { inline_keyboard: [
-          [{ text: '👀 Открыть и записаться', web_app: { url: `${site}/?ev=${encodeURIComponent(eventId)}` } }],
+          /**
+           * url-кнопка с startapp, а НЕ web_app: web_app-кнопки Telegram
+           * выбрасывает при пересылке — приглашение доходило до друга без
+           * кнопки. startapp открывает приложение сразу на карточке события.
+           */
+          [{ text: '✅ Открыть и записаться', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot'}?startapp=${encodeURIComponent(`ev_${eventId}`)}` }],
           [{ text: '✍️ Ответить', callback_data: 'usreply' }],
         ] }
       : rsvpMode
@@ -291,11 +315,15 @@ export default async function handler(req: any, res: any) {
      * Telegram скачает картинку один раз, а не по разу на участника.
      */
     const hasImage = !!(event?.telegram_image || event?.image);
-    const photo = hasImage
-      ? `${site}/api/events?action=image&id=${encodeURIComponent(eventId)}` +
+    // Картинка уже в Storage — отдаём её адрес напрямую: Telegram качает с
+    // Supabase, мимо защиты Vercel от ботов, которая отвечала ему 403.
+    const directImg = [event?.telegram_image, event?.image]
+      .map((x: any) => String(x || ''))
+      .find((x: string) => /^https:\/\/[^/]+\.supabase\.co\/storage\//.test(x)) || '';
+    const photo = !hasImage ? ''
+      : directImg || (`${site}/api/events?action=image&id=${encodeURIComponent(eventId)}` +
         (event?.telegram_image ? '&kind=telegram' : '') +
-        `&t=${Date.now()}`
-      : '';
+        `&t=${Date.now()}`);
     // У sendPhoto лимит подписи — 1024 символа, у sendMessage — 4096. Наш текст
     // короткий, но список имён может подпихнуть его через край.
     const caption = text.length > 1000 ? `${text.slice(0, 999)}…` : text;

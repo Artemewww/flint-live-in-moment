@@ -308,7 +308,7 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
       >
         {/* ── Шапка в духе банковского профиля: цветной блок, крупное фото,
             имя и баллы «таблеткой». Видно всегда, не уезжает при скролле. ── */}
-        <div className="relative shrink-0 bg-gradient-to-b from-brand/[.14] to-[#161616] px-4 pb-4 pt-5 sm:px-6">
+        <div className={`relative shrink-0 bg-gradient-to-b from-brand/[.14] to-[#161616] px-4 sm:px-6 ${tab === 'overview' ? 'pb-4 pt-5' : 'py-3'}`}>
           <button
             onClick={onClose}
             className="absolute right-3 top-3 p-2 rounded-full bg-black/30 hover:bg-black/50 border-none cursor-pointer text-white/80"
@@ -316,6 +316,29 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
           >
             <X className="w-5 h-5" />
           </button>
+          {/* На вкладках кроме «Обзора» шапка сжимается в строку: аватар уходит
+              в левый верхний угол, экран — содержимому (снаряжение, события). */}
+          {tab !== 'overview' ? (
+            <div className="flex items-center gap-3 pr-12">
+              <Avatar name={p?.firstName || '?'} src={myPhoto} size={40} ring={p?.isCore ? 'brand' : 'none'} />
+              <div className="min-w-0 flex-1">
+                <div className="truncate font-display text-[16px] font-black uppercase leading-tight">{p?.firstName || 'Профиль'}</div>
+                {p?.username && <div className="truncate text-[11px] text-white/50">@{p.username}</div>}
+              </div>
+              {p && (
+                <span className="flex h-8 shrink-0 items-center gap-1 rounded-full bg-brand px-2.5 text-[13px] font-black text-black">
+                  <Star className="w-3.5 h-3.5 fill-black" /> {p.points}
+                </span>
+              )}
+              {rating?.me && (
+                <button type="button" onClick={() => { haptic('success'); setShowRating(true); }}
+                  className="flex h-8 shrink-0 items-center rounded-full border border-brand/40 bg-brand/10 px-2.5 text-[13px] font-black text-brand cursor-pointer">
+                  #{rating.me.place}
+                </button>
+              )}
+            </div>
+          ) : (
+          <>
           <div className="flex flex-col items-center text-center">
             <Avatar name={p?.firstName || '?'} src={myPhoto} size={72} ring={p?.isCore ? 'brand' : 'none'} />
             <h2 className="mt-3 font-display font-black text-xl sm:text-2xl uppercase tracking-tight leading-none max-w-full truncate">
@@ -340,6 +363,14 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               <span className="flex h-9 shrink-0 items-center gap-1 rounded-full bg-brand px-3 text-sm font-black text-black">
                 <Star className="w-4 h-4 fill-black" /> {p.points}
               </span>
+              {/* Место в клубе — маленьким значком, а не большой кнопкой. */}
+              {rating?.me && (
+                <button type="button" onClick={() => { haptic('success'); setShowRating(true); }}
+                  className="order-last flex h-9 shrink-0 items-center gap-1 rounded-full border border-brand/40 bg-brand/10 px-3 text-sm font-black text-brand cursor-pointer"
+                  aria-label={`Рейтинг клуба: ${rating.me.place}-е место`}>
+                  🏆 #{rating.me.place}
+                </button>
+              )}
               <div className="min-w-0 flex-1 space-y-1">
                 <div className="flex justify-between text-[10px] font-mono uppercase tracking-widest">
                   <span className="text-white/60 truncate">Ур. {level} · {levelTitle}</span>
@@ -352,26 +383,7 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               </div>
             </div>
           )}
-
-          {/* Рейтинг клуба и ярлык на «Домой» — по мотивам 360 Padel. */}
-          {p && (
-            <div className="mt-3 space-y-2">
-              <button
-                type="button"
-                onClick={() => { haptic('success'); setShowRating(true); }}
-                className="flex w-full items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] px-3 py-3 text-left cursor-pointer"
-              >
-                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand/15 text-lg">🏆</span>
-                <span className="min-w-0 flex-1">
-                  <span className="block text-[14px] font-bold text-white">Рейтинг клуба</span>
-                  <span className="block text-[12px] text-white/50">
-                    {rating?.me ? `Ты на ${rating.me.place}-м месте из ${rating.total}` : 'Кто больше всех в движении'}
-                  </span>
-                </span>
-                {rating?.me && <span className="shrink-0 rounded-full bg-brand px-2.5 py-1 text-[12px] font-black text-black">#{rating.me.place}</span>}
-              </button>
-              <HomeScreenButton />
-            </div>
+          </>
           )}
           {showRating && typeof document !== 'undefined' && createPortal(
             <ClubRating data={rating} onClose={() => setShowRating(false)} />, document.body)}
@@ -879,6 +891,8 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
               {/* ═══ НАСТРОЙКИ ═══ */}
               {tab === 'settings' && (
                 <>
+                  {/* Ярлык на «Домой» — здесь, а не большой кнопкой под шапкой профиля. */}
+                  <HomeScreenButton />
                   <SettingsTab profile={p} onSaved={load} />
                   {/* Питание — это настройка человека («всё ем»), а не снаряжение. */}
                   <section className="space-y-2">

@@ -368,7 +368,13 @@ async function handleImage(req: any, res: any) {
   // отдаём байтами через этот прокси (публичный URL). Фолбэк на обычную картинку.
   const kind = String(req.query.kind || '');
   const { data: ev } = await supabase.from('events').select('image,telegram_image').eq('id', id).maybeSingle();
-  const img = (kind === 'telegram' ? ((ev as any)?.telegram_image || (ev as any)?.image) : (ev as any)?.image) || '';
+  // Ссылка на самого себя в базе (старая порча) — редирект по кругу; берём
+  // другое поле картинки, если оно настоящее.
+  const isSelf = (v: any) => /^(https?:\/\/[^/]+)?\/api\/events\?action=image/.test(String(v || ''));
+  const pick = (...vals: any[]) => vals.find((v) => v && !isSelf(v)) || '';
+  const img = kind === 'telegram'
+    ? pick((ev as any)?.telegram_image, (ev as any)?.image)
+    : pick((ev as any)?.image, (ev as any)?.telegram_image);
 
   const m = /^data:(image\/[a-zA-Z+]+);base64,(.+)$/.exec(img);
   if (!m) {
@@ -963,9 +969,25 @@ window.Telegram?.WebApp?.expand?.();
 async function handleShareImage(req: any, res: any) {
   const id = String(req.query?.id || '');
   if (!id) return res.status(400).end();
+  const out = await buildShareBanner(id);
+  if (!out) return res.status(404).end();
+  res.setHeader('Content-Type', 'image/jpeg');
+  // Баннер меняется только при смене фото события — кэшируем месяц.
+  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
+  return res.status(200).send(out);
+}
+
+/**
+ * Баннер 1200×630 для превью и приглашений. Отдельной функцией, чтобы
+ * «Поделиться» брал его НАПРЯМУЮ, а не HTTP-запросом к самому себе: защита
+ * Vercel от ботов отвечает такому запросу страницей-проверкой (403), и
+ * приглашение уходило без картинки.
+ */
+async function buildShareBanner(id: string): Promise<Buffer | null> {
+  if (!id) return null;
   const { data: ev } = await supabase
     .from('events').select('title,date,date_label,location,image,telegram_image').eq('id', id).maybeSingle();
-  if (!ev) return res.status(404).end();
+  if (!ev) return null;
 
   const W = 1200, H = 630;
   // Логотип FLINT — те же пути, что и LogoMain в src/components/VectorIcons.tsx,
@@ -1001,6 +1023,19 @@ async function handleShareImage(req: any, res: any) {
   const src = String((ev as any).telegram_image || (ev as any).image || '');
   const m = /^data:image\/[a-zA-Z+]+;base64,(.+)$/.exec(src);
   try {
+    /**
+     * Афиша из хранилища (https). Раньше баннер умел только data:-URL, и у
+     * событий с картинкой в Storage превью выходило пустым тёмным фоном.
+     * Тянем только с нашего Supabase — не открытый прокси на любой адрес.
+     */
+    if (!m && src.startsWith(STORAGE_PREFIX)) {
+      const r = await fetch(src);
+      if (!r.ok) throw new Error('storage ' + r.status);
+      base = await sharp(Buffer.from(await r.arrayBuffer()))
+        .rotate()
+        .resize(W, H, { fit: 'cover', position: 'centre' })
+        .toBuffer();
+    } else {
     if (!m) throw new Error('нет фото');
     // Кадр — ГЕОМЕТРИЧЕСКИМ ЦЕНТРОМ, а не «по смыслу». Проверил на трёх афишах:
     // attention и entropy оба уезжали в небо и солнечные блики, и баннер
@@ -1011,6 +1046,7 @@ async function handleShareImage(req: any, res: any) {
       .rotate()
       .resize(W, H, { fit: 'cover', position: 'centre' })
       .toBuffer();
+    }
   } catch {
     // Фото нет или битое — фирменный фон, чтобы превью не было пустым.
     base = await sharp({
@@ -1023,10 +1059,7 @@ async function handleShareImage(req: any, res: any) {
     .jpeg({ quality: 86, progressive: true })
     .toBuffer();
 
-  res.setHeader('Content-Type', 'image/jpeg');
-  // Баннер меняется только при смене фото события — кэшируем месяц.
-  res.setHeader('Cache-Control', 'public, max-age=2592000, immutable');
-  return res.status(200).send(out);
+  return out;
 }
 
 /**
@@ -1056,6 +1089,26 @@ function shareDayPhrase(iso: string): string {
  * получается правильным: обложка сверху, ссылка спрятана под словами
  * «Открыть и записаться», и пересылается обычным «переслать».
  */
+
+/**
+ * Цена строкой для приглашений. «Взнос отсутствует» врал, когда каждый
+ * платит за себя на месте (баня во «Фристайле»). Зеркало priceTag из
+ * src/types.ts — серверу клиентский модуль не импортировать.
+ */
+function costLineOf(ev: any): string {
+  const lg = ev?.logistics || {};
+  const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  if (ev?.price_type === 'paid' && Number(ev?.price_amount) > 0) return `${ev.price_amount} BYN`;
+  switch (lg.costModel) {
+    case 'self': return est ? `≈${est} BYN, каждый платит за себя` : 'Каждый платит за себя';
+    case 'pool': return est ? `≈${est} BYN, общий взнос` : 'Общий взнос';
+    case 'food_share': return est ? `≈${est} BYN, еда вскладчину` : 'Еда вскладчину';
+    case 'bring_own': return 'Каждый везёт своё';
+  }
+  if (ev?.price_type === 'paid') return String(ev?.price_label || 'Платно');
+  return 'Бесплатно';
+}
+
 async function handleShareInvite(body: any, req: any, res: any) {
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
@@ -1067,7 +1120,7 @@ async function handleShareInvite(body: any, req: any, res: any) {
 
   const { data: ev } = await supabase
     .from('events')
-    .select('id,title,date,time,location,description,image,telegram_image,notifications,status')
+    .select('id,title,date,time,location,description,image,telegram_image,notifications,status,price_type,price_amount,price_label,logistics')
     .eq('id', eventId).maybeSingle();
   if (!ev) return res.status(404).json({ ok: false, error: 'Событие не найдено' });
 
@@ -1080,7 +1133,6 @@ async function handleShareInvite(body: any, req: any, res: any) {
   const host = req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app';
   const site = `https://${host}`;
   const link = `${site}/e/${encodeURIComponent(eventId)}${ref ? `?ref=${encodeURIComponent(ref)}` : ''}`;
-  const banner = `${site}/api/events?action=share_image&id=${encodeURIComponent(eventId)}&t=${Date.now()}`;
 
   const notifs = ((ev as any).notifications || {}) as Record<string, any>;
   const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
@@ -1091,7 +1143,7 @@ async function handleShareInvite(body: any, req: any, res: any) {
 
   const headline = isChallenge
     ? `Каждый день — одно движение для себя. 90 дней подряд.`
-    : `${dateLine ? `📅 ${dateLine}\n` : ''}${desc ? `${desc}\n` : ''}`;
+    : `${dateLine ? `📅 ${dateLine}\n` : ''}💰 ${escapeHtml(costLineOf(ev))}\n${desc ? `${desc}\n` : ''}`;
 
   const caption =
     `<b>${escapeHtml((ev as any).title)}</b>\n\n` +
@@ -1115,9 +1167,11 @@ async function handleShareInvite(body: any, req: any, res: any) {
     // внешней HTTP-ссылке, и тогда сообщение уходило вообще без обложки.
     let sent = false;
     try {
-      const r = await fetch(banner);
-      if (r.ok) {
-        const buf = Buffer.from(await r.arrayBuffer());
+      // Баннер собираем на месте: HTTP-запрос к самому себе режет защита
+      // Vercel от ботов — приглашение уходило без картинки.
+      const built = await buildShareBanner(eventId);
+      if (built) {
+        const buf = built;
         const form = new FormData();
         form.append('chat_id', String(user.id));
         form.append('photo', new Blob([buf], { type: 'image/jpeg' }), 'banner.jpg');
@@ -2186,6 +2240,17 @@ export default async function handler(req: any, res: any) {
       if (body.statusReason !== undefined) (eventData as any).status_reason = body.statusReason;
       if (body.decisionDeadline !== undefined) (eventData as any).decision_deadline = body.decisionDeadline;
 
+      /**
+       * В списке событий картинки отдаются ССЫЛКОЙ на прокси (action=image), а
+       * не base64. Админка сохраняет событие целиком — и эта ссылка уезжала в
+       * базу вместо картинки: прокси перенаправлял сам на себя, и обложка
+       * пропадала везде (так сломалась афиша «Фристайла»). Ссылку на свой
+       * прокси не пишем — в базе остаётся настоящая картинка.
+       */
+      for (const k of ['image', 'telegram_image']) {
+        const v = String((eventData as any)[k] ?? '');
+        if (/^(https?:\/\/[^/]+)?\/api\/events\?action=image/.test(v)) delete (eventData as any)[k];
+      }
       const { data: event, error } = await supabase
         .from('events')
         .upsert(eventData, { onConflict: 'id' })

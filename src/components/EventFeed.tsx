@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   CalendarDays, History, Sparkles, ChevronRight, Compass, ShieldAlert, ArrowUpRight, Lock, Archive, MapPin
 } from 'lucide-react';
-import { CommunityEvent, EventType, getEventPhase, getToday, isEventOver, prettyPlace } from '../types';
+import { CommunityEvent, EventType, getEventPhase, getToday, isEventOver, prettyPlace, priceTag } from '../types';
 import { lazyWithRetry } from '../lazy';
 import HomeScreenButton from './HomeScreenButton';
 
@@ -295,9 +295,7 @@ export default function EventFeed({
                         <div className="flex shrink-0 items-center gap-1.5">
                           {!isPast && (
                             <span className="rounded-full bg-brand/10 px-2.5 py-1.5 text-[12px] font-bold text-brand">
-                              {event.priceType !== 'paid' ? 'Бесплатно'
-                                : event.priceAmount > 0 ? `${event.priceAmount} Br`
-                                : (event.priceLabel && event.priceLabel.length <= 14 ? event.priceLabel : 'Платно')}
+                              {priceTag(event).short}
                             </span>
                           )}
                           {isPast ? (

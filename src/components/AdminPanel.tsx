@@ -5876,26 +5876,37 @@ function AddEventModal({ onClose, onAdd }: {
   const inp = 'w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white placeholder:text-white/30';
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" id="add-event-modal">
-      <div className="absolute inset-0 bg-black/95" onClick={onClose} />
+    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0E0E0E]" id="add-event-modal">
+      {/* Шапка на весь экран — как в Telegram: заголовок и «Создать» всегда
+          под рукой, даже когда форма уехала вниз за скроллом. */}
+      <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-[#121212]/95 px-4 py-3 backdrop-blur sm:px-8">
+        <button onClick={onClose} className="shrink-0 rounded-full border-none bg-white/10 p-2 text-white cursor-pointer" aria-label="Закрыть"><X className="w-5 h-5" /></button>
+        <div className="min-w-0 flex-1">
+          <p className="text-[10px] font-mono uppercase tracking-widest text-white/40">Создание</p>
+          <h3 className="truncate font-bold text-base uppercase sm:text-lg">Новое мероприятие</h3>
+        </div>
+        <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId || creating}
+          className="shrink-0 rounded-xl border-none bg-brand px-4 py-2.5 text-xs font-black uppercase text-black cursor-pointer hover:bg-brand-hover disabled:opacity-50">
+          {creating ? 'Создаю…' : '✅ Создать'}
+        </button>
+      </div>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="form-stable bg-[#121212] rounded-3xl w-full max-w-md shadow-2xl relative z-10 border border-white/10 p-6 space-y-4 max-h-[90vh] overflow-y-auto"
-      >
-        <h3 className="font-bold text-lg uppercase">Новое мероприятие</h3>
+      {/* Весь экран под контент: промпт ИИ, превью и расширенный редактор
+          вводятся в полноформатном окне, а не в маленькой карточке. */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-28 sm:px-8">
+          <h3 className="sr-only">Новое мероприятие</h3>
 
         {/* ШАГ 1: Промпт ИИ (всегда виден) */}
-        <div className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3 sm:p-4 space-y-2">
           <label className="text-[10px] text-white/40 uppercase font-mono block">🧠 ИИ-Ассистент</label>
           <textarea
             placeholder="Опиши идею одной фразой…&#10;Пример: Кайтсерфинг на Минском море, 16-17 июля, старт 12:00, 15 чел, платно 500 BYN"
             value={aiPrompt}
             onChange={(e) => setAiPrompt(e.target.value)}
-            rows={3}
+            rows={6}
             disabled={!!aiProgress}
-            className="w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white text-sm placeholder:text-white/30 disabled:opacity-50"
+            className="w-full min-h-[9rem] bg-white/5 border border-white/10 rounded-lg p-3 text-white text-sm leading-relaxed placeholder:text-white/30 disabled:opacity-50"
           />
           {aiProgress && (
             <div className="bg-black/30 rounded-lg p-2 flex items-center gap-2 text-[11px] text-white/80">
@@ -6069,16 +6080,13 @@ function AddEventModal({ onClose, onAdd }: {
         {/* Кто отвечает за событие — обязательно, с фото, чтобы не ошибиться человеком. */}
         <OrganizerPicker value={organizerId} onChange={(id) => setOrganizerId(id)} />
 
-        {/* КНОПКИ */}
-        <div className="flex gap-2 pt-2">
-          <button onClick={handleAdd} disabled={!formData.title || !formData.date || !organizerId || creating} className="flex-1 bg-brand hover:bg-brand-hover text-black py-3 rounded-xl text-xs font-bold uppercase disabled:opacity-50 cursor-pointer border-none">
-            {creating ? "Создаю…" : "✅ Создать"}
-          </button>
-          <button onClick={onClose} className="flex-1 border border-white/10 py-3 rounded-xl text-xs font-bold uppercase text-white/60 cursor-pointer bg-transparent hover:bg-white/5">
-            Отмена
-          </button>
+        {/* Кнопки «Создать» живут в шапке (она не уезжает при скролле) —
+            внизу оставляем только подсказку, куда всё сохранится. */}
+        <p className="text-center text-[11px] text-white/40">
+          Событие создаётся «под замком» — в афише появится после твоего одобрения.
+        </p>
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 }

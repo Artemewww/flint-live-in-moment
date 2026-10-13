@@ -685,6 +685,11 @@ export default async function handler(req: any, res: any) {
           const oid = Number((o as any).telegram_id);
           if (Number.isFinite(oid) && oid > 0) recipients.add(String(oid));
         }
+        // Организатор ЭТОГО события — даже если он не в костяке: состав
+        // его выезда меняется, и узнавать об этом он должен первым.
+        const { data: evOrg } = await supabase.from('events').select('deputy_id').eq('id', eventId).maybeSingle();
+        const dep = Number((evOrg as any)?.deputy_id);
+        if (Number.isFinite(dep) && dep > 0) recipients.add(String(dep));
       } catch { /* нет доступа — остаётся чат */ }
       // Не пишем владельцу «ты записался» на собственное событие.
       if (verified?.id) recipients.delete(String(verified.id));
