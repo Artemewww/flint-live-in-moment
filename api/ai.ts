@@ -61,6 +61,13 @@ async function listModels(apiKey: string): Promise<string[]> {
   return usable;
 }
 
+/**
+ * Модели, которые Google для этого ключа уже выключил (404 «no longer
+ * available»). В списке ListModels они остаются, и раньше очередь тратила на
+ * них попытки — так gemini-2.5-flash съедала слот при каждом запросе.
+ */
+const deadModels = new Set<string>();
+
 /** Порядок предпочтений: явный env → самые свежие flash → всё остальное. */
 function rankModels(available: string[]): string[] {
   const score = (n: string): number => {
@@ -73,7 +80,10 @@ function rankModels(available: string[]): string[] {
     if (/latest/.test(n)) s += 5;
     return s;
   };
-  const ranked = [...available].sort((a, b) => score(b) - score(a));
+  // Только текстовые «рабочие лошадки»: gemma/robotics/deep-research и прочие
+  // спецмодели JSON по схеме не держат, на них попытки не тратим.
+  const general = available.filter((n) => /^gemini-/.test(n) && !/robotics|computer-use|transcribe|research|nano|omni|customtools/.test(n) && !deadModels.has(n));
+  const ranked = [...general].sort((a, b) => score(b) - score(a));
   const preferred = process.env.GEMINI_MODEL;
   if (preferred && available.includes(preferred)) {
     return [preferred, ...ranked.filter((m) => m !== preferred)];
@@ -85,7 +95,15 @@ async function genJSON(ai: any, apiKey: string, prompt: string, schema: any): Pr
   const available = await listModels(apiKey);
   if (!available.length) throw new Error('У ключа нет ни одной модели с generateContent');
 
-  const queue = rankModels(available).slice(0, 6);
+  /**
+   * Очередь шире, и «-lite» в ней гарантированно есть. В часы пик все свежие
+   * flash разом отвечают 503 «high demand» — а лёгкие модели при этом живы.
+   * Раньше в очередь попадали 6 моделей, 4 из них перегружены, одна выключена,
+   * и событие «не генерировалось».
+   */
+  const ranked = rankModels(available);
+  const lites = ranked.filter((m) => /lite/.test(m)).slice(0, 2);
+  const queue = [...new Set([...ranked.filter((m) => !/lite/.test(m)).slice(0, 5), ...lites, ...ranked.slice(5, 8)])].slice(0, 9);
   const errors: string[] = [];
   const retryable: string[] = [];
 
@@ -108,6 +126,7 @@ async function genJSON(ai: any, apiKey: string, prompt: string, schema: any): Pr
     } catch (e) {
       const msg = (e as Error).message;
       if (/503|UNAVAILABLE|high demand/i.test(msg)) retryable.push(model);
+      if (/404|no longer available|not found/i.test(msg)) deadModels.add(model);
       errors.push(`${model}: ${msg.slice(0, 100)}`);
     }
   }
@@ -547,7 +566,15 @@ export default async function handler(req: any, res: any) {
          `- faq: 2–5 вопросов, которые участники реально зададут ИМЕННО про это событие, с короткими ответами ` +
          `(«можно без опыта?», «что если дождь?»). Не выдумывай факты — если ответ зависит от организатора, так и скажи;\n` +
          `- costModel: как делим деньги — 'self' (каждый платит сам: кино, кафе), 'pool' (общий взнос/аренда делится), ` +
-         `'food_share' (скидываемся на общий стол, выезды с готовкой), 'bring_own' (каждый везёт своё);\n` +
+         `'food_share' (скидываемся на общий стол, выезды с готовкой), 'bring_own' (каждый везёт своё), ` +
+         `'club_invite' (у клуба есть пригласительные/бесплатные места на платное мероприятие: форум, выставка, концерт);\n` +
+         `- ЦЕННОСТЬ (заполняй, если в тексте есть цена билета или пригласительные клуба): ` +
+         `marketPrice — обычная цена билета строкой как в тексте («35–355 BYN»), ` +
+         `clubSeats — сколько мест/пригласительных у клуба (число; тогда и maxParticipants = clubSeats), ` +
+         `clubSponsor — при чьей поддержке/кто организовал места (имя), ` +
+         `ticketUrl — ссылка на продажу билетов, если она есть в тексте. Ничего не выдумывай — нет в тексте, оставь пустым;\n` +
+         `- Если в тексте есть ТОЧНЫЙ адрес площадки, клади его в location (например «БелЭкспо, ул. Павлины Меделки, 24, Минск»), ` +
+         `а время работы/запуска по дням — в program;\n` +
          `- costNote: одна фраза-пояснение про деньги (напр. «баня 300 BYN на всех, продукты ≈25 BYN/чел»), без выдуманных сумм — пусто, если не ясно;\n` +
          `- needs: 0–8 вещей, которые нужны НА ВСЕХ и которые кто-то должен привезти (мангал, котёл, тент, колонка, веники…). Для кино/кафе — пустой список;\n` +
          `- trip: ТОЛЬКО для scale='expedition' — { docs: что с документами/визой, flights: как добираемся, budget: бюджет на человека одной строкой }, иначе пустые строки.`;
@@ -587,8 +614,12 @@ export default async function handler(req: any, res: any) {
           notIncluded: { type: Type.ARRAY, items: { type: Type.STRING } },
           faq: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { q: { type: Type.STRING }, a: { type: Type.STRING } } } },
           trip: { type: Type.OBJECT, properties: { docs: { type: Type.STRING }, flights: { type: Type.STRING }, budget: { type: Type.STRING } } },
-          costModel: { type: Type.STRING, enum: ['self', 'pool', 'food_share', 'bring_own'] },
+          costModel: { type: Type.STRING, enum: ['self', 'pool', 'food_share', 'bring_own', 'club_invite'] },
           costNote: { type: Type.STRING },
+          marketPrice: { type: Type.STRING },
+          clubSeats: { type: Type.NUMBER },
+          clubSponsor: { type: Type.STRING },
+          ticketUrl: { type: Type.STRING },
           needs: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
         required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
@@ -643,8 +674,12 @@ export default async function handler(req: any, res: any) {
         included: (Array.isArray(p.included) ? p.included : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
         notIncluded: (Array.isArray(p.notIncluded) ? p.notIncluded : []).map((x: any) => String(x).slice(0, 120)).filter(Boolean).slice(0, 8),
         faq: (Array.isArray(p.faq) ? p.faq : []).filter((f: any) => f && f.q && f.a).map((f: any) => ({ q: String(f.q).slice(0, 160), a: String(f.a).slice(0, 600) })).slice(0, 6),
-        costModel: ['self', 'pool', 'food_share', 'bring_own'].includes(p.costModel) ? p.costModel : '',
+        costModel: ['self', 'pool', 'food_share', 'bring_own', 'club_invite'].includes(p.costModel) ? p.costModel : '',
         costNote: String(p.costNote || '').slice(0, 200),
+        marketPrice: String(p.marketPrice || '').slice(0, 60),
+        clubSeats: Number(p.clubSeats) > 0 ? Math.min(500, Math.round(Number(p.clubSeats))) : 0,
+        clubSponsor: String(p.clubSponsor || '').slice(0, 80),
+        ticketUrl: /^https?:\/\//.test(String(p.ticketUrl || '')) ? String(p.ticketUrl).slice(0, 300) : '',
         needs: (Array.isArray(p.needs) ? p.needs : []).map((x: any) => String(x).slice(0, 60)).filter(Boolean).slice(0, 10),
         trip: p.scale === 'expedition' && p.trip ? { docs: String(p.trip.docs || ''), flights: String(p.trip.flights || ''), budget: String(p.trip.budget || '') } : null,
       };

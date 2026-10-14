@@ -51,11 +51,15 @@ async function setGroupBan(telegramId: number, ban: boolean) {
 }
 
 /** Начисление баллов участнику (read+update, без RPC). Best-effort. */
-async function bumpPoints(tgId: number, n: number) {
+/** Начислить баллы и записать причину в журнал — без причины баллы «ни за что». */
+async function bumpPoints(tgId: number, n: number, reason: string, description: string, eventId?: string | null) {
   try {
     const { data } = await supabase.from('members').select('points').eq('telegram_id', tgId).maybeSingle();
     const cur = (data as any)?.points || 0;
     await supabase.from('members').update({ points: cur + n }).eq('telegram_id', tgId);
+    try {
+      await supabase.from('points_log').insert({ telegram_id: tgId, event_id: eventId || null, reason, points: n, description });
+    } catch { /* журнал необязателен */ }
   } catch { /* колонка points могла отсутствовать до миграции */ }
 }
 
@@ -118,6 +122,17 @@ export default async function handler(req: any, res: any) {
    * Аудитория клуба: кто есть, кто активен в боте, кто кого привёл,
    * сколько событий реально посетил. Основа для статистики результативности.
    */
+  // Журнал баллов участника: «за что у него столько» — по одной строке на начисление.
+  if (req.method === 'GET' && req.query?.action === 'points_log') {
+    const tid = Number(req.query?.telegramId) || 0;
+    if (!tid) return res.status(400).json({ error: 'telegramId обязателен' });
+    const { data, error } = await supabase.from('points_log')
+      .select('points,reason,description,created_at,event_id').eq('telegram_id', tid)
+      .order('created_at', { ascending: false }).limit(200);
+    if (error) return res.status(200).json({ ok: false, error: error.message });
+    return res.status(200).json({ ok: true, rows: data || [] });
+  }
+
   if (req.method === 'GET' && req.query?.action === 'members') {
     try {
       const { data: membersRaw } = await supabase
@@ -933,7 +948,7 @@ export default async function handler(req: any, res: any) {
       // Текущее состояние — чтобы поймать переход «не был» → «был» (для баллов).
       const { data: before } = await supabase
         .from('registrations')
-        .select('status,attended,telegram_id')
+        .select('status,attended,telegram_id,event_id')
         .eq('id', registrationId)
         .single();
 
@@ -965,7 +980,8 @@ export default async function handler(req: any, res: any) {
       // Регистрация и подтверждение статуса баллов не дают (PLAN.md §5.3).
       if (attended === true && before && before.attended !== true && before.telegram_id) {
         const memberId = Number(before.telegram_id);
-        await bumpPoints(memberId, POINTS_ATTEND);
+        const { data: evT } = await supabase.from('events').select('title').eq('id', before.event_id).maybeSingle();
+        await bumpPoints(memberId, POINTS_ATTEND, 'attend', `Участие: ${(evT as any)?.title || 'событие'}`, before.event_id);
         try {
           // Первое посещённое событие участника → награда пригласившему.
           const { count } = await supabase
@@ -978,7 +994,9 @@ export default async function handler(req: any, res: any) {
             const { data: m } = await supabase.from('members').select('referred_by').eq('telegram_id', memberId).maybeSingle();
             const inviter = (m as any)?.referred_by;
             if (inviter) {
-              await bumpPoints(Number(inviter), POINTS_REFERRAL);
+              const { data: newbie } = await supabase.from('members').select('first_name,username').eq('telegram_id', memberId).maybeSingle();
+              await bumpPoints(Number(inviter), POINTS_REFERRAL, 'referral',
+                `Привёл друга: ${(newbie as any)?.first_name || ((newbie as any)?.username ? '@' + (newbie as any).username : 'новый участник')} побывал на первом событии`, before.event_id);
               await supabase.from('referrals').update({ rewarded: true }).eq('invited_id', memberId).eq('inviter_id', inviter);
             }
           }

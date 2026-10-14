@@ -77,6 +77,12 @@ function deny(res: any) {
 function costLineOf(ev: any): string {
   const lg = ev?.logistics || {};
   const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  // Пригласительные клуба: показываем и «рыночную» цену — в ней вся ценность.
+  if (lg.costModel === 'club_invite') {
+    const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
+    const market = String(lg.marketPrice || '').trim();
+    return `бесплатно по пригласительному клуба${seats ? ` (${seats} мест)` : ''}${market ? ` · обычный билет ${market}` : ''}`;
+  }
   if (ev?.price_type === 'paid' && Number(ev?.price_amount) > 0) return `${ev.price_amount} BYN`;
   switch (lg.costModel) {
     case 'self': return est ? `≈${est} BYN, каждый платит за себя` : 'Каждый платит за себя';
@@ -88,11 +94,89 @@ function costLineOf(ev: any): string {
   return 'Бесплатно';
 }
 
+/**
+ * Кнопки персонального приглашения: ответ в один тап. Каждое нажатие бот
+ * пишет в event_invites — отсюда воронка в админке (кто открыл, кто что
+ * ответил) и дожим «подумаю» через пару дней.
+ */
+function inviteMarkup(eventId: string) {
+  return { inline_keyboard: [
+    [{ text: '✅ Буду', callback_data: `inv_y_${eventId}` }, { text: '🤔 Подумаю', callback_data: `inv_m_${eventId}` }],
+    [{ text: '❌ Не смогу', callback_data: `inv_n_${eventId}` }],
+    [{ text: '👀 Подробнее о событии', callback_data: `inv_o_${eventId}` }],
+  ] };
+}
+
+/** Строка «ценности» для приглашения: цена без клуба, места, спонсор. */
+function valueLineOf(ev: any): string {
+  const lg = ev?.logistics || {};
+  if (lg.costModel !== 'club_invite') return '';
+  const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
+  const market = String(lg.marketPrice || '').trim();
+  const sponsor = String(lg.clubSponsor || '').trim();
+  return `\n💎 ${market ? `Билет стоит <b>${esc(market)}</b> — ` : ''}для тебя <b>бесплатно</b>: ` +
+    `у клуба ${seats ? `<b>${seats} пригласительных</b>` : 'пригласительные'}${sponsor ? ` при поддержке ${esc(sponsor)}` : ''}. ` +
+    `Места — кто первый ответит «Буду».\n`;
+}
+
+/** Статистика приглашений события: воронка + список людей с ответами. */
+async function inviteStats(eventId: string) {
+  const { data: inv, error } = await supabase
+    .from('event_invites')
+    .select('telegram_id,sent_at,delivered,error,opened_at,answer,answered_at,reminded_at,remind_count')
+    .eq('event_id', eventId).order('sent_at', { ascending: false });
+  if (error) return { ok: false, needsMigration: /event_invites/i.test(error.message), error: error.message };
+  const ids = (inv || []).map((r: any) => Number(r.telegram_id));
+  const names = new Map<number, any>();
+  const regs = new Map<number, string>();
+  if (ids.length) {
+    const { data: ms } = await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ids);
+    for (const m of ms || []) names.set(Number((m as any).telegram_id), m);
+    const { data: rs } = await supabase.from('registrations').select('telegram_id,status').eq('event_id', eventId).in('telegram_id', ids);
+    for (const r of rs || []) regs.set(Number((r as any).telegram_id), String((r as any).status || ''));
+  }
+  const people = (inv || []).map((r: any) => {
+    const m = names.get(Number(r.telegram_id)) || {};
+    const reg = regs.get(Number(r.telegram_id));
+    return {
+      telegramId: Number(r.telegram_id),
+      name: m.first_name || (m.username ? '@' + m.username : `id${r.telegram_id}`),
+      username: m.username || '',
+      sentAt: r.sent_at, delivered: !!r.delivered, error: r.error || '',
+      openedAt: r.opened_at, answer: r.answer || null, answeredAt: r.answered_at,
+      remindedAt: r.reminded_at, remindCount: Number(r.remind_count) || 0,
+      registered: !!reg && reg !== 'cancelled',
+    };
+  });
+  const n = (f: (p: any) => boolean) => people.filter(f).length;
+  return {
+    ok: true,
+    summary: {
+      sent: people.length,
+      delivered: n((p) => p.delivered),
+      opened: n((p) => !!p.openedAt || !!p.answer),
+      yes: n((p) => p.answer === 'yes'),
+      maybe: n((p) => p.answer === 'maybe'),
+      no: n((p) => p.answer === 'no'),
+      silent: n((p) => p.delivered && !p.answer),
+      registered: n((p) => p.registered),
+    },
+    people,
+  };
+}
+
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   if (req.method === 'OPTIONS') return res.status(204).end();
+  // Статистика приглашений — GET, всё остальное — POST.
+  if (req.method === 'GET' && req.query?.action === 'invite_stats') {
+    if (!isAdmin(req)) return deny(res);
+    const eventId = String(req.query?.eventId || '');
+    if (!eventId) return res.status(400).json({ error: 'Missing eventId' });
+    return res.status(200).json(await inviteStats(eventId));
+  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   if (!isAdmin(req)) return deny(res);
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, sent: 0, total: 0, error: 'TELEGRAM_BOT_TOKEN не задан в env' });
@@ -104,6 +188,47 @@ export default async function handler(req: any, res: any) {
 
     // Событие — для дефолтного текста.
     const { data: event } = await supabase.from('events').select('*').eq('id', eventId).single();
+
+    /**
+     * ДОЖИМ ПО ВОРОНКЕ вручную: «подумаю» и/или молчащим — ещё раз, с теми же
+     * кнопками. Автоматически то же делает крон (api/cron/reminders.ts).
+     */
+    if (body.action === 'invite_remind') {
+      const target: 'maybe' | 'silent' | 'both' = ['maybe', 'silent'].includes(body.target) ? body.target : 'both';
+      const { data: inv, error } = await supabase.from('event_invites')
+        .select('telegram_id,answer,delivered,remind_count').eq('event_id', eventId);
+      if (error) return res.status(200).json({ ok: false, error: 'Нет таблицы event_invites — примени миграцию 2026-10-event-invites.sql' });
+      const ids = (inv || []).filter((r: any) =>
+        (target !== 'silent' && r.answer === 'maybe') || (target !== 'maybe' && !r.answer && r.delivered),
+      ).map((r: any) => Number(r.telegram_id));
+      let sent = 0;
+      for (const id of ids) {
+        const prev = (inv || []).find((r: any) => Number(r.telegram_id) === id) as any;
+        const text = prev?.answer === 'maybe'
+          ? `🤔 <b>Ты хотел подумать про «${esc(event?.title || 'событие')}»</b>\n\n` +
+            (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') + valueLineOf(event) +
+            `\nРешил? Ответь одной кнопкой — организатору важно понимать, сколько нас.`
+          : `👋 <b>Напоминаю про «${esc(event?.title || 'событие')}»</b>\n\n` +
+            (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
+            (event?.location ? `📍 ${esc(event.location)}\n` : '') + valueLineOf(event) +
+            `\nТы ещё не ответил. Будешь? Одна кнопка 👇`;
+        try {
+          const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML', disable_web_page_preview: true, reply_markup: inviteMarkup(eventId) }),
+          });
+          const j = await r.json();
+          if (j?.ok) {
+            sent++;
+            await supabase.from('event_invites').update({
+              reminded_at: new Date().toISOString(), remind_count: (Number(prev?.remind_count) || 0) + 1,
+              message_id: j.result?.message_id ?? null,
+            }).eq('event_id', eventId).eq('telegram_id', id);
+          }
+        } catch { /* следующий */ }
+      }
+      return res.status(200).json({ ok: true, sent, total: ids.length });
+    }
 
     /**
      * audience='all'    — всем одобрённым членам клуба (анонс нового события);
@@ -207,7 +332,8 @@ export default async function handler(req: any, res: any) {
       (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
       (event?.location ? `📍 ${esc(event.location)}\n` : '') +
       `💰 ${esc(costLineOf(event))}\n` +
-      `\nОткрой карточку и запишись — место держим за тобой.`;
+      valueLineOf(event) +
+      `\nОтветь одной кнопкой — так организатор поймёт, сколько нас будет 👇`;
 
     /**
      * Блок «кто уже подтвердил». Считается ОДИН раз до отправки и подставляется
@@ -284,16 +410,10 @@ export default async function handler(req: any, res: any) {
      * rsvpn_ → спрашивает причину и снимает). Это контрольный опрос: одного
      * запроса обычно достаточно, повтор — по кнопке в админке.
      */
+    // Персональное приглашение — с ответом в один тап и учётом в воронке.
+    // Если организатор написал свой текст, кнопки те же: статистика нужна всегда.
     const markup = toPicked
-      ? { inline_keyboard: [
-          /**
-           * url-кнопка с startapp, а НЕ web_app: web_app-кнопки Telegram
-           * выбрасывает при пересылке — приглашение доходило до друга без
-           * кнопки. startapp открывает приложение сразу на карточке события.
-           */
-          [{ text: '✅ Открыть и записаться', url: `https://t.me/${process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot'}?startapp=${encodeURIComponent(`ev_${eventId}`)}` }],
-          [{ text: '✍️ Ответить', callback_data: 'usreply' }],
-        ] }
+      ? inviteMarkup(String(eventId))
       : rsvpMode
         ? { inline_keyboard: [
             [{ text: '✅ Еду', callback_data: `rsvpy_${eventId}` }],
@@ -336,7 +456,7 @@ export default async function handler(req: any, res: any) {
         body: JSON.stringify(payload),
       })
         .then((r) => r.json())
-        .then((j) => ({ chatId, ok: j?.ok === true, code: j?.error_code, desc: j?.description }));
+        .then((j) => ({ chatId, ok: j?.ok === true, code: j?.error_code, desc: j?.description, messageId: j?.result?.message_id ?? null }));
 
     const results = await Promise.allSettled(
       ids.map((chatId) =>
@@ -375,7 +495,26 @@ export default async function handler(req: any, res: any) {
       await supabase.from('members').update({ bot_active: false }).in('telegram_id', blocked);
     }
 
-    return res.status(200).json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, allRegistrations: total, breakdown });
+    /**
+     * Учёт приглашений: строка на каждого получателя — дошло или нет и с
+     * каким message_id. Таблицы может не быть до миграции — тогда рассылка
+     * всё равно ушла, а админка подскажет применить SQL.
+     */
+    let tracking = false;
+    if (toPicked) {
+      const now = new Date().toISOString();
+      const rows = ok.map((r) => ({
+        event_id: String(eventId), telegram_id: r.value.chatId, invited_by: 'admin', sent_at: now,
+        delivered: !!r.value.ok, error: r.value.ok ? null : String(r.value.desc || r.value.code || 'ошибка').slice(0, 200),
+        message_id: r.value.messageId,
+      }));
+      if (rows.length) {
+        const { error: trErr } = await supabase.from('event_invites').upsert(rows, { onConflict: 'event_id,telegram_id' });
+        tracking = !trErr;
+      }
+    }
+
+    return res.status(200).json({ ok: sent > 0, sent, total: ids.length, blocked: blocked.length, allRegistrations: total, breakdown, tracking });
   } catch (error) {
     return res.status(500).json({ ok: false, error: (error as Error).message });
   }

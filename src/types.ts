@@ -339,8 +339,36 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
  * но каждый платит за себя — а карточка писала «Бесплатно». Модель оплаты
  * (logistics.costModel) и ориентир (logistics.costEstimate) важнее «взноса».
  */
+/**
+ * ЦЕННОСТЬ СОБЫТИЯ ДЛЯ КЛУБА — единая структура для любого события, куда у
+ * клуба есть пригласительные / квота / скидка (форумы, выставки, концерты).
+ * Человек должен с одного взгляда понять: сколько это стоит «на улице», где
+ * проходит и что клуб даёт сверху — иначе бесплатный билет на форум за
+ * 355 BYN выглядит как «ещё одна бесплатная встреча».
+ *   logistics.marketPrice  — обычная цена билета строкой («35–355 BYN»)
+ *   logistics.clubSeats    — сколько мест по пригласительным у клуба
+ *   logistics.clubSponsor  — при чьей поддержке («Артём Дементьев»)
+ *   logistics.ticketUrl    — где продают билеты (для сравнения цены)
+ */
+export function clubValue(lg: any): { marketPrice: string; seats: number; sponsor: string; ticketUrl: string } | null {
+  if (!lg) return null;
+  const marketPrice = typeof lg.marketPrice === 'string' ? lg.marketPrice.trim() : '';
+  const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
+  const sponsor = typeof lg.clubSponsor === 'string' ? lg.clubSponsor.trim() : '';
+  const ticketUrl = typeof lg.ticketUrl === 'string' && /^https?:\/\//.test(lg.ticketUrl.trim()) ? lg.ticketUrl.trim() : '';
+  if (lg.costModel !== 'club_invite' && !seats && !marketPrice) return null;
+  return { marketPrice, seats, sponsor, ticketUrl };
+}
+
 export function priceTag(e: Pick<CommunityEvent, 'priceType' | 'priceAmount' | 'priceLabel' | 'logistics'>): { short: string; note?: string } {
   const lg: any = e.logistics || {};
+  const val = clubValue(lg);
+  if (val && lg.costModel === 'club_invite') {
+    return {
+      short: val.seats ? `🎟 Бесплатно · ${val.seats} мест` : '🎟 Пригласительный',
+      note: [val.marketPrice && `Обычный билет: ${val.marketPrice}`, lg.costNote].filter(Boolean).join('\n') || undefined,
+    };
+  }
   const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
   const note = typeof lg.costNote === 'string' && lg.costNote.trim() ? lg.costNote.trim() : undefined;
   if (e.priceType === 'paid' && Number(e.priceAmount) > 0) return { short: `${e.priceAmount} Br`, note };

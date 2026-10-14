@@ -108,6 +108,10 @@ async function send(chatId: number, text: string, replyMarkup?: unknown, categor
   }
 }
 
+function escH(v: string): string {
+  return String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 /** YYYY-MM-DD со сдвигом на N дней от сегодня. */
 function dayOffset(n: number): string {
   const d = new Date();
@@ -1044,10 +1048,30 @@ export default async function handler(req: any, res: any) {
         if (!pending.length) continue;
         for (const r of pending as any[]) {
           await supabase.from('registrations').update({ attended: true }).eq('id', r.id);
-          // Баллы за участие — той же величины, что начисляет админка.
+          // Баллы за участие — той же величины, что начисляет админка, и с
+          // записью причины: иначе в рейтинге баллы «ни за что».
           try {
-            const { data: m } = await supabase.from('members').select('points').eq('telegram_id', r.telegram_id).maybeSingle();
+            const { data: m } = await supabase.from('members').select('points,referred_by').eq('telegram_id', r.telegram_id).maybeSingle();
             await supabase.from('members').update({ points: ((m as any)?.points || 0) + 100 }).eq('telegram_id', r.telegram_id);
+            try {
+              await supabase.from('points_log').insert({ telegram_id: r.telegram_id, event_id: (ev as any).id, reason: 'attend', points: 100, description: `Участие: ${(ev as any).title}` });
+            } catch { /* журнал необязателен */ }
+            // Первое посещение приглашённого — 150 баллов тому, кто привёл (как в админке).
+            const inviter = Number((m as any)?.referred_by) || 0;
+            if (inviter > 0) {
+              const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true })
+                .eq('telegram_id', r.telegram_id).eq('attended', true).neq('id', r.id);
+              const { data: refRow } = await supabase.from('referrals').select('rewarded').eq('invited_id', r.telegram_id).eq('inviter_id', inviter).maybeSingle();
+              if (!count && !(refRow as any)?.rewarded) {
+                const { data: im } = await supabase.from('members').select('points').eq('telegram_id', inviter).maybeSingle();
+                const { data: nm } = await supabase.from('members').select('first_name').eq('telegram_id', r.telegram_id).maybeSingle();
+                await supabase.from('members').update({ points: ((im as any)?.points || 0) + 150 }).eq('telegram_id', inviter);
+                await supabase.from('referrals').update({ rewarded: true }).eq('invited_id', r.telegram_id).eq('inviter_id', inviter);
+                try {
+                  await supabase.from('points_log').insert({ telegram_id: inviter, event_id: (ev as any).id, reason: 'referral', points: 150, description: `Привёл друга: ${(nm as any)?.first_name || 'новый участник'} побывал на первом событии` });
+                } catch { /* журнал необязателен */ }
+              }
+            }
           } catch { /* колонки points может не быть */ }
         }
         const adminChat = Number(process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570');
@@ -1371,6 +1395,58 @@ export default async function handler(req: any, res: any) {
         await supabase.from('app_config').upsert({ key: sinceKey, value: JSON.stringify(joins) });
       }
     } catch (e) { report.errors.push(`stale-kick: ${(e as Error).message}`); }
+
+    /**
+     * ВОРОНКА ПРИГЛАШЕНИЙ — дожим.
+     *   • «🤔 Подумаю» → через 2 суток напоминаем, максимум 2 раза;
+     *   • молчит (дошло, но ни одной кнопки) → через 2 суток один раз.
+     * Только будущие события: звать на прошедшее бессмысленно. Повтор не
+     * чаще раза в сутки — reminded_at. Кнопки те же, что в приглашении.
+     */
+    try {
+      const day = 864e5;
+      const cutoff = new Date(Date.now() - 2 * day).toISOString();
+      const { data: inv, error: invErr } = await supabase.from('event_invites')
+        .select('event_id,telegram_id,answer,answered_at,sent_at,delivered,reminded_at,remind_count')
+        .or('answer.eq.maybe,answer.is.null').lt('remind_count', 2).limit(500);
+      if (!invErr && inv?.length) {
+        const due = (inv as any[]).filter((r) => {
+          if (r.reminded_at && Date.parse(r.reminded_at) > Date.now() - day) return false;
+          if (r.answer === 'maybe') return (r.answered_at || '') < cutoff;
+          return r.delivered && (Number(r.remind_count) || 0) < 1 && (r.sent_at || '') < cutoff;
+        });
+        const evIds = [...new Set(due.map((r) => String(r.event_id)))];
+        const { data: evs } = evIds.length
+          ? await supabase.from('events').select('id,title,date,date_label,location,status,logistics').in('id', evIds)
+          : { data: [] as any[] };
+        const today = dayOffset(0);
+        const evMap = new Map<string, any>((evs || []).filter((e: any) => String(e.date || '') >= today && e.status !== 'closed').map((e: any) => [String(e.id), e]));
+        let sentN = 0;
+        for (const r of due) {
+          const ev = evMap.get(String(r.event_id));
+          if (!ev) continue;
+          const lg = ev.logistics || {};
+          const value = lg.costModel === 'club_invite'
+            ? `\n💎 ${lg.marketPrice ? `Билет стоит ${escH(String(lg.marketPrice))} — ` : ''}для тебя бесплатно${Number(lg.clubSeats) > 0 ? `, но мест всего ${Math.round(Number(lg.clubSeats))}` : ''}.\n`
+            : '';
+          const text = r.answer === 'maybe'
+            ? `🤔 <b>Ты хотел подумать про «${escH(ev.title)}»</b>\n\n${ev.date_label ? `📆 ${escH(ev.date_label)}\n` : ''}${value}\nРешил? Ответь одной кнопкой 👇`
+            : `👋 <b>Напоминаю про «${escH(ev.title)}»</b>\n\n${ev.date_label ? `📆 ${escH(ev.date_label)}\n` : ''}${ev.location ? `📍 ${escH(ev.location)}\n` : ''}${value}\nТы ещё не ответил. Будешь? 👇`;
+          const markup = { inline_keyboard: [
+            [{ text: '✅ Буду', callback_data: `inv_y_${ev.id}` }, { text: '🤔 Подумаю', callback_data: `inv_m_${ev.id}` }],
+            [{ text: '❌ Не смогу', callback_data: `inv_n_${ev.id}` }],
+            [{ text: '👀 Подробнее о событии', callback_data: `inv_o_${ev.id}` }],
+          ] };
+          if (await send(Number(r.telegram_id), text, markup)) {
+            sentN++;
+            await supabase.from('event_invites').update({
+              reminded_at: new Date().toISOString(), remind_count: (Number(r.remind_count) || 0) + 1,
+            }).eq('event_id', r.event_id).eq('telegram_id', r.telegram_id);
+          }
+        }
+        (report as any).inviteNudges = sentN;
+      }
+    } catch (e) { report.errors.push(`invite-funnel: ${(e as Error).message}`); }
 
     return res.status(200).json({ ok: true, ...report });
   } catch (err) {

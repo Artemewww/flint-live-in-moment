@@ -80,7 +80,7 @@ function Row({ r, sticky, reasons }: { r: RatingRow; sticky?: boolean; reasons?:
           {reasons!.map((w, i) => (
             <li key={i} className="flex items-start gap-2 text-[11px] leading-snug">
               <span className={`shrink-0 font-black tabular-nums ${sticky ? 'text-black' : 'text-brand'}`}>
-                +{w.points}
+                {w.points >= 0 ? '+' : ''}{w.points}
               </span>
               <span className={sticky ? 'text-black/70' : 'text-white/65'}>{w.text}</span>
             </li>
@@ -130,9 +130,25 @@ export default function ClubRating({ data, onClose }: { data: RatingData | null;
         ) : data.top.length === 0 ? (
           <p className="py-16 text-center text-sm text-white/40">Пока пусто — первые очки дают выезды</p>
         ) : (
-          <div className="space-y-1">
-            {data.top.map((r) => <Row key={r.id} r={r} reasons={data.reasons?.[r.id]} />)}
-          </div>
+          <>
+            {/* Правила игры на виду: за что дают баллы. Тап по человеку — его разбор. */}
+            <details className="mb-3 rounded-xl border border-white/10 bg-white/[.03] px-3 py-2">
+              <summary className="cursor-pointer text-[11px] font-bold uppercase tracking-wide text-white/60">⭐ За что дают баллы</summary>
+              <ul className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-white/65">
+                <li>🏕 Побывал на событии — <b className="text-brand">100</b></li>
+                <li>🤝 Друг пришёл на 1-е событие — <b className="text-brand">150</b></li>
+                <li>🚗 Подвёз на машине — <b className="text-brand">15</b></li>
+                <li>⛺ Место в палатке — <b className="text-brand">12</b></li>
+                <li>🎒 Одолжил снаряжение — <b className="text-brand">10</b></li>
+                <li>🔥 Чек-ин челленджа — <b className="text-brand">10</b></li>
+                <li className="col-span-2">💪 Помог на событии (подтверждает организатор) — <b className="text-brand">от 5</b></li>
+              </ul>
+              <p className="mt-2 text-[10px] text-white/40">Нажми на человека — увидишь, за что у него баллы.</p>
+            </details>
+            <div className="space-y-1">
+              {data.top.map((r) => <Row key={r.id} r={r} reasons={data.reasons?.[r.id]} />)}
+            </div>
+          </>
         )}
       </div>
 

@@ -3169,10 +3169,18 @@ async function handleProfileCommand(msg: any, chatId: number, openBtn: any) {
 const POINTS_SHARE_CAR = 15;   // предложил машину с местами
 const POINTS_SHARE_TENT = 12;  // предложил места в палатке
 
-/** Начисляет баллы через RPC и возвращает новый баланс (0 при ошибке). */
-async function awardPoints(tgId: number, n: number): Promise<number> {
+/**
+ * Начисляет баллы через RPC и возвращает новый баланс (0 при ошибке).
+ * ВСЕГДА с причиной: раньше баллы за машину/палатку/чек-ин копились без
+ * записи в points_log, и у людей в рейтинге стояли цифры «просто так» —
+ * нельзя было открыть и посмотреть, за что.
+ */
+async function awardPoints(tgId: number, n: number, reason: string, description: string, eventId?: string | null): Promise<number> {
   try {
     await supabase.rpc('award_points', { tg: tgId, n });
+    try {
+      await supabase.from('points_log').insert({ telegram_id: tgId, event_id: eventId || null, reason, points: n, description });
+    } catch { /* журнал необязателен — баллы уже начислены */ }
     const { data } = await supabase.from('members').select('points').eq('telegram_id', tgId).maybeSingle();
     return Number((data as any)?.points) || 0;
   } catch { return 0; }
@@ -7616,7 +7624,7 @@ export default async function handler(req: any, res: any) {
           await supabase.from('rides').update(rideData).eq('id', (existing as any).id);
         } else {
           await supabase.from('rides').insert(rideData);
-          carBonus = await awardPoints(tgId, POINTS_SHARE_CAR); // баллы только за новую машину
+          carBonus = await awardPoints(tgId, POINTS_SHARE_CAR, 'share_car', 'Предложил места в машине', evId); // баллы только за новую машину
         }
         await clearSession(tgId);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: existing ? 'Поездка обновлена!' : 'Поездка добавлена!' });
@@ -7982,6 +7990,74 @@ export default async function handler(req: any, res: any) {
       }
 
       // RSVP «✅ Еду» из напоминания — подтверждаем, что человек с нами.
+      /**
+       * ОТВЕТ НА ПЕРСОНАЛЬНОЕ ПРИГЛАШЕНИЕ: inv_<y|m|n|o>_<eventId>.
+       * Каждое нажатие пишем в event_invites — отсюда воронка в админке:
+       * открыл / буду / подумаю / не смогу. Кнопки под приглашением остаются
+       * (с отметкой выбранного), чтобы человек мог передумать.
+       */
+      if (/^inv_[ymno]_/.test(data)) {
+        const kind = data[4] as 'y' | 'm' | 'n' | 'o';
+        const evId = data.slice(6);
+        const ev = await getEvent(evId);
+        const now = new Date().toISOString();
+        const answer = kind === 'y' ? 'yes' : kind === 'm' ? 'maybe' : kind === 'n' ? 'no' : null;
+        try {
+          const { data: row } = await supabase.from('event_invites').select('opened_at').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+          const patch: Record<string, unknown> = { opened_at: (row as any)?.opened_at || now };
+          if (answer) Object.assign(patch, { answer, answered_at: now });
+          if (row) await supabase.from('event_invites').update(patch).eq('event_id', evId).eq('telegram_id', tgId);
+          // Приглашение пришло не через админку (переслали) — всё равно учитываем.
+          else await supabase.from('event_invites').insert({ event_id: evId, telegram_id: tgId, invited_by: 'forward', delivered: true, ...patch });
+        } catch { /* таблицы может не быть до миграции — ответ человеку важнее */ }
+
+        if (!ev) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Событие уже недоступно' });
+          return res.status(200).json({ ok: true });
+        }
+        if (answer) {
+          // Отмечаем выбор прямо на кнопках — видно, что ответ принят.
+          const mark = (k: string, t: string) => (answer === k ? `● ${t}` : t);
+          try {
+            await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [
+              [{ text: mark('yes', '✅ Буду'), callback_data: `inv_y_${evId}` }, { text: mark('maybe', '🤔 Подумаю'), callback_data: `inv_m_${evId}` }],
+              [{ text: mark('no', '❌ Не смогу'), callback_data: `inv_n_${evId}` }],
+              [{ text: '👀 Подробнее о событии', callback_data: `inv_o_${evId}` }],
+            ] } });
+          } catch { /* сообщение старое — не страшно */ }
+        }
+
+        if (kind === 'y') {
+          const registered = await hasActiveReg(evId, tgId);
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Отлично!' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: registered
+              ? '🔥 Ты уже записан — ждём тебя!'
+              : `🔥 <b>Супер!</b> Остался один шаг — подтверди запись в приложении (меньше минуты). ` +
+                `Пока не подтвердил, место за тобой не закреплено.`,
+            ...(registered ? {} : { reply_markup: kb([[appBtn('✅ Подтвердить запись', site, { ev: evId })]]) }),
+          });
+        } else if (kind === 'm') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Хорошо, напомню через пару дней' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: '🤔 Понял, подумай. Напомню через пару дней — ответишь той же кнопкой под приглашением.',
+          });
+        } else if (kind === 'n') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо, что ответил' });
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👌 Спасибо, что ответил! Позовём на следующее.' });
+        } else {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: eventCardShort(ev),
+            reply_markup: kb([[appBtn('👀 Открыть карточку', site, { ev: evId })]]),
+          });
+        }
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('rsvpy_')) {
         const evId = data.slice('rsvpy_'.length);
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Отлично, ждём тебя!' });
@@ -8187,7 +8263,7 @@ export default async function handler(req: any, res: any) {
           await tg('editMessageText', { chat_id: chatId, message_id: msgId, text: '⚠️ Не удалось добавить палатку. Возможно, ещё не применена миграция палаток (2026-tents-booking.sql).' });
           return res.status(200).json({ ok: true });
         }
-        const tentBonus = myTent ? 0 : await awardPoints(tgId, POINTS_SHARE_TENT); // баллы только за новую палатку
+        const tentBonus = myTent ? 0 : await awardPoints(tgId, POINTS_SHARE_TENT, 'share_tent', 'Поделился местом в палатке', evId); // баллы только за новую палатку
         const grLabel = gender === 'male' ? 'только М' : gender === 'female' ? 'только Ж' : 'любые';
         await tg('editMessageText', {
           chat_id: chatId, message_id: msgId, parse_mode: 'HTML',
@@ -8607,7 +8683,7 @@ export default async function handler(req: any, res: any) {
               });
 
               // Начисляем +10 баллов за честный утренний чек-ин
-              const newPoints = await awardPoints(tgId, 10);
+              const newPoints = await awardPoints(tgId, 10, 'checkin', 'Чек-ин челленджа', evId);
               
               /**
                * Серия ПОДРЯД, а не число отметок за всё время: раньше пропуск
@@ -8737,7 +8813,7 @@ export default async function handler(req: any, res: any) {
               });
 
               // Начисляем +10 баллов, как за кружок.
-              const newPoints = await awardPoints(tgId, 10);
+              const newPoints = await awardPoints(tgId, 10, 'checkin', 'Чек-ин челленджа', evId);
 
               // Стрик: сколько дней подряд есть чек-ины.
               const { data: allUserCheckins } = await supabase

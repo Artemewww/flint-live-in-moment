@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrganizerPicker from './OrganizerPicker';
+import InviteFunnel from './InviteFunnel';
 import EventExtrasEditor from './EventExtrasEditor';
 import { makeShareCard } from '../shareCard';
 import Avatar, { AvatarStack } from './Avatar';
@@ -1505,7 +1506,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       if (res.status === 401) { handleLogout(); return; }
       const j = await res.json();
       if (j.ok) {
-        setActionMsg({ ok: true, text: `Приглашения отправлены: ${j.sent} из ${j.total}${j.blocked ? ` · ${j.blocked} заблокировали бота` : ''}` });
+        setActionMsg({ ok: true, text: `Приглашения отправлены: ${j.sent} из ${j.total}${j.blocked ? ` · ${j.blocked} заблокировали бота` : ''}` +
+          (j.tracking ? ' · ответы видно в «Обзоре» события' : ' · статистика ответов выключена: примени миграцию 2026-10-event-invites.sql') });
         setInvitingEvent(null);
       } else {
         setActionMsg({ ok: false, text: j.message || j.error || 'Не удалось отправить приглашения' });
@@ -2246,6 +2248,20 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   };
 
   const [nudgeSending, setNudgeSending] = useState(false);
+  /** Раскрытый журнал баллов: telegramId → строки (null — грузим). */
+  const [pointsOpen, setPointsOpen] = useState<Record<string, any[] | null>>({});
+  const togglePoints = async (tid: string) => {
+    if (pointsOpen[tid] !== undefined) {
+      setPointsOpen((p) => { const n = { ...p }; delete n[tid]; return n; });
+      return;
+    }
+    setPointsOpen((p) => ({ ...p, [tid]: null }));
+    try {
+      const r = await adminFetch(`/api/admin/registrations?action=points_log&telegramId=${encodeURIComponent(tid)}`);
+      const j = await r.json();
+      setPointsOpen((p) => ({ ...p, [tid]: j.ok ? j.rows : [] }));
+    } catch { setPointsOpen((p) => ({ ...p, [tid]: [] })); }
+  };
   /** Напомнить «не прошедшим» дописать анкету — личным сообщением от бота. */
   const nudgeUnverified = async (ids: number[]) => {
     if (!ids.length || nudgeSending) return;
@@ -2961,6 +2977,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         </div>
                       </button>
                     </div>
+
+                    {/* Кому ушли приглашения и что ответили — с дожимом. */}
+                    <InviteFunnel eventId={selectedEvent.id} onMsg={setActionMsg} adminFetch={adminFetch} />
 
                     {/* Спрос и голоса — то, что раньше молча терялось в console.log */}
                     {(eventStats.interestCount > 0 || Object.keys(eventStats.voteTally || {}).length > 0) && (
@@ -4702,6 +4721,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                             <span className={`text-[9px] px-1.5 py-0.5 rounded font-mono ${m.status === 'approved' ? 'bg-brand/15 text-brand' : m.status === 'blocked' ? 'bg-rose-500/15 text-rose-400' : isUnverified(m) ? 'bg-orange-500/15 text-orange-300' : 'bg-white/10 text-white/50'}`}>
                               {m.isCore ? 'костяк' : m.status === 'approved' ? 'в клубе' : m.status === 'pending_review' ? 'на модерации' : m.status === 'blocked' ? 'отклонён' : m.phone ? '🚧 анкета есть, не принят' : '🚧 не прошёл верификацию'}
                             </span>
+                            {Number(m.points) !== 0 && m.points != null && (
+                              <button type="button" onClick={() => togglePoints(String(m.telegramId))}
+                                className="text-[9px] bg-brand/15 text-brand hover:bg-brand/25 px-1.5 py-0.5 rounded font-mono cursor-pointer border-none"
+                                title="За что начислены баллы">
+                                ⭐ {m.points} {pointsOpen[String(m.telegramId)] !== undefined ? '▾' : '▸'}
+                              </button>
+                            )}
                             {isUnverified(m) && (
                               <button type="button" onClick={() => nudgeUnverified([Number(m.telegramId)])} disabled={nudgeSending}
                                 className="text-[9px] bg-orange-500/15 text-orange-200 hover:bg-orange-500/25 px-1.5 py-0.5 rounded font-mono cursor-pointer border-none disabled:opacity-40"
@@ -4715,6 +4741,25 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                               </span>
                             )}
                           </div>
+                          {pointsOpen[String(m.telegramId)] !== undefined && (
+                            <div className="mt-2 rounded-lg bg-black/25 p-2">
+                              {pointsOpen[String(m.telegramId)] === null ? (
+                                <p className="text-[10px] text-white/40">Загружаю журнал…</p>
+                              ) : (pointsOpen[String(m.telegramId)] || []).length === 0 ? (
+                                <p className="text-[10px] text-white/40">В журнале пусто — баллы начислены без записи причины.</p>
+                              ) : (
+                                <ul className="space-y-0.5">
+                                  {(pointsOpen[String(m.telegramId)] || []).map((r: any, i: number) => (
+                                    <li key={i} className="flex gap-2 text-[10px] leading-snug">
+                                      <span className={`w-10 shrink-0 text-right font-mono font-bold ${Number(r.points) >= 0 ? 'text-brand' : 'text-rose-300'}`}>{Number(r.points) >= 0 ? '+' : ''}{r.points}</span>
+                                      <span className="flex-1 text-white/70">{r.description || r.reason}</span>
+                                      <span className="shrink-0 font-mono text-white/30">{r.created_at ? new Date(r.created_at).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) : ''}</span>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          )}
                           {m.referredBy && (
                             <div className="text-[9px] text-white/45 font-mono mt-1">
                               ← пришёл от: {m.referredByName || (() => {
@@ -5816,9 +5861,12 @@ function AddEventModal({ onClose, onAdd }: {
       time: d.time ? normalizeTime(d.time) : formData.time,
       timeEnd: d.timeEnd ? normalizeTime(d.timeEnd) : formData.timeEnd,
       location: d.location || formData.location,
-      priceType: d.priceType === 'paid' ? 'paid' : 'free',
-      priceAmount: d.priceType === 'paid' ? (Number(d.priceAmount) || 0) : 0,
-      maxParticipants: d.maxParticipants || formData.maxParticipants,
+      // Пригласительные клуба: участник не платит, цена билета — только
+      // ориентир ценности (logistics.marketPrice), а мест ровно столько,
+      // сколько пригласительных.
+      priceType: d.costModel === 'club_invite' ? 'free' : d.priceType === 'paid' ? 'paid' : 'free',
+      priceAmount: d.costModel !== 'club_invite' && d.priceType === 'paid' ? (Number(d.priceAmount) || 0) : 0,
+      maxParticipants: (d.costModel === 'club_invite' && d.clubSeats) || d.maxParticipants || formData.maxParticipants,
       program: (d.program && d.program.length) ? d.program : formData.program,
       entryThreshold: d.entryThreshold || formData.entryThreshold,
       houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : formData.houseQualities,
@@ -5847,6 +5895,11 @@ function AddEventModal({ onClose, onAdd }: {
     if (d.trip) extra.trip = d.trip;
     if (d.costModel) extra.costModel = d.costModel;
     if (d.costNote) extra.costNote = d.costNote;
+    // Ценность для клуба: цена билета «на улице», пригласительные, спонсор.
+    if (d.marketPrice) extra.marketPrice = d.marketPrice;
+    if (d.clubSeats) extra.clubSeats = d.clubSeats;
+    if (d.clubSponsor) extra.clubSponsor = d.clubSponsor;
+    if (d.ticketUrl) extra.ticketUrl = d.ticketUrl;
     if (d.needs?.length) extra.needs = d.needs;
     if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));
@@ -5941,7 +5994,8 @@ function AddEventModal({ onClose, onAdd }: {
   const sections = {
     logistics: scale !== 'hours' || !!feats.feat_rides || !!lg.assemblyPoint,
     trip: scale === 'expedition' || !!(lg.trip && (lg.trip.docs || lg.trip.flights || lg.trip.budget)),
-    extras: ['overnight', 'multiday', 'expedition'].includes(scale) || !!(lg.gallery?.length || lg.included?.length || lg.faq?.length),
+    extras: ['overnight', 'multiday', 'expedition'].includes(scale) || !!(lg.gallery?.length || lg.included?.length || lg.faq?.length)
+      || lg.costModel === 'club_invite' || !!lg.clubSeats || !!lg.marketPrice,
     itinerary: ['hours', 'day'].includes(scale) || !!lg.itinerary?.length,
   };
   const hiddenCount = Object.values(sections).filter((x) => !x).length;

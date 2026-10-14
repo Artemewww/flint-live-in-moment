@@ -129,6 +129,7 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
             ['pool', 'Общий взнос'],
             ['food_share', 'Общий стол (еда вскладчину)'],
             ['bring_own', 'Каждый везёт своё'],
+            ['club_invite', '🎟 Пригласительные клуба'],
           ] as const).map(([k, l]) => (
             <button key={k} type="button" onClick={() => set('costModel', k)}
               className={`rounded-lg border p-2 text-left text-[11px] font-bold ${v.costModel === k ? 'border-brand bg-brand/10 text-brand' : 'border-white/10 bg-transparent text-white/60'}`}>{l}</button>
@@ -141,6 +142,35 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
           <input type="number" inputMode="decimal" min={0} value={v.costEstimate ?? ''} onChange={(e) => set('costEstimate', e.target.value === '' ? undefined : Number(e.target.value))}
             placeholder="40" className="w-24 rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
         </label>
+        {/* ЦЕННОСТЬ: платное мероприятие, куда у клуба есть места. Без цены
+            «на улице» бесплатный пригласительный выглядит пустяком. */}
+        {v.costModel === 'club_invite' && (
+          <div className="space-y-2 rounded-xl border border-brand/30 bg-brand/5 p-3">
+            <span className="block text-[10px] font-mono uppercase text-brand/80">💎 Ценность для клуба</span>
+            <label className="block">
+              <span className="text-[11px] text-white/55">Обычная цена билета</span>
+              <input value={v.marketPrice || ''} onChange={(e) => set('marketPrice', e.target.value)} placeholder="35–355 BYN"
+                className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+            </label>
+            <div className="grid grid-cols-[7rem_1fr] gap-2">
+              <label className="block">
+                <span className="text-[11px] text-white/55">Мест у клуба</span>
+                <input type="number" inputMode="numeric" min={0} value={v.clubSeats ?? ''} onChange={(e) => set('clubSeats', e.target.value === '' ? undefined : Number(e.target.value))}
+                  placeholder="8" className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-white/55">При поддержке</span>
+                <input value={v.clubSponsor || ''} onChange={(e) => set('clubSponsor', e.target.value)} placeholder="Артём Дементьев"
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+              </label>
+            </div>
+            <label className="block">
+              <span className="text-[11px] text-white/55">Где продают билеты (ссылка, необязательно)</span>
+              <input value={v.ticketUrl || ''} onChange={(e) => set('ticketUrl', e.target.value)} placeholder="https://www.ticketpro.by/…"
+                className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+            </label>
+          </div>
+        )}
         <textarea value={v.costNote || ''} onChange={(e) => set('costNote', e.target.value)} rows={2}
           placeholder="Комментарий к стоимости: баня 300 BYN делим на всех; первым — купоны бесплатно; доплата за веник" className="w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
       </div>

@@ -1135,6 +1135,13 @@ export default async function handler(req: any, res: any) {
      * Только для участников клуба (подпись Telegram), наружу список не отдаём.
      */
     if (action === 'leaderboard') {
+      const POINT_REASON: Record<string, string> = {
+        attend: '🏕 Участие в событиях', referral: '🤝 Привёл друзей', share_car: '🚗 Подвёз на машине',
+        share_tent: '⛺ Место в палатке', share_gear: '🎒 Одолжил снаряжение', checkin: '🔥 Чек-ины челленджа',
+        contribution: '💪 Поступки на событиях', fundraiser: '💚 Вклад в сбор', 'fundraiser-rollback': '↩️ Отмена вклада',
+        manual: '⭐ Начислено костяком', legacy: '📦 Начислено до журнала',
+        attendance: '🏕 Участие в событиях', invite: '🤝 Привёл друзей',
+      };
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });
       const { data: members } = await supabase
@@ -1143,7 +1150,15 @@ export default async function handler(req: any, res: any) {
       const { data: att } = await supabase.from('registrations').select('telegram_id').eq('attended', true).limit(5000);
       const trips = new Map<number, number>();
       for (const r of att || []) trips.set(Number((r as any).telegram_id), (trips.get(Number((r as any).telegram_id)) || 0) + 1);
-      const all = (members || []).map((m: any, i: number) => ({
+      // Равные баллы раньше давали одно место на всех: у двадцати человек с
+      // 0 баллов слева стояло одно и то же «#12», а медалей 🥇 могло быть две.
+      // Теперь места сквозные 1, 2, 3…; при равенстве выше тот, у кого больше
+      // выездов, дальше — по имени (стабильно между открытиями).
+      const sorted = [...(members || [])].sort((a: any, b: any) =>
+        (Number(b.points) || 0) - (Number(a.points) || 0)
+        || (trips.get(Number(b.telegram_id)) || 0) - (trips.get(Number(a.telegram_id)) || 0)
+        || String(a.first_name || a.username || '').localeCompare(String(b.first_name || b.username || ''), 'ru'));
+      const all = sorted.map((m: any, i: number) => ({
         place: i + 1,
         id: String(m.telegram_id),
         name: m.first_name || (m.username ? `@${m.username}` : 'Участник'),
@@ -1153,8 +1168,6 @@ export default async function handler(req: any, res: any) {
         avatar: avatarOf(Number(m.telegram_id)),
         me: Number(m.telegram_id) === Number(user.id),
       }));
-      // Одинаковые очки — одно место: иначе из двух «по 0» один «хуже» другого.
-      for (let i = 1; i < all.length; i += 1) if (all[i].points === all[i - 1].points) all[i].place = all[i - 1].place;
       const me = all.find((m) => m.me) || null;
       // ПОЧЕМУ СТОЛЬКО БАЛЛОВ: журнал начислений по участникам списка. Раньше
       // рейтинг показывал только цифру — непонятно, за что человек впереди.
@@ -1165,15 +1178,27 @@ export default async function handler(req: any, res: any) {
         const { data: pl } = await supabase
           .from('points_log').select('telegram_id,points,reason,description')
           .in('telegram_id', [...topIds].map(Number)).limit(1000);
+        // Группируем по причине: «Участие в событиях ×3 — 300», а не восемь
+        // одинаковых строк. Подробности (какие события) — в скобках.
+        const groups: Record<string, Record<string, { points: number; n: number; items: string[] }>> = {};
         for (const row of pl || []) {
           const k = String((row as any).telegram_id);
           if (!topIds.has(k)) continue;
-          (reasons[k] ||= []).push({
-            points: Number((row as any).points) || 0,
-            text: String((row as any).description || (row as any).reason || 'Баллы').slice(0, 120),
-          });
+          const reason = String((row as any).reason || 'other');
+          const g = ((groups[k] ||= {})[reason] ||= { points: 0, n: 0, items: [] });
+          g.points += Number((row as any).points) || 0;
+          g.n += 1;
+          const d = String((row as any).description || '').replace(/^(Участие|Привёл друга|Одолжил|Поступок на событии):\s*/, '');
+          if (d && g.items.length < 4) g.items.push(d.slice(0, 50));
         }
-        for (const k of Object.keys(reasons)) reasons[k] = reasons[k].slice(0, 8);
+        for (const [k, byReason] of Object.entries(groups)) {
+          reasons[k] = Object.entries(byReason)
+            .map(([reason, g]) => ({
+              points: g.points,
+              text: `${POINT_REASON[reason] || reason}${g.n > 1 ? ` ×${g.n}` : ''}${g.items.length && reason !== 'legacy' ? ` (${g.items.join(', ')}${g.n > g.items.length ? '…' : ''})` : ''}`,
+            }))
+            .sort((a, b) => b.points - a.points);
+        }
       } catch { /* журнала ещё нет до миграции — рейтинг и так работает */ }
       return res.status(200).json({ ok: true, top: all.slice(0, 30), me, total: all.length, reasons });
     }
@@ -1407,6 +1432,23 @@ export default async function handler(req: any, res: any) {
           declined_at: accept ? null : new Date().toISOString(),
         }).eq('id', id);
         if (upErr) return res.status(500).json({ error: upErr.message });
+
+        /**
+         * «Поделился вещью» — поступок, за который клуб благодарит баллами.
+         * Один раз на заявку: повторное «разрешить» по той же заявке не платит.
+         */
+        if (accept && row.status !== 'confirmed') {
+          const GEAR_POINTS = 10;
+          try {
+            const { data: om } = await supabase.from('members').select('points').eq('telegram_id', user.id).maybeSingle();
+            await supabase.from('members').update({ points: Number((om as any)?.points || 0) + GEAR_POINTS }).eq('telegram_id', user.id);
+            const { data: tm } = await supabase.from('members').select('first_name').eq('telegram_id', Number(row.to_telegram_id)).maybeSingle();
+            await supabase.from('points_log').insert({
+              telegram_id: user.id, event_id: null, reason: 'share_gear', points: GEAR_POINTS,
+              description: `Одолжил: ${String(row.item_name || 'вещь').slice(0, 60)} → ${(tm as any)?.first_name || 'участнику'}`,
+            });
+          } catch { /* баллы — бонус, не роняем ответ */ }
+        }
 
         if (BOT_TOKEN) {
           try {

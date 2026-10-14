@@ -1098,6 +1098,12 @@ function shareDayPhrase(iso: string): string {
 function costLineOf(ev: any): string {
   const lg = ev?.logistics || {};
   const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  // Пригласительные клуба: показываем и «рыночную» цену — в ней вся ценность.
+  if (lg.costModel === 'club_invite') {
+    const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
+    const market = String(lg.marketPrice || '').trim();
+    return `бесплатно по пригласительному клуба${seats ? ` (${seats} мест)` : ''}${market ? ` · обычный билет ${market}` : ''}`;
+  }
   if (ev?.price_type === 'paid' && Number(ev?.price_amount) > 0) return `${ev.price_amount} BYN`;
   switch (lg.costModel) {
     case 'self': return est ? `≈${est} BYN, каждый платит за себя` : 'Каждый платит за себя';

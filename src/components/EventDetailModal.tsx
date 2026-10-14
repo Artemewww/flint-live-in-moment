@@ -7,7 +7,7 @@ import { motion } from 'motion/react';
 import {
   X, MapPin, Clock, Users, Check, Send, Calendar, ShieldCheck, Tag, Eye, Lock, Bell, Share2, Monitor, Wifi, Smartphone, Backpack, HeartPulse
 , UserPlus} from 'lucide-react';
-import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, priceTag, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
+import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, priceTag, clubValue, calculateDynamicPrice, getToday, prettyPlace, extractCoords } from '../types';
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
 import { eventShareLink } from '../site';
@@ -77,6 +77,43 @@ function buildIcsDataUri(event: CommunityEvent, includeLocation: boolean): strin
   return `data:text/calendar;charset=utf-8,${encodeURIComponent(lines.join('\r\n'))}`;
 }
 
+/**
+ * «💎 ЦЕННОСТЬ»: сколько это стоит без клуба, что клуб даёт и сколько мест.
+ * Общая структура для любых событий с пригласительными (форумы, выставки).
+ */
+function ClubValueBlock({ event }: { event: CommunityEvent }) {
+  const v = clubValue(event.logistics);
+  if (!v) return null;
+  const left = v.seats ? Math.max(0, v.seats - (Number(event.participantsCount) || 0)) : 0;
+  return (
+    <div className="rounded-2xl border border-brand/30 bg-gradient-to-br from-brand/10 to-transparent p-4 space-y-3">
+      <span className="block text-[10px] font-mono uppercase tracking-widest text-brand/80">💎 Ценность для тебя</span>
+      <div className="grid grid-cols-2 gap-2">
+        {v.marketPrice && (
+          <div className="rounded-xl bg-black/30 p-3">
+            <div className="text-[10px] uppercase text-white/40">Билет без клуба</div>
+            <div className="mt-0.5 text-base font-black text-white/70 line-through decoration-white/30">{v.marketPrice}</div>
+          </div>
+        )}
+        <div className="rounded-xl bg-black/30 p-3">
+          <div className="text-[10px] uppercase text-white/40">Для участника клуба</div>
+          <div className="mt-0.5 text-base font-black text-brand">Бесплатно</div>
+        </div>
+      </div>
+      <p className="text-[13px] leading-snug text-white/80">
+        🎟 У клуба {v.seats ? <b>{v.seats} пригласительных</b> : 'есть пригласительные'}
+        {v.sponsor ? <> — при поддержке <b>{v.sponsor}</b></> : null}.
+        {v.seats ? <> {left > 0 ? <>Свободно: <b className="text-brand">{left}</b> из {v.seats}.</> : <>Все места разобраны — запишись в лист ожидания.</>}</> : null}
+      </p>
+      {v.ticketUrl && (
+        <a href={v.ticketUrl} target="_blank" rel="noreferrer" className="inline-block text-[11px] text-white/45 underline decoration-white/20">
+          Цена на сайте продажи билетов →
+        </a>
+      )}
+    </div>
+  );
+}
+
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
   const { label, factors } = calculateDynamicPrice(event);
@@ -90,6 +127,7 @@ function DynamicPrice({ event }: { event: CommunityEvent }) {
     : model === 'pool' ? 'Общий взнос — делится поровну на всех'
     : model === 'food_share' ? 'Еду покупаем вскладчину'
     : model === 'bring_own' ? 'Каждый везёт своё'
+    : model === 'club_invite' ? 'Пригласительный от клуба — платить не нужно'
     : 'Полностью свободное участие';
 
   return (
@@ -1328,6 +1366,7 @@ export default function EventDetailModal({
             </div>
             )}
 
+            <ClubValueBlock event={event} />
             <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
             <TripBlock trip={extras.trip} />
             {/* Общее снаряжение: кто что везёт — видно всем, распределяет бот. */}
