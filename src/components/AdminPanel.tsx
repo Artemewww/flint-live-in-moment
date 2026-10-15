@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import OrganizerPicker from './OrganizerPicker';
 import InviteFunnel from './InviteFunnel';
+import ClubTickets from './ClubTickets';
 import EventExtrasEditor from './EventExtrasEditor';
 import { makeShareCard } from '../shareCard';
 import Avatar, { AvatarStack } from './Avatar';
@@ -2979,6 +2980,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     </div>
 
                     {/* Кому ушли приглашения и что ответили — с дожимом. */}
+                    {/* Именные пригласительные (форумы, выставки) — если у события есть пул. */}
+                    <ClubTickets eventId={selectedEvent.id} onMsg={setActionMsg} adminFetch={adminFetch} />
                     <InviteFunnel eventId={selectedEvent.id} onMsg={setActionMsg} adminFetch={adminFetch} />
 
                     {/* Спрос и голоса — то, что раньше молча терялось в console.log */}

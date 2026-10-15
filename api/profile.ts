@@ -1134,6 +1134,52 @@ export default async function handler(req: any, res: any) {
      * лидеры сверху и закреплённая плашка «ты — на N-м месте».
      * Только для участников клуба (подпись Telegram), наружу список не отдаём.
      */
+    /**
+     * МОЙ ПРИГЛАСИТЕЛЬНЫЙ на событие (если клуб выписал его на меня).
+     *   op='status' — есть ли билет: номер, всего, код, забрал/использован;
+     *   op='send'   — бот присылает именной PDF мне в личку (почистил чат —
+     *                 нажал ещё раз). Чужой билет так получить нельзя: ищем
+     *                 строго по подписанному telegram id.
+     */
+    if (action === 'my_ticket') {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(200).json({ ok: false, error: 'Открой приложение из Telegram' });
+      const eventId = String(body.eventId || '');
+      const { data: row } = await supabase.from('app_config').select('value').eq('key', `club_tickets:${eventId}`).maybeSingle();
+      let pool: any = null;
+      try { pool = (row as any)?.value ? JSON.parse((row as any).value) : null; } catch { /* битый пул */ }
+      if (!pool) return res.status(200).json({ ok: true, pool: false });
+      const t = (pool.tickets || []).find((x: any) => Number(x.assignedTo) === Number(user.id));
+      const free = (pool.tickets || []).filter((x: any) => !x.assignedTo).length;
+      if (!t) return res.status(200).json({ ok: true, pool: true, total: pool.total, free, ticket: null });
+      if (body.op === 'send') {
+        const { data: file } = await supabase.storage.from('club-tickets').download(t.issued);
+        if (!file) return res.status(200).json({ ok: false, error: 'Файл билета не найден — напиши организатору' });
+        const { data: ev } = await supabase.from('events').select('title,date_label,location').eq('id', eventId).maybeSingle();
+        const form = new FormData();
+        form.append('chat_id', String(user.id));
+        form.append('parse_mode', 'HTML');
+        form.append('caption',
+          `🎟 <b>Твой пригласительный — ${escHtml(String((ev as any)?.title || 'событие'))}</b>\n№ ${t.no} из ${pool.total} · код <code>${escHtml(t.code)}</code>\n\n` +
+          ((ev as any)?.date_label ? `📆 ${escHtml((ev as any).date_label)}\n` : '') + ((ev as any)?.location ? `📍 ${escHtml((ev as any).location)}\n` : '') +
+          `\nНа входе покажи QR из файла. Билет одноразовый и именной — не пересылай его.`);
+        form.append('reply_markup', JSON.stringify({ inline_keyboard: [[{ text: '🎟 Прислать ещё раз', callback_data: `tkt_${eventId}` }]] }));
+        form.append('document', new Blob([await file.arrayBuffer()], { type: 'application/pdf' }), `Пригласительный_${t.no}_${t.code}.pdf`);
+        const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: form });
+        const j: any = await r.json().catch(() => ({}));
+        if (!j?.ok) {
+          return res.status(200).json({ ok: false, error: /blocked|chat not found/i.test(String(j?.description)) ? 'Сначала открой чат с ботом и нажми «Старт» — туда придёт файл' : 'Не удалось отправить, попробуй ещё раз' });
+        }
+        t.openedAt = t.openedAt || new Date().toISOString();
+        t.resentCount = (t.resentCount || 0) + 1;
+        await supabase.from('app_config').upsert({ key: `club_tickets:${eventId}`, value: JSON.stringify(pool) }, { onConflict: 'key' });
+      }
+      return res.status(200).json({
+        ok: true, pool: true, total: pool.total, free,
+        ticket: { no: t.no, code: t.code, name: t.assignedName || '', received: !!t.openedAt, used: !!t.usedAt },
+      });
+    }
+
     if (action === 'leaderboard') {
       const POINT_REASON: Record<string, string> = {
         attend: '🏕 Участие в событиях', referral: '🤝 Привёл друзей', share_car: '🚗 Подвёз на машине',

@@ -1574,6 +1574,49 @@ async function bindReferrer(from: any, code: string): Promise<RefResult> {
   }
   return { ok: true };
 }
+/**
+ * ПРИГЛАСИТЕЛЬНЫЕ КЛУБА: прислать человеку его именной билет ещё раз.
+ * Пул лежит в app_config (club_tickets:<eventId>), файл — в приватном
+ * бакете club-tickets. Отдаём ТОЛЬКО тот билет, что выдан этому tgId:
+ * чужой пригласительный по кнопке/команде получить нельзя.
+ * Возвращает число отправленных файлов.
+ */
+async function sendMyTickets(tgId: number, chatId: number, eventId?: string): Promise<number> {
+  const q = supabase.from('app_config').select('key,value');
+  const { data: rows } = eventId ? await q.eq('key', `club_tickets:${eventId}`) : await q.like('key', 'club_tickets:%');
+  let sent = 0;
+  for (const row of rows || []) {
+    let pool: any;
+    try { pool = JSON.parse((row as any).value); } catch { continue; }
+    const t = (pool.tickets || []).find((x: any) => Number(x.assignedTo) === tgId && x.issued);
+    if (!t) continue;
+    const ev = await getEvent(pool.eventId);
+    if (!ev && !eventId) continue;
+    const { data: file } = await supabase.storage.from('club-tickets').download(t.issued);
+    if (!file) continue;
+    const form = new FormData();
+    form.append('chat_id', String(chatId));
+    form.append('parse_mode', 'HTML');
+    form.append('caption',
+      `🎟 <b>Твой пригласительный — ${esc(ev?.title || 'событие')}</b>\n№ ${t.no} из ${pool.total} · код <code>${esc(t.code)}</code>\n\n` +
+      (ev?.date_label ? `📆 ${esc(ev.date_label)}\n` : '') + (ev?.location ? `📍 ${esc(ev.location)}\n` : '') +
+      `\nНа входе покажи QR из файла. Билет одноразовый и именной — не пересылай его.`);
+    form.append('reply_markup', JSON.stringify({ inline_keyboard: [[{ text: '🎟 Прислать ещё раз', callback_data: `tkt_${pool.eventId}` }]] }));
+    form.append('document', new Blob([await file.arrayBuffer()], { type: 'application/pdf' }), `Пригласительный_${t.no}_${t.code}.pdf`);
+    try {
+      const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: form });
+      if ((await r.json())?.ok) {
+        sent++;
+        // «Забрал» — человек сам попросил файл: это и есть отметка получения.
+        t.openedAt = t.openedAt || new Date().toISOString();
+        t.resentCount = (t.resentCount || 0) + 1;
+        await supabase.from('app_config').upsert({ key: (row as any).key, value: JSON.stringify(pool) }, { onConflict: 'key' });
+      }
+    } catch { /* следующий */ }
+  }
+  return sent;
+}
+
 function kb(rows: any[]) { return { inline_keyboard: rows }; }
 
 /**
@@ -7996,6 +8039,13 @@ export default async function handler(req: any, res: any) {
        * открыл / буду / подумаю / не смогу. Кнопки под приглашением остаются
        * (с отметкой выбранного), чтобы человек мог передумать.
        */
+      // «🎟 Прислать пригласительный ещё раз» — только свой билет.
+      if (data.startsWith('tkt_')) {
+        const n = await sendMyTickets(tgId, chatId, data.slice('tkt_'.length));
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: n ? 'Отправил 🎟' : 'На тебя пригласительный не выписан' });
+        return res.status(200).json({ ok: true });
+      }
+
       if (/^inv_[ymno]_/.test(data)) {
         const kind = data[4] as 'y' | 'm' | 'n' | 'o';
         const evId = data.slice(6);
@@ -11422,6 +11472,15 @@ export default async function handler(req: any, res: any) {
             });
             if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }); } catch { /* no-op */ } }
           } catch { /* заявитель мог не начинать чат */ }
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      // Мои пригласительные: почистил чат или потерял файл — /ticket вернёт.
+      if (cmd === '/ticket' || cmd === '/tickets') {
+        const n = await sendMyTickets(msg.from.id, chatId);
+        if (!n) {
+          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🎟 На тебя пока не выписан ни один пригласительный. Их выдаёт организатор события тем, кто записался.' });
         }
         return res.status(200).json({ ok: true });
       }

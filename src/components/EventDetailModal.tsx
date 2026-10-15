@@ -114,6 +114,60 @@ function ClubValueBlock({ event }: { event: CommunityEvent }) {
   );
 }
 
+/**
+ * «🎟 ТВОЙ ПРИГЛАСИТЕЛЬНЫЙ». Если клуб выписал на человека именной билет —
+ * он видит его здесь и одной кнопкой получает PDF в личку от бота (почистил
+ * чат, потерял файл — жмёт ещё раз). Чужой билет так не получить: сервер ищет
+ * строго по подписанному Telegram id.
+ */
+function MyTicketCard({ eventId }: { eventId: string }) {
+  const [st, setSt] = React.useState<any>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState('');
+  const call = (op: 'status' | 'send') => fetch('/api/profile', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'my_ticket', op, eventId, initData: getInitData() }),
+  }).then((r) => r.json());
+  React.useEffect(() => { if (getInitData()) call('status').then(setSt).catch(() => {}); }, [eventId]);
+  if (!st?.ok || !st.pool) return null;
+  if (!st.ticket) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-white/[.03] p-4 text-[12px] text-white/60">
+        🎟 Пригласительных у клуба: <b className="text-white">{st.total}</b>, свободно <b className="text-brand">{st.free}</b>.
+        Запишись — организатор выпишет именной билет и бот пришлёт его тебе в личку.
+      </div>
+    );
+  }
+  const t = st.ticket;
+  return (
+    <div className="relative overflow-hidden rounded-2xl border border-brand/40 bg-gradient-to-br from-brand/15 via-brand/5 to-transparent p-4">
+      <div className="pointer-events-none absolute -right-6 -top-6 text-[88px] leading-none opacity-10">🎟</div>
+      <span className="block text-[10px] font-mono uppercase tracking-widest text-brand/80">Твой пригласительный</span>
+      <div className="mt-1 font-display text-2xl font-black text-white">№ {t.no} <span className="text-white/40 text-base">из {st.total}</span></div>
+      <div className="mt-0.5 text-[12px] text-white/70">{t.name} · код <span className="font-mono text-brand">{t.code}</span></div>
+      <p className="mt-2 text-[12px] leading-snug text-white/65">
+        {t.used ? '✅ Билет использован — ты на месте. Заряжайся!' : 'Именной и одноразовый: на входе покажи QR из файла. Не пересылай — пройдёт только первый скан.'}
+      </p>
+      {!t.used && (
+        <button type="button" disabled={busy}
+          onClick={async () => {
+            setBusy(true); setMsg('');
+            try {
+              const j = await call('send');
+              if (j.ok) { haptic('success'); setMsg('Отправил в чат с ботом — проверь Telegram 🎟'); setSt(j); }
+              else setMsg(j.error || 'Не получилось, попробуй ещё раз');
+            } catch { setMsg('Нет связи — попробуй ещё раз'); }
+            finally { setBusy(false); }
+          }}
+          className="mt-3 w-full rounded-xl border-none bg-brand py-3 text-sm font-black uppercase text-black cursor-pointer disabled:opacity-50">
+          {busy ? 'Отправляю…' : t.received ? '📩 Прислать ещё раз' : '📩 Забрать пригласительный'}
+        </button>
+      )}
+      {msg && <p className="mt-2 text-center text-[11px] text-white/70">{msg}</p>}
+    </div>
+  );
+}
+
 // Компонент динамической цены
 function DynamicPrice({ event }: { event: CommunityEvent }) {
   const { label, factors } = calculateDynamicPrice(event);
@@ -1367,6 +1421,7 @@ export default function EventDetailModal({
             )}
 
             <ClubValueBlock event={event} />
+            {clubValue(event.logistics) && <MyTicketCard eventId={event.id} />}
             <IncludedBlock included={extras.included || []} notIncluded={extras.notIncluded || []} />
             <TripBlock trip={extras.trip} />
             {/* Общее снаряжение: кто что везёт — видно всем, распределяет бот. */}

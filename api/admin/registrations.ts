@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 import * as crypto from 'crypto';
+import { PDFDocument, rgb } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
 
 const supabase = createClient(
   process.env.SUPABASE_URL || '',
@@ -115,6 +117,135 @@ function deny(res: any) {
   return res.status(401).json({ error: 'Unauthorized' });
 }
 
+
+// ─── ПРИГЛАСИТЕЛЬНЫЕ КЛУБА ───────────────────────────────────────────────
+// Пул билетов события лежит в app_config под ключом club_tickets:<eventId>
+// (заводит scripts/club-tickets-setup.ts), PDF — в приватном бакете
+// club-tickets. Один билет — один человек: код FL-XXXX и имя впечатываются
+// в низ билета при выдаче, файл приходит человеку в личку от бота.
+// Код живёт здесь целиком: общий api/_lib/ на Vercel падает в рантайме.
+const TICKET_BUCKET = 'club-tickets';
+type ClubTicket = {
+  no: number; file: string; base: string; number?: string; series?: string; code: string;
+  assignedTo?: number | null; assignedName?: string; assignedUsername?: string; assignedAt?: string;
+  issued?: string; sentAt?: string; sendError?: string; resentCount?: number; openedAt?: string; usedAt?: string;
+};
+type TicketPool = { eventId: string; total: number; tickets: ClubTicket[] };
+
+async function loadPool(eventId: string): Promise<TicketPool | null> {
+  const { data } = await supabase.from('app_config').select('value').eq('key', `club_tickets:${eventId}`).maybeSingle();
+  if (!(data as any)?.value) return null;
+  try { return JSON.parse((data as any).value); } catch { return null; }
+}
+async function savePool(pool: TicketPool) {
+  await supabase.from('app_config').upsert({ key: `club_tickets:${pool.eventId}`, value: JSON.stringify(pool) }, { onConflict: 'key' });
+}
+async function storageBytes(path: string): Promise<Uint8Array> {
+  const { data, error } = await supabase.storage.from(TICKET_BUCKET).download(path);
+  if (error || !data) throw new Error(`Нет файла ${path}: ${error?.message || ''}`);
+  return new Uint8Array(await data.arrayBuffer());
+}
+
+/** Плашка «чей пригласительный» — только в нижней полосе под баннером. */
+async function stampTicket(i: { base: Uint8Array; name: string; username?: string; no: number; total: number; code: string; issuedAt: Date }): Promise<Uint8Array> {
+  const [fontBold, fontMed, logoPng] = await Promise.all([
+    storageBytes('_assets/bold.ttf'), storageBytes('_assets/medium.ttf'), storageBytes('_assets/logo.png'),
+  ]);
+  const doc = await PDFDocument.load(i.base);
+  doc.registerFontkit(fontkit);
+  const B = await doc.embedFont(fontBold, { subset: true });
+  const M = await doc.embedFont(fontMed, { subset: true });
+  const logo = await doc.embedPng(logoPng);
+  const page = doc.getPage(0);
+  const { width: W } = page.getSize();
+  // Полоса под баннером организатора: баннер кончается на y≈109 от низа листа.
+  const x0 = 14.16, x1 = W - 19.92, y0 = 16, y1 = 100;
+  const ink = rgb(0.07, 0.07, 0.07), soft = rgb(0.42, 0.42, 0.42), line = rgb(0.86, 0.86, 0.86);
+  page.drawRectangle({ x: x0, y: y0, width: x1 - x0, height: y1 - y0, borderColor: line, borderWidth: 0.8, color: rgb(1, 1, 1) });
+  page.drawRectangle({ x: x0, y: y0, width: 4, height: y1 - y0, color: ink });
+  const fit = (txt: string, font: any, size: number, max: number) => {
+    let t = txt;
+    while (t.length > 1 && font.widthOfTextAtSize(t, size) > max) t = t.slice(0, -2) + '…';
+    return t;
+  };
+  const spaced = (txt: string, font: any, size: number, x: number, y: number, color: any, track = 0.9) => {
+    let cx = x;
+    for (const ch of txt) { page.drawText(ch, { x: cx, y, size, font, color }); cx += font.widthOfTextAtSize(ch, size) + track; }
+  };
+  const L = x0 + 16, maxL = 330;
+  spaced(`ПРИГЛАШЕНИЕ КЛУБА «ЖИВИ В МОМЕНТЕ»  ·  № ${i.no} ИЗ ${i.total}`, B, 6.4, L, y1 - 15, soft);
+  // Имя — главное на именном билете: сначала уменьшаем кегль (до 12), и
+  // только если и так не влезает — режем.
+  let ns = 17;
+  while (ns > 12 && B.widthOfTextAtSize(i.name, ns) > maxL) ns -= 0.5;
+  page.drawText(fit(i.name, B, ns, maxL), { x: L, y: y1 - 36, size: ns, font: B, color: ink });
+  const dt = i.issuedAt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Minsk' });
+  page.drawText(fit([i.username ? `@${i.username}` : '', `выдан ${dt}`, `код ${i.code}`].filter(Boolean).join('  ·  '), M, 8, maxL),
+    { x: L, y: y1 - 49, size: 8, font: M, color: soft });
+  [
+    'Врывайся в поток AI: заряжайся идеями, перезагружай мышление, расти в масштабе.',
+    'Мы находим такие возможности и дарим их своим — это твой шаг к эволюции.',
+  ].forEach((t, k) => page.drawText(fit(t, M, 7.6, maxL + 10), { x: L, y: y1 - 64 - k * 10.5, size: 7.6, font: M, color: ink }));
+  const lw = 168, lh = lw * logo.height / logo.width;
+  page.drawImage(logo, { x: x1 - 14 - lw, y: y1 - 18 - lh, width: lw, height: lh });
+  for (const [t, y] of [['Именной · передавать нельзя', y0 + 22], ['Предъяви на входе QR выше', y0 + 12]] as const) {
+    page.drawText(t, { x: x1 - 14 - M.widthOfTextAtSize(t, 6.8), y, size: 6.8, font: M, color: soft });
+  }
+  return doc.save();
+}
+
+/** Подпись к файлу в личке — фирменным голосом клуба. */
+function ticketCaption(ev: any, t: ClubTicket, total: number): string {
+  const e = (v: string) => String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `🎟 <b>Твой пригласительный — ${e(ev?.title || 'событие')}</b>\n` +
+    `№ ${t.no} из ${total} · именной · код <code>${t.code}</code>\n\n` +
+    `Врывайся в поток. Заряжайся идеями, перезагружай мышление, сверяй свой стержень с масштабом, который задают лучшие. ` +
+    `Клуб находит такие возможности и дарит их своим — это и есть наша эволюция.\n\n` +
+    (ev?.date_label ? `📆 ${e(ev.date_label)}\n` : '') + (ev?.location ? `📍 ${e(ev.location)}\n` : '') +
+    `\nНа входе покажи QR из файла — с телефона или распечатанный. Билет одноразовый: проходит первый скан, ` +
+    `поэтому не пересылай его никому.\nПотерял файл или почистил чат — нажми кнопку ниже, пришлю снова.`;
+}
+
+async function sendTicketDoc(chatId: number, bytes: Uint8Array, filename: string, caption: string, eventId: string): Promise<{ ok: boolean; error?: string }> {
+  if (!BOT_TOKEN) return { ok: false, error: 'нет TELEGRAM_BOT_TOKEN' };
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  form.append('caption', caption.slice(0, 1024));
+  form.append('parse_mode', 'HTML');
+  form.append('reply_markup', JSON.stringify({ inline_keyboard: [[{ text: '🎟 Прислать пригласительный ещё раз', callback_data: `tkt_${eventId}` }]] }));
+  form.append('document', new Blob([bytes], { type: 'application/pdf' }), filename);
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: form });
+    const j: any = await r.json();
+    return j?.ok ? { ok: true } : { ok: false, error: String(j?.description || r.status) };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
+}
+
+/** Кто держит билет: имя как в анкете записи, иначе как в профиле. */
+async function holderOf(eventId: string, tgId: number): Promise<{ name: string; username: string }> {
+  const { data: reg } = await supabase.from('registrations').select('name').eq('event_id', eventId).eq('telegram_id', tgId).neq('status', 'cancelled').maybeSingle();
+  const { data: m } = await supabase.from('members').select('first_name,last_name,username').eq('telegram_id', tgId).maybeSingle();
+  const profile = [(m as any)?.first_name, (m as any)?.last_name].filter(Boolean).join(' ').trim();
+  const regName = String((reg as any)?.name || '').trim();
+  // Анкета записи обычно с фамилией — она точнее для именного билета.
+  const name = regName.split(/\s+/).length >= 2 ? regName : (profile || regName || ((m as any)?.username ? '@' + (m as any).username : `Участник ${tgId}`));
+  return { name, username: String((m as any)?.username || '') };
+}
+
+/** Выдать билет t человеку tgId: штамп, файл в хранилище, отправка в личку. */
+async function issueTicket(pool: TicketPool, t: ClubTicket, tgId: number, ev: any): Promise<{ ok: boolean; error?: string }> {
+  const who = await holderOf(pool.eventId, tgId);
+  const at = new Date();
+  const bytes = await stampTicket({ base: await storageBytes(t.base), name: who.name, username: who.username, no: t.no, total: pool.total, code: t.code, issuedAt: at });
+  const issued = `${pool.eventId}/issued/${t.no}-${tgId}.pdf`;
+  const { error: upErr } = await supabase.storage.from(TICKET_BUCKET).upload(issued, bytes, { contentType: 'application/pdf', upsert: true });
+  if (upErr) return { ok: false, error: upErr.message };
+  Object.assign(t, { assignedTo: tgId, assignedName: who.name, assignedUsername: who.username, assignedAt: at.toISOString(), issued, usedAt: undefined, openedAt: undefined });
+  const sent = await sendTicketDoc(tgId, bytes, `Пригласительный_${t.no}_${t.code}.pdf`, ticketCaption(ev, t, pool.total), pool.eventId);
+  if (sent.ok) { t.sentAt = at.toISOString(); t.sendError = undefined; } else t.sendError = sent.error;
+  return sent;
+}
+
 export default async function handler(req: any, res: any) {
   if (!isAdmin(req)) return deny(res);
 
@@ -122,6 +253,105 @@ export default async function handler(req: any, res: any) {
    * Аудитория клуба: кто есть, кто активен в боте, кто кого привёл,
    * сколько событий реально посетил. Основа для статистики результативности.
    */
+
+  /**
+   * ПРИГЛАСИТЕЛЬНЫЕ: состояние пула + кандидаты (записавшиеся без билета).
+   */
+  if (req.method === 'GET' && req.query?.action === 'tickets') {
+    const eventId = String(req.query?.eventId || '');
+    const pool = await loadPool(eventId);
+    if (!pool) return res.status(200).json({ ok: true, pool: null });
+    const { data: regs } = await supabase.from('registrations').select('telegram_id,name,registered_at,status')
+      .eq('event_id', eventId).neq('status', 'cancelled').order('registered_at', { ascending: true });
+    const holders = new Set(pool.tickets.map((t) => Number(t.assignedTo)).filter(Boolean));
+    const ids = [...new Set((regs || []).map((r: any) => Number(r.telegram_id)).filter((n: number) => n > 0))];
+    const { data: ms } = ids.length ? await supabase.from('members').select('telegram_id,first_name,username').in('telegram_id', ids) : { data: [] as any[] };
+    const mm = new Map((ms || []).map((m: any) => [Number(m.telegram_id), m]));
+    const candidates = ids.filter((id) => !holders.has(id)).map((id) => {
+      const r: any = (regs || []).find((x: any) => Number(x.telegram_id) === id) || {};
+      const m: any = mm.get(id) || {};
+      return { telegramId: id, name: r.name || m.first_name || `id${id}`, username: m.username || '' };
+    });
+    return res.status(200).json({ ok: true, pool, candidates });
+  }
+
+  if (req.method === 'POST' && String(req.query?.action || '').startsWith('ticket_')) {
+    const action = String(req.query.action);
+    const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    const eventId = String(body.eventId || '');
+    const pool = await loadPool(eventId);
+    if (!pool) return res.status(404).json({ error: 'У события нет пула пригласительных' });
+    const { data: ev } = await supabase.from('events').select('id,title,date_label,location,deputy_id').eq('id', eventId).maybeSingle();
+    const byNo = (n: number) => pool.tickets.find((t) => t.no === Number(n));
+    try {
+      if (action === 'ticket_issue') {
+        const tgId = Number(body.telegramId) || 0;
+        if (!tgId) return res.status(400).json({ error: 'Кому выдать?' });
+        if (pool.tickets.some((t) => Number(t.assignedTo) === tgId)) return res.status(200).json({ ok: false, error: 'У человека уже есть билет на это событие' });
+        const t = body.no ? byNo(body.no) : pool.tickets.find((x) => !x.assignedTo);
+        if (!t) return res.status(200).json({ ok: false, error: 'Свободных пригласительных нет' });
+        if (t.assignedTo) return res.status(200).json({ ok: false, error: `Билет № ${t.no} уже выдан` });
+        const r = await issueTicket(pool, t, tgId, ev);
+        await savePool(pool);
+        return res.status(200).json({ ok: true, delivered: r.ok, error: r.error, pool });
+      }
+      if (action === 'ticket_issue_all') {
+        // Организатор — первым (он ведёт группу и должен попасть точно),
+        // дальше записавшиеся в порядке записи. Отказавшиеся не участвуют.
+        const { data: regs } = await supabase.from('registrations').select('telegram_id,registered_at')
+          .eq('event_id', eventId).neq('status', 'cancelled').order('registered_at', { ascending: true });
+        const queue = [Number((ev as any)?.deputy_id) || 0, ...(regs || []).map((r: any) => Number(r.telegram_id))]
+          .filter((id, i, a) => id > 0 && a.indexOf(id) === i)
+          .filter((id) => !pool.tickets.some((t) => Number(t.assignedTo) === id));
+        let issued = 0, delivered = 0;
+        const failed: string[] = [];
+        for (const id of queue) {
+          const t = pool.tickets.find((x) => !x.assignedTo);
+          if (!t) break;
+          const r = await issueTicket(pool, t, id, ev);
+          issued++; if (r.ok) delivered++; else failed.push(`${t.assignedName}: ${r.error}`);
+        }
+        await savePool(pool);
+        return res.status(200).json({ ok: true, issued, delivered, failed, left: pool.tickets.filter((t) => !t.assignedTo).length, waiting: Math.max(0, queue.length - issued), pool });
+      }
+      const t = byNo(body.no);
+      if (!t) return res.status(404).json({ error: 'Нет такого билета' });
+      if (action === 'ticket_resend') {
+        if (!t.assignedTo || !t.issued) return res.status(200).json({ ok: false, error: 'Билет ещё не выдан' });
+        const r = await sendTicketDoc(Number(t.assignedTo), await storageBytes(t.issued), `Пригласительный_${t.no}_${t.code}.pdf`, ticketCaption(ev, t, pool.total), eventId);
+        if (r.ok) { t.sentAt = new Date().toISOString(); t.sendError = undefined; t.resentCount = (t.resentCount || 0) + 1; } else t.sendError = r.error;
+        await savePool(pool);
+        return res.status(200).json({ ok: r.ok, error: r.error, pool });
+      }
+      if (action === 'ticket_revoke') {
+        // Освобождаем номер. Сам файл у человека остаётся — штрих-код
+        // проходит один раз, поэтому новый держатель должен пройти раньше
+        // или организатор предупреждает контроль. Об этом пишем в админке.
+        if (t.issued) { try { await supabase.storage.from(TICKET_BUCKET).remove([t.issued]); } catch { /* no-op */ } }
+        const prev = Number(t.assignedTo) || 0;
+        for (const k of ['assignedTo', 'assignedName', 'assignedUsername', 'assignedAt', 'issued', 'sentAt', 'sendError', 'resentCount', 'openedAt', 'usedAt'] as const) delete (t as any)[k];
+        await savePool(pool);
+        if (prev && BOT_TOKEN) {
+          try {
+            await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ chat_id: prev, parse_mode: 'HTML', text: `🎟 Пригласительный № ${t.no} на «${String((ev as any)?.title || 'событие')}» передан другому участнику. Если это ошибка — напиши организатору.` }),
+            });
+          } catch { /* no-op */ }
+        }
+        return res.status(200).json({ ok: true, pool });
+      }
+      if (action === 'ticket_used') {
+        t.usedAt = body.used === false ? undefined : new Date().toISOString();
+        await savePool(pool);
+        return res.status(200).json({ ok: true, pool });
+      }
+      return res.status(400).json({ error: 'Неизвестное действие' });
+    } catch (e) {
+      return res.status(500).json({ error: (e as Error).message });
+    }
+  }
+
   // Журнал баллов участника: «за что у него столько» — по одной строке на начисление.
   if (req.method === 'GET' && req.query?.action === 'points_log') {
     const tid = Number(req.query?.telegramId) || 0;
