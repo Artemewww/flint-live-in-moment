@@ -13,6 +13,15 @@ type Ticket = {
 };
 type Candidate = { telegramId: number; name: string; username: string };
 
+/** Ссылка «забрать пригласительный»: бот пришлёт билет после «Старт». */
+const TICKET_LINK = 'https://t.me/campsflint_bot?start=ticket';
+/** Человек не нажимал «Старт» — бот не может написать первым. */
+const noChat = (e?: string) => /initiate conversation|PEER_ID_INVALID|chat not found|blocked/i.test(String(e || ''));
+const copyLink = async (onMsg: (m: { ok: boolean; text: string }) => void) => {
+  try { await navigator.clipboard.writeText(TICKET_LINK); onMsg({ ok: true, text: `Ссылка скопирована: ${TICKET_LINK} — отправь человеку, он нажмёт «Старт» и билет придёт сам` }); }
+  catch { onMsg({ ok: true, text: `Отправь человеку ссылку: ${TICKET_LINK}` }); }
+};
+
 const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
 
 export default function ClubTickets({ eventId, onMsg, adminFetch }: {
@@ -42,7 +51,9 @@ export default function ClubTickets({ eventId, onMsg, adminFetch }: {
       if (action === 'ticket_issue_all' && j.ok) {
         onMsg({ ok: true, text: `Выдано ${j.issued}, дошло в личку ${j.delivered}${j.failed?.length ? ` · не дошло: ${j.failed.join('; ')}` : ''}${j.waiting ? ` · ${j.waiting} записавшимся не хватило` : ''}` });
       } else if (action === 'ticket_issue' && j.ok) {
-        onMsg({ ok: j.delivered, text: j.delivered ? 'Пригласительный выдан и отправлен в личку 🎟' : `Выдан, но в личку не дошёл: ${j.error} — пусть нажмёт «Старт» в боте, потом «Прислать снова»` });
+        onMsg({ ok: j.delivered, text: j.delivered ? 'Пригласительный выдан и отправлен в личку 🎟'
+          : noChat(j.error) ? `Билет выписан, но человек ещё не открывал бота — Telegram не даёт боту написать первым. Билет придёт сам, как только он нажмёт «Старт». Отправь ему ссылку: ${TICKET_LINK}`
+          : `Выдан, но в личку не дошёл: ${j.error}` });
       } else {
         onMsg({ ok: !!j.ok, text: j.ok ? 'Готово' : (j.error || 'Не удалось') });
       }
@@ -118,6 +129,7 @@ export default function ClubTickets({ eventId, onMsg, adminFetch }: {
                       {t.usedAt ? `✅ прошёл ${fmt(t.usedAt)}`
                         : t.openedAt ? `📥 забрал ${fmt(t.openedAt)}`
                         : t.sentAt ? `📨 в личке с ${fmt(t.sentAt)}`
+                        : noChat(t.sendError) ? '⏳ ждёт «Старт» в боте — придёт сам'
                         : `⚠️ не дошёл${t.sendError ? `: ${t.sendError.slice(0, 40)}` : ''}`}
                       {` · код ${t.code}`}{t.series ? ` · серия ${t.series}` : ''}
                     </div>
@@ -133,6 +145,10 @@ export default function ClubTickets({ eventId, onMsg, adminFetch }: {
                   className={`rounded-md border-none px-2 py-1 text-[10px] font-bold cursor-pointer disabled:opacity-40 ${t.usedAt ? 'bg-white/10 text-white/60' : 'bg-brand/20 text-brand'}`}>
                   {t.usedAt ? '↩︎ не прошёл' : '✅ прошёл на входе'}
                 </button>
+                {!t.sentAt && (
+                  <button type="button" onClick={() => copyLink(onMsg)}
+                    className="rounded-md border-none bg-amber-500/20 px-2 py-1 text-[10px] font-bold text-amber-200 cursor-pointer">🔗 ссылка для него</button>
+                )}
                 <button type="button" disabled={!!busy} onClick={() => act('ticket_resend', { no: t.no }, `r${t.no}`)}
                   className="rounded-md border-none bg-white/10 px-2 py-1 text-[10px] font-bold text-white/70 cursor-pointer disabled:opacity-40">📨 прислать снова</button>
                 <button type="button" disabled={!!busy}

@@ -1623,7 +1623,7 @@ async function bindReferrer(from: any, code: string): Promise<RefResult> {
  * чужой пригласительный по кнопке/команде получить нельзя.
  * Возвращает число отправленных файлов.
  */
-async function sendMyTickets(tgId: number, chatId: number, eventId?: string): Promise<number> {
+async function sendMyTickets(tgId: number, chatId: number, eventId?: string, onlyUndelivered = false): Promise<number> {
   const q = supabase.from('app_config').select('key,value');
   const { data: rows } = eventId ? await q.eq('key', `club_tickets:${eventId}`) : await q.like('key', 'club_tickets:%');
   let sent = 0;
@@ -1631,7 +1631,7 @@ async function sendMyTickets(tgId: number, chatId: number, eventId?: string): Pr
     let pool: any;
     try { pool = JSON.parse((row as any).value); } catch { continue; }
     const t = (pool.tickets || []).find((x: any) => Number(x.assignedTo) === tgId && x.issued);
-    if (!t) continue;
+    if (!t || (onlyUndelivered && t.sentAt)) continue;
     const ev = await getEvent(pool.eventId);
     if (!ev && !eventId) continue;
     const { data: file } = await supabase.storage.from('club-tickets').download(t.issued);
@@ -1651,6 +1651,8 @@ async function sendMyTickets(tgId: number, chatId: number, eventId?: string): Pr
         sent++;
         // «Забрал» — человек сам попросил файл: это и есть отметка получения.
         t.openedAt = t.openedAt || new Date().toISOString();
+        t.sentAt = t.sentAt || new Date().toISOString();
+        delete t.sendError;
         t.resentCount = (t.resentCount || 0) + 1;
         await supabase.from('app_config').upsert({ key: (row as any).key, value: JSON.stringify(pool) }, { onConflict: 'key' });
       }
@@ -11340,6 +11342,20 @@ export default async function handler(req: any, res: any) {
         // Кнопка «Поддержка» из Mini App (t.me/bot?start=support) — в приложении
         // не было ни одной кнопки для связи с костяком после регистрации,
         // участник упирался в тупик. Доступно всем, даже до вступления.
+        /**
+         * Недоставленные пригласительные. Человек, записавшийся только через
+         * мини-приложение, для бота недоступен, пока не нажмёт «Старт» —
+         * билет висел с ошибкой. Теперь первый же /start его доставляет.
+         * ?start=ticket — ссылка «забрать пригласительный» для пересылки.
+         */
+        try {
+          const n = await sendMyTickets(msg.from.id, chatId, undefined, payload !== 'ticket');
+          if (payload === 'ticket') {
+            if (!n) await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '🎟 На тебя пока не выписан пригласительный. Их выдаёт организатор тем, кто записался на событие.' });
+            return res.status(200).json({ ok: true });
+          }
+        } catch { /* билеты — не повод ронять /start */ }
+
         if (payload === 'support') {
           await setSession(msg.from.id, 'support_text', {});
           await tg('sendMessage', {

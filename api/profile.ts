@@ -1152,6 +1152,18 @@ export default async function handler(req: any, res: any) {
       const t = (pool.tickets || []).find((x: any) => Number(x.assignedTo) === Number(user.id));
       const free = (pool.tickets || []).filter((x: any) => !x.assignedTo).length;
       if (!t) return res.status(200).json({ ok: true, pool: true, total: pool.total, free, ticket: null });
+      // Временная ссылка на файл (10 минут) — для тех, кому бот не может
+      // написать: человек скачивает PDF прямо из приложения.
+      const signed = async () => {
+        const fname = `Пригласительный_${t.no}_${t.code}.pdf`;
+        const { data: su } = await supabase.storage.from('club-tickets').createSignedUrl(t.issued, 600, { download: fname });
+        return { url: (su as any)?.signedUrl || '', fileName: fname };
+      };
+      if (body.op === 'download') {
+        t.openedAt = t.openedAt || new Date().toISOString();
+        await supabase.from('app_config').upsert({ key: `club_tickets:${eventId}`, value: JSON.stringify(pool) }, { onConflict: 'key' });
+        return res.status(200).json({ ok: true, ...(await signed()) });
+      }
       if (body.op === 'send') {
         const { data: file } = await supabase.storage.from('club-tickets').download(t.issued);
         if (!file) return res.status(200).json({ ok: false, error: 'Файл билета не найден — напиши организатору' });
@@ -1168,8 +1180,12 @@ export default async function handler(req: any, res: any) {
         const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`, { method: 'POST', body: form });
         const j: any = await r.json().catch(() => ({}));
         if (!j?.ok) {
-          return res.status(200).json({ ok: false, error: /blocked|chat not found/i.test(String(j?.description)) ? 'Сначала открой чат с ботом и нажми «Старт» — туда придёт файл' : 'Не удалось отправить, попробуй ещё раз' });
+          // Бот не может написать первым (человек не нажимал «Старт») —
+          // отдаём файл прямо в приложение, не оставляем без билета.
+          return res.status(200).json({ ok: false, code: 'need_start', error: 'Бот пока не может тебе написать — скачиваю файл прямо сюда', ...(await signed()) });
         }
+        t.sentAt = t.sentAt || new Date().toISOString();
+        delete t.sendError;
         t.openedAt = t.openedAt || new Date().toISOString();
         t.resentCount = (t.resentCount || 0) + 1;
         await supabase.from('app_config').upsert({ key: `club_tickets:${eventId}`, value: JSON.stringify(pool) }, { onConflict: 'key' });

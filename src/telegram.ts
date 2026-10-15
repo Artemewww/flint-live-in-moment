@@ -189,3 +189,30 @@ export function addToHomeScreen(): Promise<boolean> {
     try { wa.addToHomeScreen!(); } catch { done(false); }
   });
 }
+
+/**
+ * Разрешение боту писать человеку. Тот, кто зашёл только через мини-приложение
+ * и ни разу не нажимал «Старт», для бота недоступен: Telegram отвечает «bot
+ * can't initiate conversation», и билет/напоминание не доходят. requestWriteAccess
+ * показывает системный запрос «Разрешить боту писать вам?» — одно касание.
+ * true — писать можно (уже было разрешено или человек согласился).
+ */
+export function ensureWriteAccess(): Promise<boolean> {
+  const wa: any = getWebApp();
+  if (!wa) return Promise.resolve(false);
+  if (wa.initDataUnsafe?.user?.allows_write_to_pm) return Promise.resolve(true);
+  if (typeof wa.requestWriteAccess !== 'function') return Promise.resolve(false);
+  return new Promise((resolve) => {
+    try { wa.requestWriteAccess((ok: boolean) => resolve(!!ok)); } catch { resolve(false); }
+  });
+}
+
+/** Скачать файл из мини-приложения (Telegram 8.0+), иначе — открыть ссылку. */
+export function downloadFile(url: string, fileName: string): void {
+  const wa: any = getWebApp();
+  try {
+    if (wa && typeof wa.downloadFile === 'function') { wa.downloadFile({ url, file_name: fileName }); return; }
+    if (wa) { wa.openLink(url); return; }
+  } catch { /* упадём на window.open */ }
+  if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer');
+}

@@ -11,7 +11,7 @@ import { CommunityEvent, getYandexMapsUrl, getEventPhase, isEventOver, priceTag,
 import { getPromoVideo } from '../promoVideo';
 import { submitInterest, submitVote } from '../api';
 import { eventShareLink } from '../site';
-import { haptic, getInitData, openBot } from '../telegram';
+import { haptic, getInitData, openBot, ensureWriteAccess, downloadFile } from '../telegram';
 import ProgramVoting from './ProgramVoting';
 import CampingChecklist from './CampingChecklist';
 import LiveMedia from './LiveMedia';
@@ -124,7 +124,7 @@ function MyTicketCard({ eventId }: { eventId: string }) {
   const [st, setSt] = React.useState<any>(null);
   const [busy, setBusy] = React.useState(false);
   const [msg, setMsg] = React.useState('');
-  const call = (op: 'status' | 'send') => fetch('/api/profile', {
+  const call = (op: 'status' | 'send' | 'download') => fetch('/api/profile', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'my_ticket', op, eventId, initData: getInitData() }),
   }).then((r) => r.json());
@@ -153,14 +153,33 @@ function MyTicketCard({ eventId }: { eventId: string }) {
           onClick={async () => {
             setBusy(true); setMsg('');
             try {
+              // Разрешаем боту писать (системный запрос Telegram) — иначе
+              // тем, кто не нажимал «Старт», файл в личку не дойдёт.
+              await ensureWriteAccess();
               const j = await call('send');
               if (j.ok) { haptic('success'); setMsg('Отправил в чат с ботом — проверь Telegram 🎟'); setSt(j); }
+              else if (j.url) { downloadFile(j.url, j.fileName); haptic('success'); setMsg('Бот пока не может тебе написать — скачал файл сюда. Нажми «Старт» в боте, и копия придёт в личку.'); }
               else setMsg(j.error || 'Не получилось, попробуй ещё раз');
             } catch { setMsg('Нет связи — попробуй ещё раз'); }
             finally { setBusy(false); }
           }}
           className="mt-3 w-full rounded-xl border-none bg-brand py-3 text-sm font-black uppercase text-black cursor-pointer disabled:opacity-50">
           {busy ? 'Отправляю…' : t.received ? '📩 Прислать ещё раз' : '📩 Забрать пригласительный'}
+        </button>
+      )}
+      {!t.used && (
+        <button type="button" disabled={busy}
+          onClick={async () => {
+            setBusy(true); setMsg('');
+            try {
+              const j = await call('download');
+              if (j.ok && j.url) { downloadFile(j.url, j.fileName); haptic('success'); }
+              else setMsg(j.error || 'Не получилось');
+            } catch { setMsg('Нет связи — попробуй ещё раз'); }
+            finally { setBusy(false); }
+          }}
+          className="mt-2 w-full rounded-xl border border-white/15 bg-transparent py-2.5 text-[12px] font-bold text-white/75 cursor-pointer disabled:opacity-50">
+          ⬇️ Скачать PDF
         </button>
       )}
       {msg && <p className="mt-2 text-center text-[11px] text-white/70">{msg}</p>}
