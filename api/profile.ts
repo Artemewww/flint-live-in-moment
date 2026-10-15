@@ -1187,6 +1187,7 @@ export default async function handler(req: any, res: any) {
         contribution: '💪 Поступки на событиях', fundraiser: '💚 Вклад в сбор', 'fundraiser-rollback': '↩️ Отмена вклада',
         manual: '⭐ Начислено костяком', legacy: '📦 Начислено до журнала',
         attendance: '🏕 Участие в событиях', invite: '🤝 Привёл друзей',
+        photos: '📸 Запечатлел моменты',
       };
       const user = verifyInitData(body.initData);
       if (!user) return res.status(200).json({ ok: false, error: 'not-in-telegram' });

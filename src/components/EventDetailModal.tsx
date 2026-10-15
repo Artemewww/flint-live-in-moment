@@ -102,7 +102,7 @@ function ClubValueBlock({ event }: { event: CommunityEvent }) {
       </div>
       <p className="text-[13px] leading-snug text-white/80">
         🎟 У клуба {v.seats ? <b>{v.seats} пригласительных</b> : 'есть пригласительные'}
-        {v.sponsor ? <> — при поддержке <b>{v.sponsor}</b></> : null}.
+        {v.sponsor ? <> · партнёр — <b>{v.sponsor}</b></> : null}.
         {v.seats ? <> {left > 0 ? <>Свободно: <b className="text-brand">{left}</b> из {v.seats}.</> : <>Все места разобраны — запишись в лист ожидания.</>}</> : null}
       </p>
       {v.ticketUrl && (

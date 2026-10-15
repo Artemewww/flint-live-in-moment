@@ -114,9 +114,10 @@ function valueLineOf(ev: any): string {
   const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
   const market = String(lg.marketPrice || '').trim();
   const sponsor = String(lg.clubSponsor || '').trim();
-  return `\n💎 ${market ? `Билет стоит <b>${esc(market)}</b> — ` : ''}для тебя <b>бесплатно</b>: ` +
-    `у клуба ${seats ? `<b>${seats} пригласительных</b>` : 'пригласительные'}${sponsor ? ` при поддержке ${esc(sponsor)}` : ''}. ` +
-    `Места — кто первый ответит «Буду».\n`;
+  // Имя спонсора — через тире, без склонения: «при поддержке Артём Дементьев»
+  // резало глаз, а падеж по имени автоматически не угадать.
+  return `💎 ${market ? `Билет стоит <b>${esc(market)}</b> → ` : ''}для тебя <b>бесплатно</b>\n` +
+    `🎟 ${seats ? `${seats} именных пригласительных` : 'Пригласительные'} от клуба${sponsor ? ` · партнёр — ${esc(sponsor)}` : ''}\n`;
 }
 
 /** Статистика приглашений события: воронка + список людей с ответами. */
@@ -327,13 +328,24 @@ export default async function handler(req: any, res: any) {
       });
     }
 
+    // Счётчик мест на момент отправки — «осталось 5 из 8» подталкивает ответить сразу.
+    const cap = Number(event?.max_participants) || 0;
+    let seatsLine = '';
+    if (cap) {
+      const { count: taken } = await supabase.from('registrations').select('id', { count: 'exact', head: true })
+        .eq('event_id', eventId).neq('status', 'cancelled');
+      const left = Math.max(0, cap - (taken || 0));
+      seatsLine = left > 0 ? `⏳ Свободно <b>${left} из ${cap}</b> — места за теми, кто ответит первым\n` : `⏳ Места закончились — ответь «Буду», поставлю в лист ожидания\n`;
+    }
+    const isClubInvite = (event?.logistics || {}).costModel === 'club_invite';
     const inviteText =
       `✉️ <b>Тебя приглашают: ${esc(event?.title || 'событие FLINT')}</b>\n\n` +
       (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
       (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-      `💰 ${esc(costLineOf(event))}\n` +
-      valueLineOf(event) +
-      `\nОтветь одной кнопкой — так организатор поймёт, сколько нас будет 👇`;
+      // Для пригласительных цена — в строке ценности, иначе она дублировалась.
+      (isClubInvite ? valueLineOf(event) : `💰 ${esc(costLineOf(event))}\n`) +
+      seatsLine +
+      `\nОтветь одной кнопкой 👇`;
 
     /**
      * Блок «кто уже подтвердил». Считается ОДИН раз до отправки и подставляется

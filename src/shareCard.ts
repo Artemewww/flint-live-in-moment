@@ -79,86 +79,94 @@ export async function renderShareCard(ev: { title: string; date?: string; dateEn
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas недоступен');
 
-  // Фон: фото события (object-fit: cover) или фирменный градиент.
-  const bg = ctx.createLinearGradient(0, 0, W, H);
-  bg.addColorStop(0, '#1d2412'); bg.addColorStop(1, '#0a0a0a');
-  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
-  let photoOk = false;
+  /**
+   * КОМПОНОВКА «ФОТО + ПЛАШКА». Раньше текст лежал поверх фото на тёмном
+   * градиенте (до 88% черноты), и любая афиша превращалась в тёмное пятно;
+   * при пересылке сервер добавлял ещё одно затемнение. Теперь фото занимает
+   * верх целиком — яркое, с лёгким усилением цвета, — а дата, название и место
+   * живут на фирменной плашке снизу. Читается на любой картинке.
+   */
+  const PH = 438;               // высота фото
+  const bg = ctx.createLinearGradient(0, 0, W, PH);
+  bg.addColorStop(0, '#2a3514'); bg.addColorStop(1, '#0f0f0f');
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, PH);
   if (ev.image) {
     try {
       const img = await loadImage(ev.image);
-      const k = Math.max(W / img.width, H / img.height);
+      const k = Math.max(W / img.width, PH / img.height);
       const w = img.width * k, h = img.height * k;
-      ctx.drawImage(img, (W - w) / 2, (H - h) / 2, w, h);
+      // Кадр по центру, чуть выше середины: на афишах главное обычно в верхней половине.
+      const oy = Math.min(0, Math.max(PH - h, (PH - h) * 0.42));
+      try { (ctx as any).filter = 'saturate(1.22) contrast(1.06) brightness(1.04)'; } catch { /* старый WebView */ }
+      ctx.drawImage(img, (W - w) / 2, oy, w, h);
+      (ctx as any).filter = 'none';
       ctx.getImageData(0, 0, 1, 1); // бросит, если картинка «испортила» canvas (CORS)
-      photoOk = true;
     } catch {
-      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+      ctx.fillStyle = bg; ctx.fillRect(0, 0, W, PH);
     }
   }
-  // Затемнение: сверху — под логотип, снизу — под дату и название.
-  const top = ctx.createLinearGradient(0, 0, 0, 200);
-  top.addColorStop(0, 'rgba(0,0,0,0.65)'); top.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = top; ctx.fillRect(0, 0, W, 200);
-  const bottom = ctx.createLinearGradient(0, H * 0.35, 0, H);
-  bottom.addColorStop(0, 'rgba(0,0,0,0)'); bottom.addColorStop(1, `rgba(0,0,0,${photoOk ? 0.88 : 0.5})`);
-  ctx.fillStyle = bottom; ctx.fillRect(0, H * 0.35, W, H * 0.65);
-
-  // Логотип — левый верхний угол.
+  // Лёгкая тень только под логотип — сам кадр не трогаем.
+  const top = ctx.createLinearGradient(0, 0, 0, 150);
+  top.addColorStop(0, 'rgba(0,0,0,0.42)'); top.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = top; ctx.fillRect(0, 0, 360, 150);
   try {
     const logo = await loadImage(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(LOGO_SVG)}`, false);
-    const lh = 64, lw = (logo.width / logo.height) * lh;
-    ctx.drawImage(logo, 56, 48, lw, lh);
+    const lh = 54, lw = (logo.width / logo.height) * lh;
+    ctx.drawImage(logo, 48, 38, lw, lh);
   } catch { /* без логотипа карточка всё равно полезна */ }
 
+  // Плашка: фирменная полоса + тёмный фон.
+  ctx.fillStyle = '#0e0e0e'; ctx.fillRect(0, PH, W, H - PH);
+  ctx.fillStyle = BRAND; ctx.fillRect(0, PH, W, 6);
+
   const pad = 56;
-  // Название — до двух строк.
-  ctx.fillStyle = '#ffffff';
-  ctx.font = '900 62px Montserrat, sans-serif';
-  ctx.textBaseline = 'alphabetic';
-  const titleLines = wrap(ctx, ev.title.toUpperCase(), W - pad * 2, 2);
-  let y = H - pad;
+  // Дата — лаймовой «таблеткой», место — рядом серым.
+  const dt = shareDate(ev.date, ev.dateEnd);
+  let px = pad;
+  const rowY = PH + 28, bh = 54;
+  if (dt.big) {
+    ctx.font = '900 34px Montserrat, sans-serif';
+    const bigW = ctx.measureText(dt.big).width;
+    ctx.font = '700 20px Montserrat, sans-serif';
+    const smallW = dt.small ? ctx.measureText(dt.small).width + 16 : 0;
+    const bw = bigW + smallW + 36, r = 14;
+    ctx.fillStyle = BRAND;
+    ctx.beginPath();
+    ctx.moveTo(pad + r, rowY); ctx.arcTo(pad + bw, rowY, pad + bw, rowY + bh, r); ctx.arcTo(pad + bw, rowY + bh, pad, rowY + bh, r);
+    ctx.arcTo(pad, rowY + bh, pad, rowY, r); ctx.arcTo(pad, rowY, pad + bw, rowY, r); ctx.closePath(); ctx.fill();
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#000';
+    ctx.font = '900 34px Montserrat, sans-serif';
+    ctx.fillText(dt.big, pad + 18, rowY + bh / 2 + 2);
+    if (dt.small) {
+      ctx.font = '700 20px Montserrat, sans-serif';
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillText(dt.small, pad + 18 + bigW + 16, rowY + bh / 2 + 2);
+    }
+    px = pad + bw + 22;
+  }
   const place = [ev.location, ev.time].filter(Boolean).join(' · ');
   if (place) {
-    ctx.font = '600 26px Montserrat, sans-serif';
-    ctx.fillStyle = 'rgba(255,255,255,0.75)';
-    // Режем по ширине, а не по символам: «Ш» и «i» занимают разное место.
-    let p = place;
-    while (p.length > 1 && ctx.measureText(p).width > W - pad * 2) p = p.slice(0, -2) + '…';
-    ctx.fillText(p, pad, y);
-    y -= 48;
-  }
-  ctx.font = '900 62px Montserrat, sans-serif';
-  ctx.fillStyle = '#ffffff';
-  for (let i = titleLines.length - 1; i >= 0; i--) { ctx.fillText(titleLines[i], pad, y); y -= 70; }
-
-  // Дата — фирменной «плашкой» над названием.
-  const dt = shareDate(ev.date, ev.dateEnd);
-  if (dt.big) {
-    ctx.font = '900 40px Montserrat, sans-serif';
-    const bigW = ctx.measureText(dt.big).width;
-    ctx.font = '700 22px Montserrat, sans-serif';
-    const smallW = dt.small ? ctx.measureText(dt.small).width + 20 : 0;
-    // y сейчас — базовая линия «строки над названием»; плашку ставим с
-    // ровным отступом 18px над верхом заглавных букв первой строки.
-    const bw = bigW + smallW + 40, bh = 64, by = y + 70 - 46 - 18 - bh;
-    ctx.fillStyle = BRAND;
-    const r = 18;
-    ctx.beginPath();
-    ctx.moveTo(pad + r, by); ctx.arcTo(pad + bw, by, pad + bw, by + bh, r); ctx.arcTo(pad + bw, by + bh, pad, by + bh, r);
-    ctx.arcTo(pad, by + bh, pad, by, r); ctx.arcTo(pad, by, pad + bw, by, r); ctx.closePath(); ctx.fill();
-    // Обе подписи — по общей средней линии плашки, иначе мелкая «ВС»
-    // проседала ниже крупной даты.
     ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#000000';
-    ctx.font = '900 40px Montserrat, sans-serif';
-    ctx.fillText(dt.big, pad + 20, by + bh / 2 + 2);
-    if (dt.small) {
-      ctx.font = '700 22px Montserrat, sans-serif';
-      ctx.fillStyle = 'rgba(0,0,0,0.6)';
-      ctx.fillText(dt.small, pad + 20 + bigW + 20, by + bh / 2 + 2);
-    }
-    ctx.textBaseline = 'alphabetic';
+    ctx.font = '600 24px Montserrat, sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.72)';
+    let p = place;
+    while (p.length > 1 && ctx.measureText(p).width > W - pad - px) p = p.slice(0, -2) + '…';
+    ctx.fillText(p, px, rowY + bh / 2 + 1);
+  }
+  // Название: одна строка, кегль подстраивается (52→34); не влезло — две строки по 34.
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#ffffff';
+  const title = ev.title.toUpperCase();
+  let fs = 52;
+  ctx.font = `900 ${fs}px Montserrat, sans-serif`;
+  while (fs > 34 && ctx.measureText(title).width > W - pad * 2) { fs -= 2; ctx.font = `900 ${fs}px Montserrat, sans-serif`; }
+  if (ctx.measureText(title).width <= W - pad * 2) {
+    ctx.fillText(title, pad, H - 40);
+  } else {
+    ctx.font = '900 34px Montserrat, sans-serif';
+    const lines = wrap(ctx, title, W - pad * 2, 2);
+    lines.forEach((l, i) => ctx.fillText(l, pad, H - 66 + i * 40));
   }
 
   return canvas.toDataURL('image/jpeg', 0.9);

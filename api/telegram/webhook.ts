@@ -131,6 +131,48 @@ async function webhookSecret(): Promise<string> {
   } catch { _whSecret = ''; }
   return _whSecret;
 }
+/**
+ * Какие апдейты шлёт Telegram. chat_join_request — заявки на вступление в
+ * группы событий: бот сам одобряет записавшихся (вход в чат в одно касание).
+ */
+const ALLOWED_UPDATES = ['message', 'callback_query', 'chat_join_request'];
+let _updatesSynced = false;
+/**
+ * Подписка на новые типы апдейтов без ручного /setup: при первом входящем
+ * апдейте бот перевыставляет вебхук с ТЕМ ЖЕ секретом, с которым к нему
+ * пришёл Telegram (иначе секрет сбросился бы и вебхук перестал пускать).
+ * Делается один раз — отметка в app_config.
+ */
+async function ensureAllowedUpdates(site: string, hdrSecret: string) {
+  if (_updatesSynced) return;
+  _updatesSynced = true;
+  const want = ALLOWED_UPDATES.join(',');
+  try {
+    const { data } = await supabase.from('app_config').select('value').eq('key', 'webhook_allowed_updates').maybeSingle();
+    if ((data as any)?.value === want) return;
+    const r = await tg('setWebhook', {
+      url: `${site}/api/telegram/webhook`,
+      ...(hdrSecret ? { secret_token: hdrSecret } : {}),
+      allowed_updates: ALLOWED_UPDATES,
+      drop_pending_updates: false,
+    });
+    if (r?.ok) await supabase.from('app_config').upsert({ key: 'webhook_allowed_updates', value: want }, { onConflict: 'key' });
+  } catch { /* попробуем на следующем холодном старте */ }
+}
+
+/**
+ * Ссылка в чат события «с заявкой» (creates_join_request): человек жмёт
+ * «Вступить», бот за доли секунды одобряет, если он записан. Посторонний по
+ * пересланной ссылке не войдёт. Ссылка одна на событие — кладём её в
+ * events.telegram_bot_url, откуда её берут карточка и подтверждение записи.
+ */
+async function eventJoinLink(evId: string, chatId: number, title: string): Promise<string> {
+  const r = await tg('createChatInviteLink', { chat_id: chatId, name: String(title || 'FLINT').slice(0, 32), creates_join_request: true });
+  const link = r?.result?.invite_link || '';
+  if (link) await supabase.from('events').update({ telegram_bot_url: link }).eq('id', evId);
+  return link;
+}
+
 function secretMatches(hdr: string, secret: string): boolean {
   if (!secret) return false;
   const A = Buffer.from(hdr), B = Buffer.from(secret);
@@ -3764,7 +3806,7 @@ async function runSetup(req: any, res: any) {
   const setWebhook = await tg('setWebhook', {
     url: webhookUrl,
     ...(secret ? { secret_token: secret } : {}),
-    allowed_updates: ['message', 'callback_query'],
+    allowed_updates: ALLOWED_UPDATES,
     // НЕ дропаем ожидающие апдейты на случайном повторном запуске.
     drop_pending_updates: false,
   });
@@ -3844,6 +3886,45 @@ export default async function handler(req: any, res: any) {
     const update = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     const site = siteUrl(req);
     const openBtn = { text: '🚀 Открыть FLINT', web_app: { url: site } };
+    await ensureAllowedUpdates(site, String(req.headers['x-telegram-bot-api-secret-token'] || ''));
+
+    /**
+     * ЗАЯВКА НА ВСТУПЛЕНИЕ В ЧАТ СОБЫТИЯ. Записан на событие (или костяк /
+     * организатор) — впускаем сразу и здороваемся в личке. Не записан —
+     * отклоняем и объясняем, как попасть: сначала запись.
+     */
+    if (update.chat_join_request) {
+      const jr = update.chat_join_request;
+      const chatId = Number(jr.chat?.id);
+      const uid = Number(jr.from?.id);
+      const { data: gl } = await supabase.from('event_groups').select('event_id').eq('chat_id', chatId).eq('active', true).maybeSingle();
+      const evId = String((gl as any)?.event_id || '');
+      const ev = evId ? await getEvent(evId) : null;
+      const staff = await isOrganizer(uid);
+      const registered = evId ? await hasActiveReg(evId, uid) : false;
+      const isDeputy = !!ev && Number((ev as any).deputy_id) === uid;
+      if (registered || staff || isDeputy) {
+        await tg('approveChatJoinRequest', { chat_id: chatId, user_id: uid });
+        try {
+          await tg('sendMessage', {
+            chat_id: uid, parse_mode: 'HTML',
+            text: `✅ Ты в чате «<b>${esc(ev?.title || jr.chat?.title || 'события')}</b>». Там координация, машины и всё оперативное — заглядывай.`,
+          });
+        } catch { /* личка закрыта — не страшно */ }
+      } else {
+        await tg('declineChatJoinRequest', { chat_id: chatId, user_id: uid });
+        try {
+          await tg('sendMessage', {
+            chat_id: uid, parse_mode: 'HTML',
+            text: ev
+              ? `🔒 Чат «<b>${esc(ev.title)}</b>» — для тех, кто записан. Запишись — и вход откроется в одно касание.`
+              : '🔒 Этот чат — только для участников события клуба.',
+            ...(ev ? { reply_markup: kb([[appBtn('✅ Записаться', site, { ev: String(ev.id) })]]) } : {}),
+          });
+        } catch { /* no-op */ }
+      }
+      return res.status(200).json({ ok: true });
+    }
 
     // Отметка живости: любой апдейт от человека = бот у него не заблокирован.
     // Без этого нельзя честно сказать, сколько участников реально получат рассылку.
@@ -5335,9 +5416,8 @@ export default async function handler(req: any, res: any) {
         }
         // Ссылку может создать только бот-админ группы. Пробуем именную,
         // затем общую; если обе не вышли — говорим, каких прав не хватает.
-        let link = '';
-        const r1 = await tg('createChatInviteLink', { chat_id: chatId, name: String(ev.title || '').slice(0, 32) });
-        link = r1?.result?.invite_link || '';
+        // Сначала ссылка «с заявкой» — бот впустит записавшихся сам.
+        let link = await eventJoinLink(evId, chatId, String(ev.title || ''));
         if (!link) {
           const r2 = await tg('exportChatInviteLink', { chat_id: chatId });
           link = typeof r2?.result === 'string' ? r2.result : '';
@@ -7237,7 +7317,8 @@ export default async function handler(req: any, res: any) {
           text:
             '📸 <b>Галерея события</b>\n\n' +
             (album ? 'Общий альбом собран участниками — кнопка ниже.\n\n' : '') +
-            'Пришли сюда фото или видео с события (до 30 файлов) — они попадут в общую галерею.\n' +
+            'Пришли сюда фото или видео с события — они попадут в историю клуба и в видео-итоги.\n' +
+            '🎯 Миссия: общее фото всей командой + <b>минимум 5 ярких моментов</b> (за пятый кадр +20 баллов). Лимит — 30 файлов.\n' +
             'Там же голосуем ❤️ за лучшие кадры: топ-5 останется в истории события, остальное удалится через 7 дней.\n\n' +
             'Закончил — жми /start.',
           reply_markup: kb(rows),
@@ -8540,11 +8621,29 @@ export default async function handler(req: any, res: any) {
           // 23505 = дубликат (unique event_id+file_unique_id) — не ошибка.
           if (error && !String(error.code) .includes('23505')) {
             await tg('sendMessage', { chat_id: msg.chat.id, text: 'Не получилось сохранить, попробуй ещё раз.' });
+          } else if (error) {
+            await tg('sendMessage', { chat_id: msg.chat.id, text: 'Это фото уже в галерее 😉' });
           } else {
-            await tg('sendMessage', {
-              chat_id: msg.chat.id,
-              text: error ? 'Это фото уже в галерее 😉' : `✅ В галерее! (${(count || 0) + 1}/30) Шли ещё или жми /start, когда закончишь.`,
-            });
+            /**
+             * ФОТО-МИССИЯ: минимум 5 ярких моментов. Прогресс — до пятого кадра
+             * на каждый файл, дальше только на каждый пятый (альбом из 10 фото
+             * не превращается в 10 ответов). На пятом — +20 баллов, один раз.
+             */
+            const n = (count || 0) + 1;
+            if (n < 5) {
+              await tg('sendMessage', { chat_id: msg.chat.id, text: `📸 ${n} из 5 — ещё ${5 - n} ${5 - n === 1 ? 'яркий момент' : 'ярких момента'} до миссии. Шли ещё!` });
+            } else if (n === 5) {
+              const { data: had } = await supabase.from('points_log').select('id').eq('telegram_id', msg.from.id).eq('event_id', evId).eq('reason', 'photos').limit(1);
+              let bonus = '';
+              if (!(had || []).length) {
+                const ev5 = await getEvent(evId);
+                await awardPoints(msg.from.id, 20, 'photos', `Запечатлел моменты: ${ev5?.title || 'событие'}`, evId);
+                bonus = ' +20 баллов ⭐';
+              }
+              await tg('sendMessage', { chat_id: msg.chat.id, text: `🔥 5 из 5 — миссия выполнена!${bonus} Это уже история клуба. Есть ещё кадры — шли, лимит 30.` });
+            } else if (n % 5 === 0) {
+              await tg('sendMessage', { chat_id: msg.chat.id, text: `✅ Уже ${n} кадров в галерее — спасибо! (до 30)` });
+            }
           }
         }
         return res.status(200).json({ ok: true });

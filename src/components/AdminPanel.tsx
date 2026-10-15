@@ -2980,6 +2980,24 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     </div>
 
                     {/* Кому ушли приглашения и что ответили — с дожимом. */}
+                    {/* Чат события: нет своей группы — бот возьмёт свободную группу
+                        прошедшего события, почистит и переименует. */}
+                    {!/^https:\/\/t\.me\/(\+|joinchat\/)/.test(String(selectedEvent.telegramBotUrl || '')) && (
+                      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-white/5 p-3">
+                        <span className="flex-1 text-[11px] text-white/60">💬 У события нет чата в Telegram. Бот может взять свободную группу прошедшего события: сохранит сводку, выведет старый состав, переименует.</span>
+                        <button type="button"
+                          onClick={async () => {
+                            try {
+                              const r = await adminFetch('/api/admin/events?action=recycle_group', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId: selectedEvent.id }) });
+                              const j = await r.json();
+                              setActionMsg({ ok: !!j.ok, text: j.ok ? `Группа «${j.title}» готова, выведено прошлых участников: ${j.kicked}. Ссылка уже в карточке события.` : (j.error || 'Не получилось') });
+                              if (j.ok && j.link) setSelectedEvent({ ...selectedEvent, telegramBotUrl: j.link });
+                            } catch { setActionMsg({ ok: false, text: 'Нет связи с сервером' }); }
+                          }}
+                          className="rounded-lg border-none bg-brand px-3 py-2 text-[11px] font-black uppercase text-black cursor-pointer">🔄 Взять свободную группу</button>
+                      </div>
+                    )}
+
                     {/* Именные пригласительные (форумы, выставки) — если у события есть пул. */}
                     <ClubTickets eventId={selectedEvent.id} onMsg={setActionMsg} adminFetch={adminFetch} />
                     <InviteFunnel eventId={selectedEvent.id} onMsg={setActionMsg} adminFetch={adminFetch} />

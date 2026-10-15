@@ -990,6 +990,18 @@ async function buildShareBanner(id: string): Promise<Buffer | null> {
   if (!ev) return null;
 
   const W = 1200, H = 630;
+  /**
+   * Готовая карточка шеринга (её рисует админка: фото + плашка с датой и
+   * названием) — отдаём КАК ЕСТЬ. Раньше поверх неё клали ещё одно затемнение
+   * и логотип, и пересланная афиша выходила вдвое темнее и с двумя логотипами.
+   */
+  const card = String((ev as any).telegram_image || '');
+  if (card.startsWith(STORAGE_PREFIX)) {
+    try {
+      const r = await fetch(card);
+      if (r.ok) return Buffer.from(await r.arrayBuffer());
+    } catch { /* соберём из афиши ниже */ }
+  }
   // Логотип FLINT — те же пути, что и LogoMain в src/components/VectorIcons.tsx,
   // чтобы баннер был ровно в стиле приложения.
   const LOGO = `<g transform="translate(56,44) scale(0.52)" fill="#E6FD3A">
@@ -1004,13 +1016,13 @@ async function buildShareBanner(id: string): Promise<Buffer | null> {
   const overlay = `<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="l" x1="0" y1="0" x2="1" y2="0">
-        <stop offset="0" stop-color="#000" stop-opacity="0.72"/>
-        <stop offset="55%" stop-color="#000" stop-opacity="0.18"/>
-        <stop offset="100%" stop-color="#000" stop-opacity="0.05"/>
+        <stop offset="0" stop-color="#000" stop-opacity="0.38"/>
+        <stop offset="35%" stop-color="#000" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#000" stop-opacity="0"/>
       </linearGradient>
       <linearGradient id="b" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0" stop-color="#000" stop-opacity="0"/>
-        <stop offset="100%" stop-color="#000" stop-opacity="0.6"/>
+        <stop offset="100%" stop-color="#000" stop-opacity="0.15"/>
       </linearGradient>
     </defs>
     <rect width="${W}" height="${H}" fill="url(#l)"/>
@@ -1020,7 +1032,8 @@ async function buildShareBanner(id: string): Promise<Buffer | null> {
   </svg>`;
 
   let base: Buffer;
-  const src = String((ev as any).telegram_image || (ev as any).image || '');
+  // Сама афиша (не карточка с текстом) — затемнение только под логотип.
+  const src = String((ev as any).image || (ev as any).telegram_image || '');
   const m = /^data:image\/[a-zA-Z+]+;base64,(.+)$/.exec(src);
   try {
     /**
@@ -1054,7 +1067,9 @@ async function buildShareBanner(id: string): Promise<Buffer | null> {
     }).toBuffer();
   }
 
+  // Сочнее: лёгкий подъём насыщенности и яркости — афиша не «тухнет» в превью.
   const out = await sharp(base)
+    .modulate({ saturation: 1.18, brightness: 1.04 })
     .composite([{ input: Buffer.from(overlay), top: 0, left: 0 }])
     .jpeg({ quality: 86, progressive: true })
     .toBuffer();
@@ -1115,6 +1130,30 @@ function costLineOf(ev: any): string {
   return 'Бесплатно';
 }
 
+/**
+ * «🎟 Свободно 5 из 8» — счётчик мест на момент отправки. Считаем живые
+ * записи (без отменённых); лимита нет — строки нет.
+ */
+async function seatsLine(ev: any): Promise<string> {
+  const cap = Number(ev?.max_participants) || 0;
+  if (!cap) return '';
+  const { count } = await supabase.from('registrations').select('id', { count: 'exact', head: true })
+    .eq('event_id', ev.id).neq('status', 'cancelled');
+  const left = Math.max(0, cap - (count || 0));
+  return left > 0 ? `🎟 Свободно <b>${left} из ${cap}</b> мест` : `🎟 Мест нет — можно встать в лист ожидания`;
+}
+
+/** Первые 1–2 предложения описания, без обрыва посреди слова. */
+function descTeaser(raw: any, max = 170): string {
+  const t = String(raw || '').replace(/\s+/g, ' ').trim();
+  if (t.length <= max) return t;
+  const cut = t.slice(0, max);
+  const dot = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+  if (dot > 60) return cut.slice(0, dot + 1);
+  const sp = cut.lastIndexOf(' ');
+  return `${cut.slice(0, sp > 60 ? sp : max).replace(/[,;:—–-]\s*$/, '')}…`;
+}
+
 async function handleShareInvite(body: any, req: any, res: any) {
   if (!BOT_TOKEN) return res.status(200).json({ ok: false, error: 'TELEGRAM_BOT_TOKEN не задан' });
 
@@ -1126,7 +1165,7 @@ async function handleShareInvite(body: any, req: any, res: any) {
 
   const { data: ev } = await supabase
     .from('events')
-    .select('id,title,date,time,location,description,image,telegram_image,notifications,status,price_type,price_amount,price_label,logistics')
+    .select('id,title,date,date_label,time,location,description,image,telegram_image,notifications,status,price_type,price_amount,price_label,logistics,max_participants')
     .eq('id', eventId).maybeSingle();
   if (!ev) return res.status(404).json({ ok: false, error: 'Событие не найдено' });
 
@@ -1144,13 +1183,23 @@ async function handleShareInvite(body: any, req: any, res: any) {
   const notifs = ((ev as any).notifications || {}) as Record<string, any>;
   const isChallenge = notifs._format === 'challenge' || notifs.is_challenge === true;
 
-  const dateLine = [shareDayPhrase(String((ev as any).date || '')), (ev as any).time || '']
-    .filter(Boolean).join(', ');
-  const desc = String((ev as any).description || '').replace(/\s+/g, ' ').trim().slice(0, 110);
+  // Дата — подписью события (там диапазон «16–18 октября»), а не только днём старта.
+  const dateLine = String((ev as any).date_label || '').trim()
+    || [shareDayPhrase(String((ev as any).date || '')), (ev as any).time || ''].filter(Boolean).join(', ');
+  const seats = await seatsLine(ev);
+  const lg = ((ev as any).logistics || {}) as any;
 
   const headline = isChallenge
-    ? `Каждый день — одно движение для себя. 90 дней подряд.`
-    : `${dateLine ? `📅 ${dateLine}\n` : ''}💰 ${escapeHtml(costLineOf(ev))}\n${desc ? `${desc}\n` : ''}`;
+    ? `Каждый день — одно движение для себя. 90 дней подряд.\n`
+    : [
+        dateLine && `📅 ${escapeHtml(dateLine)}`,
+        (ev as any).location && `📍 ${escapeHtml(String((ev as any).location))}`,
+        // Ценность: пригласительные клуба — одной строкой «было → стало».
+        lg.costModel === 'club_invite'
+          ? `💎 ${lg.marketPrice ? `Билет ${escapeHtml(String(lg.marketPrice))} → ` : ''}для клуба <b>бесплатно</b>`
+          : `💰 ${escapeHtml(costLineOf(ev))}`,
+        seats,
+      ].filter(Boolean).join('\n') + '\n\n' + (descTeaser((ev as any).description) ? `${escapeHtml(descTeaser((ev as any).description))}\n` : '');
 
   const caption =
     `<b>${escapeHtml((ev as any).title)}</b>\n\n` +

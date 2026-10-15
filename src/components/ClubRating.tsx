@@ -141,6 +141,7 @@ export default function ClubRating({ data, onClose }: { data: RatingData | null;
                 <li>⛺ Место в палатке — <b className="text-brand">12</b></li>
                 <li>🎒 Одолжил снаряжение — <b className="text-brand">10</b></li>
                 <li>🔥 Чек-ин челленджа — <b className="text-brand">10</b></li>
+                <li>📸 5+ фото с события — <b className="text-brand">20</b></li>
                 <li className="col-span-2">💪 Помог на событии (подтверждает организатор) — <b className="text-brand">от 5</b></li>
               </ul>
               <p className="mt-2 text-[10px] text-white/40">Нажми на человека — увидишь, за что у него баллы.</p>

@@ -299,6 +299,121 @@ function clearCookie(): string {
   return `${ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0`;
 }
 
+
+// ─── ПЕРЕИСПОЛЬЗОВАНИЕ ГРУПП ─────────────────────────────────────────────
+// Групп под события у клуба больше, чем идёт событий: после выезда чат
+// пустеет. Новое событие берёт свободную группу прошедшего: бот сохраняет
+// сводку старого чата, выводит прошлый состав (кроме костяка), переименовывает
+// группу, гасит старую ссылку и выпускает новую «с заявкой» (бот впускает
+// только записавшихся). Нужно, чтобы бот был админом с правами «Блокировка»,
+// «Изменение профиля группы» и «Пригласительные ссылки».
+async function tgApi(method: string, payload: Record<string, unknown>): Promise<any> {
+  if (!BOT_TOKEN) return null;
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    return await r.json();
+  } catch { return null; }
+}
+
+/** Свободные группы: событие прошло ≥2 дней назад (время на фото и итоги), не челлендж. */
+async function freeGroups(excludeEventId?: string): Promise<{ chat_id: number; chat_title: string; event_id: string; ended: string }[]> {
+  const { data: groups } = await supabase.from('event_groups').select('event_id,chat_id,chat_title').eq('active', true);
+  const ids = (groups || []).map((g: any) => String(g.event_id));
+  if (!ids.length) return [];
+  const { data: evs } = await supabase.from('events').select('id,date,date_end,notifications').in('id', ids);
+  const cutoff = new Date(Date.now() - 2 * 864e5).toISOString().slice(0, 10);
+  const byId = new Map((evs || []).map((e: any) => [String(e.id), e]));
+  return (groups || [])
+    .map((g: any) => {
+      const e: any = byId.get(String(g.event_id));
+      const ended = e ? String(e.date_end || e.date || '') : '0000-00-00';
+      const challenge = e && (e.notifications?._format === 'challenge' || e.notifications?.is_challenge === true);
+      return { chat_id: Number(g.chat_id), chat_title: String(g.chat_title || ''), event_id: String(g.event_id), ended, challenge };
+    })
+    .filter((g) => g.event_id !== excludeEventId && !g.challenge && g.ended && g.ended < cutoff)
+    .sort((a, b) => a.ended.localeCompare(b.ended));
+}
+
+async function recycleGroup(newEvId: string): Promise<{ ok: boolean; error?: string; title?: string; kicked?: number; link?: string }> {
+  const { data: ev } = await supabase.from('events').select('id,title,date_label,location,notifications').eq('id', newEvId).maybeSingle();
+  if (!ev) return { ok: false, error: 'Событие не найдено' };
+  if ((ev as any).notifications?._format === 'challenge') return { ok: false, error: 'Челленджу группа не нужна' };
+  const { data: has } = await supabase.from('event_groups').select('chat_id').eq('event_id', newEvId).eq('active', true).maybeSingle();
+  if (has) return { ok: false, error: 'У события уже есть группа' };
+
+  const me = await tgApi('getMe', {});
+  const botId = Number(me?.result?.id) || 0;
+  for (const g of await freeGroups(newEvId)) {
+    // Бот должен оставаться админом с нужными правами — иначе берём следующую.
+    const cm = await tgApi('getChatMember', { chat_id: g.chat_id, user_id: botId });
+    const r = cm?.result || {};
+    if (r.status !== 'administrator' || !r.can_restrict_members || !r.can_change_info || !r.can_invite_users) continue;
+
+    const { data: oldEv } = await supabase.from('events').select('title,telegram_bot_url').eq('id', g.event_id).maybeSingle();
+    // 1) Сводка старого чата — «что там было» не теряется.
+    const cnt = await tgApi('getChatMemberCount', { chat_id: g.chat_id });
+    const { count: msgs } = await supabase.from('group_messages').select('id', { count: 'exact', head: true }).eq('chat_id', g.chat_id);
+    const { count: media } = await supabase.from('event_media').select('id', { count: 'exact', head: true }).eq('event_id', g.event_id);
+    await supabase.from('app_config').upsert({
+      key: `group_archive:${g.chat_id}:${g.event_id}`,
+      value: JSON.stringify({ chatId: g.chat_id, oldTitle: g.chat_title, oldEventId: g.event_id, oldEventTitle: (oldEv as any)?.title || '', members: cnt?.result ?? null, messages: msgs ?? null, media: media ?? null, archivedAt: new Date().toISOString(), newEventId: newEvId }),
+    }, { onConflict: 'key' });
+
+    // 2) Выводим прошлый состав: ban+unban — человек выходит, но сможет
+    // вернуться, если запишется снова. Костяк и организаторов не трогаем.
+    const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', g.event_id);
+    const { data: keep } = await supabase.from('members').select('telegram_id').or('is_core.eq.true,role.eq.owner,role.eq.organizer');
+    const keepIds = new Set((keep || []).map((m: any) => Number(m.telegram_id)));
+    const { data: newRegs } = await supabase.from('registrations').select('telegram_id').eq('event_id', newEvId).neq('status', 'cancelled');
+    for (const r2 of newRegs || []) keepIds.add(Number((r2 as any).telegram_id));
+    let kicked = 0;
+    for (const uid of [...new Set((regs || []).map((r2: any) => Number(r2.telegram_id)).filter((n: number) => n > 0))]) {
+      if (keepIds.has(uid) || uid === botId) continue;
+      const b = await tgApi('banChatMember', { chat_id: g.chat_id, user_id: uid, revoke_messages: false });
+      if (b?.ok) { kicked++; await tgApi('unbanChatMember', { chat_id: g.chat_id, user_id: uid, only_if_banned: true }); }
+    }
+
+    // 3) Старую ссылку гасим, группу переименовываем под новое событие.
+    const oldLink = String((oldEv as any)?.telegram_bot_url || '');
+    if (/^https:\/\/t\.me\/(\+|joinchat\/)/.test(oldLink)) await tgApi('revokeChatInviteLink', { chat_id: g.chat_id, invite_link: oldLink });
+    const title = `${String((ev as any).title).split(/[—:|]/)[0].trim().slice(0, 100)} & FLINT`.slice(0, 128);
+    await tgApi('setChatTitle', { chat_id: g.chat_id, title });
+    await tgApi('setChatDescription', { chat_id: g.chat_id, description: [`Чат события клуба «Живи в моменте»: ${(ev as any).title}`, (ev as any).date_label, (ev as any).location].filter(Boolean).join(' · ').slice(0, 255) });
+    await tgApi('unpinAllChatMessages', { chat_id: g.chat_id });
+
+    // 4) Новая ссылка «с заявкой» + привязка чата к новому событию.
+    const jl = await tgApi('createChatInviteLink', { chat_id: g.chat_id, name: String((ev as any).title).slice(0, 32), creates_join_request: true });
+    const link = jl?.result?.invite_link || '';
+    if (link) await supabase.from('events').update({ telegram_bot_url: link }).eq('id', newEvId);
+    await supabase.from('event_groups').upsert({ event_id: newEvId, chat_id: g.chat_id, chat_title: title, active: true }, { onConflict: 'chat_id' });
+
+    const hello = await tgApi('sendMessage', {
+      chat_id: g.chat_id, parse_mode: 'HTML',
+      text: `🔄 <b>Новый круг: ${escapeHtml(String((ev as any).title))}</b>\n\n` +
+        [(ev as any).date_label && `📆 ${escapeHtml((ev as any).date_label)}`, (ev as any).location && `📍 ${escapeHtml((ev as any).location)}`].filter(Boolean).join('\n') +
+        `\n\nЗдесь будет вся координация. Синхронимся, заряжаемся — и в поток 🔥`,
+    });
+    if (hello?.result?.message_id) await tgApi('pinChatMessage', { chat_id: g.chat_id, message_id: hello.result.message_id, disable_notification: true });
+
+    try {
+      await tgApi('sendMessage', {
+        chat_id: process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570', parse_mode: 'HTML',
+        text: `🔄 Группа «${escapeHtml(g.chat_title)}» (было: ${escapeHtml(String((oldEv as any)?.title || g.event_id))}) переоформлена под «${escapeHtml(String((ev as any).title))}».\n` +
+          `Выведено прошлых участников: ${kicked}. Сводка старого чата сохранена.\n` +
+          `⚠️ Проверь в настройках группы «История чата для новых участников: скрыта» — иначе новички увидят старую переписку.`,
+      });
+    } catch { /* no-op */ }
+    return { ok: true, title, kicked, link };
+  }
+  return { ok: false, error: 'Свободной группы нет (или у бота не хватает прав админа в старых группах)' };
+}
+
+function escapeHtml(v: string): string {
+  return String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 export default async function handler(req: any, res: any) {
   // Вход/выход админки. Пароль сверяется на сервере и обменивается на
   // подписанную httpOnly-куку — в браузер секрет не попадает.
@@ -476,6 +591,16 @@ export default async function handler(req: any, res: any) {
   }
 
   if (!isAdmin(req)) return deny(res);
+
+  // Подобрать свободную группу под событие вручную (кнопка в админке) и
+  // список свободных групп — для подсказки.
+  if (req.method === 'POST' && req.query?.action === 'recycle_group') {
+    const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    return res.status(200).json(await recycleGroup(String(b.eventId || '')));
+  }
+  if (req.method === 'GET' && req.query?.action === 'free_groups') {
+    return res.status(200).json({ ok: true, groups: await freeGroups(String(req.query?.eventId || '')) });
+  }
 
   if (req.method === 'GET') {
     /**
@@ -1159,7 +1284,11 @@ export default async function handler(req: any, res: any) {
       let notified = 0;
       try { if (before) notified = await notifyEventChanges(body.id, before, event); } catch { /* no-op */ }
 
-      return res.status(200).json({ success: true, event: mapEventToCamelCase(event), notified });
+      // Новое событие — сразу берёт свободную группу прошедшего события.
+      let group: any = null;
+      if (!before) { try { group = await recycleGroup(String((event as any).id)); } catch { /* группа — не блокер */ } }
+
+      return res.status(200).json({ success: true, event: mapEventToCamelCase(event), notified, group });
     } catch (error) {
       slog('error', 'Error', error);
       return res.status(500).json({ error: 'Internal server error' });

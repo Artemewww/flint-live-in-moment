@@ -890,7 +890,7 @@ export default async function handler(req: any, res: any) {
             inline_keyboard: [
               [{ text: '⭐ Оставить отзыв', callback_data: `fb_${(ev as any).id}` }],
               // Сбор медиа в галерею события — обработчик media_ живёт в вебхуке.
-              [{ text: '📸 Прислать фото/видео', callback_data: `media_${(ev as any).id}` }],
+              [{ text: '📸 Прислать фото — минимум 5 моментов', callback_data: `media_${(ev as any).id}` }],
               /**
                * Анонимный опрос круга — репутация участников. Спрашиваем ровно
                * здесь, на следующий день: пока свежо, но эмоции уже осели.
@@ -1395,6 +1395,71 @@ export default async function handler(req: any, res: any) {
         await supabase.from('app_config').upsert({ key: sinceKey, value: JSON.stringify(joins) });
       }
     } catch (e) { report.errors.push(`stale-kick: ${(e as Error).message}`); }
+
+    /**
+     * ФОТО-МИССИЯ в день события (первый день многодневного). Каждому
+     * записанному: общее фото всей командой + минимум 5 ярких кадров прямо в
+     * бот — это история клуба и материал для видео-итогов. Раз на событие.
+     */
+    try {
+      const today = dayOffset(0);
+      const { data: todayEvents } = await supabase.from('events').select('id,title,notifications,status').eq('date', today);
+      for (const ev of (todayEvents || []) as any[]) {
+        if (isChallengeEvent(ev) || ev.status === 'cancelled') continue;
+        const flag = `photo_mission:${ev.id}`;
+        const { data: done } = await supabase.from('app_config').select('key').eq('key', flag).maybeSingle();
+        if (done) continue;
+        const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', ev.id).neq('status', 'cancelled');
+        let n = 0;
+        for (const r of realIds(regs || [])) {
+          const ok = await send(Number(r.telegram_id),
+            `📸 <b>Миссия дня — запечатлей моменты</b>\n\n` +
+            `Сегодня «${escH(ev.title)}». Две просьбы от клуба:\n\n` +
+            `1️⃣ <b>Общее фото</b> всей командой — найди организатора и соберите всех в кадр.\n` +
+            `2️⃣ <b>Минимум 5 ярких кадров</b>: люди, эмоции, детали, атмосфера.\n\n` +
+            `Присылай прямо сюда — всё уйдёт в историю клуба и в видео-итоги. За 5 кадров — <b>+20 баллов</b> ⭐`,
+            { inline_keyboard: [[{ text: '📸 Отправить фото', callback_data: `media_${ev.id}` }]] });
+          if (ok) n++;
+        }
+        await supabase.from('app_config').upsert({ key: flag, value: new Date().toISOString() }, { onConflict: 'key' });
+        (report as any).photoMissions = ((report as any).photoMissions || 0) + n;
+      }
+    } catch (e) { report.errors.push(`photo-mission: ${(e as Error).message}`); }
+
+    /**
+     * «ТЫ ЕЩЁ НЕ В ЧАТЕ». Записался, но в группу события не вошёл — за неделю
+     * до старта напоминаем кнопкой (раз в 2 дня, максимум 3 раза). Вход —
+     * ссылка «с заявкой», бот одобряет записавшихся мгновенно.
+     */
+    try {
+      const from = dayOffset(0), to = dayOffset(7);
+      const { data: soon } = await supabase.from('events').select('id,title,date,telegram_bot_url,notifications').gte('date', from).lte('date', to);
+      for (const ev of (soon || []) as any[]) {
+        const link = String(ev.telegram_bot_url || '');
+        if (isChallengeEvent(ev) || !/^https:\/\/t\.me\/(\+|joinchat\/)/.test(link)) continue;
+        const { data: grp } = await supabase.from('event_groups').select('chat_id').eq('event_id', ev.id).eq('active', true).maybeSingle();
+        if (!grp) continue;
+        const key = `chat_nudge:${ev.id}`;
+        const { data: st } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle();
+        const log: Record<string, { n: number; at: string }> = (() => { try { return JSON.parse((st as any)?.value || '{}'); } catch { return {}; } })();
+        const { data: regs } = await supabase.from('registrations').select('telegram_id').eq('event_id', ev.id).neq('status', 'cancelled');
+        let n = 0;
+        for (const r of realIds(regs || [])) {
+          const uid = String(r.telegram_id);
+          const prev = log[uid];
+          if (prev && (prev.n >= 3 || Date.parse(prev.at) > Date.now() - 2 * 864e5)) continue;
+          const cm = await tg('getChatMember', { chat_id: (grp as any).chat_id, user_id: Number(uid) });
+          const status = cm?.result?.status;
+          if (status && !['left', 'kicked'].includes(status)) continue; // уже в чате
+          const ok = await send(Number(uid),
+            `💬 <b>Ты ещё не в чате «${escH(ev.title)}»</b>\n\nТам машины, точка сбора и всё оперативное. Нажми кнопку и «Вступить» — бот впустит сразу.`,
+            { inline_keyboard: [[{ text: '💬 Войти в чат события', url: link }]] });
+          if (ok) { n++; log[uid] = { n: (prev?.n || 0) + 1, at: new Date().toISOString() }; }
+        }
+        await supabase.from('app_config').upsert({ key, value: JSON.stringify(log) }, { onConflict: 'key' });
+        (report as any).chatNudges = ((report as any).chatNudges || 0) + n;
+      }
+    } catch (e) { report.errors.push(`chat-nudge: ${(e as Error).message}`); }
 
     /**
      * ВОРОНКА ПРИГЛАШЕНИЙ — дожим.
