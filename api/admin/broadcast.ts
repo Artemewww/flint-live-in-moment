@@ -77,6 +77,14 @@ function deny(res: any) {
 function costLineOf(ev: any): string {
   const lg = ev?.logistics || {};
   const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  // Своя цена для членов клуба: «20 BYN для клуба (обычная цена 60 BYN)».
+  {
+    const mp = lg.memberPrice === '' || lg.memberPrice == null ? null : Number(lg.memberPrice);
+    if (lg.costModel !== 'club_invite' && mp !== null && Number.isFinite(mp) && mp >= 0 && lg.marketPrice) {
+      const market = /^\d+(\.\d+)?$/.test(String(lg.marketPrice).trim()) ? `${lg.marketPrice} BYN` : String(lg.marketPrice).trim();
+      return `${mp > 0 ? `${mp} BYN` : 'бесплатно'} для клуба (обычная цена ${market})`;
+    }
+  }
   // Пригласительные клуба: показываем и «рыночную» цену — в ней вся ценность.
   if (lg.costModel === 'club_invite') {
     const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
@@ -110,7 +118,13 @@ function inviteMarkup(eventId: string) {
 /** Строка «ценности» для приглашения: цена без клуба, места, спонсор. */
 function valueLineOf(ev: any): string {
   const lg = ev?.logistics || {};
-  if (lg.costModel !== 'club_invite') return '';
+  // Своя цена для клуба (скидка) — «было → для тебя».
+  if (lg.costModel !== 'club_invite') {
+    const mp = lg.memberPrice === '' || lg.memberPrice == null ? null : Number(lg.memberPrice);
+    if (mp === null || !Number.isFinite(mp) || !lg.marketPrice) return '';
+    const market = /^\d+(\.\d+)?$/.test(String(lg.marketPrice).trim()) ? `${lg.marketPrice} BYN` : String(lg.marketPrice).trim();
+    return `💎 Для всех <b>${esc(market)}</b> → для тебя как члена клуба <b>${mp > 0 ? `${mp} BYN` : 'бесплатно'}</b>\n`;
+  }
   const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
   const market = String(lg.marketPrice || '').trim();
   const sponsor = String(lg.clubSponsor || '').trim();
@@ -339,7 +353,8 @@ export default async function handler(req: any, res: any) {
       const left = Math.max(0, cap - (taken || 0));
       seatsLine = left > 0 ? `⏳ Свободно <b>${left} из ${cap}</b> — места за теми, кто ответит первым\n` : `⏳ Места закончились — ответь «Буду», поставлю в лист ожидания\n`;
     }
-    const isClubInvite = (event?.logistics || {}).costModel === 'club_invite';
+    // Пригласительные или своя цена для клуба — цена живёт в строке ценности.
+    const isClubInvite = !!valueLineOf(event);
     const inviteText =
       `✉️ <b>Тебя приглашают: ${esc(event?.title || 'событие FLINT')}</b>\n\n` +
       (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +

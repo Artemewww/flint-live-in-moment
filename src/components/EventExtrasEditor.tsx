@@ -142,6 +142,27 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
           <input type="number" inputMode="decimal" min={0} value={v.costEstimate ?? ''} onChange={(e) => set('costEstimate', e.target.value === '' ? undefined : Number(e.target.value))}
             placeholder="40" className="w-24 rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
         </label>
+        {/* ЦЕНА ДЛЯ КЛУБА: обычная цена «для всех» и своя — для членов клуба
+            (баня 60 → 20, форум 35–355 → бесплатно). Показывается в карточке,
+            афише и приглашениях как «было → для клуба». */}
+        {v.costModel !== 'club_invite' && (
+          <div className="space-y-2 rounded-xl border border-white/10 bg-white/[.03] p-3">
+            <span className="block text-[10px] font-mono uppercase text-white/50">💎 Цена для членов клуба (если есть скидка)</span>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="block">
+                <span className="text-[11px] text-white/55">Обычная цена (для всех)</span>
+                <input value={v.marketPrice ?? ''} onChange={(e) => set('marketPrice', e.target.value)} placeholder="60 BYN"
+                  className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+              </label>
+              <label className="block">
+                <span className="text-[11px] text-white/55">Для клуба, BYN (0 — бесплатно)</span>
+                <input type="number" inputMode="decimal" min={0} value={v.memberPrice ?? ''} onChange={(e) => set('memberPrice', e.target.value === '' ? undefined : Number(e.target.value))}
+                  placeholder="20" className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
+              </label>
+            </div>
+            {v.memberPrice != null && !v.marketPrice && <p className="text-[10px] text-amber-300/90">Укажи и обычную цену — иначе скидку не с чем сравнить.</p>}
+          </div>
+        )}
         {/* ЦЕННОСТЬ: платное мероприятие, куда у клуба есть места. Без цены
             «на улице» бесплатный пригласительный выглядит пустяком. */}
         {v.costModel === 'club_invite' && (

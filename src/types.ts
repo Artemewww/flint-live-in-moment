@@ -350,19 +350,33 @@ export function calculateDynamicPrice(event: CommunityEvent, today: string = get
  *   logistics.clubSponsor  — при чьей поддержке («Артём Дементьев»)
  *   logistics.ticketUrl    — где продают билеты (для сравнения цены)
  */
-export function clubValue(lg: any): { marketPrice: string; seats: number; sponsor: string; ticketUrl: string } | null {
+export function clubValue(lg: any): { marketPrice: string; memberPrice: number | null; seats: number; sponsor: string; ticketUrl: string } | null {
   if (!lg) return null;
-  const marketPrice = typeof lg.marketPrice === 'string' ? lg.marketPrice.trim() : '';
+  const marketPrice = typeof lg.marketPrice === 'string' ? lg.marketPrice.trim() : (Number(lg.marketPrice) > 0 ? `${lg.marketPrice} BYN` : '');
+  /**
+   * ЦЕНА ДЛЯ ЧЛЕНОВ КЛУБА (logistics.memberPrice, BYN): баня во «Фристайле»
+   * 60 для всех / 20 для клуба, форум 35–355 / бесплатно. 0 — бесплатно,
+   * пусто — скидки нет. У пригласительных клуба цена для клуба всегда 0.
+   */
+  const mp = lg.memberPrice === '' || lg.memberPrice == null ? null : Number(lg.memberPrice);
+  const memberPrice = lg.costModel === 'club_invite' ? 0 : (Number.isFinite(mp) && (mp as number) >= 0 ? (mp as number) : null);
   const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
   const sponsor = typeof lg.clubSponsor === 'string' ? lg.clubSponsor.trim() : '';
   const ticketUrl = typeof lg.ticketUrl === 'string' && /^https?:\/\//.test(lg.ticketUrl.trim()) ? lg.ticketUrl.trim() : '';
-  if (lg.costModel !== 'club_invite' && !seats && !marketPrice) return null;
-  return { marketPrice, seats, sponsor, ticketUrl };
+  if (lg.costModel !== 'club_invite' && !seats && !(marketPrice && memberPrice !== null)) return null;
+  return { marketPrice, memberPrice, seats, sponsor, ticketUrl };
 }
 
 export function priceTag(e: Pick<CommunityEvent, 'priceType' | 'priceAmount' | 'priceLabel' | 'logistics'>): { short: string; note?: string } {
   const lg: any = e.logistics || {};
   const val = clubValue(lg);
+  // Своя цена для членов клуба (скидка): «20 Br для клуба», обычная — в примечании.
+  if (val && val.memberPrice !== null && lg.costModel !== 'club_invite') {
+    return {
+      short: val.memberPrice > 0 ? `${val.memberPrice} Br для клуба` : 'Бесплатно для клуба',
+      note: [val.marketPrice && `Обычная цена: ${val.marketPrice}`, lg.costNote].filter(Boolean).join('\n') || undefined,
+    };
+  }
   if (val && lg.costModel === 'club_invite') {
     return {
       short: val.seats ? `🎟 Бесплатно · ${val.seats} мест` : '🎟 Пригласительный',

@@ -5933,6 +5933,7 @@ function AddEventModal({ onClose, onAdd }: {
     if (d.clubSeats) extra.clubSeats = d.clubSeats;
     if (d.clubSponsor) extra.clubSponsor = d.clubSponsor;
     if (d.ticketUrl) extra.ticketUrl = d.ticketUrl;
+    if (d.memberPrice != null) extra.memberPrice = d.memberPrice;
     if (d.needs?.length) extra.needs = d.needs;
     if (Object.keys(extra).length) updates.logistics = { ...(formData.logistics || {}), ...extra };
     setFormData((f) => ({ ...f, ...updates }));

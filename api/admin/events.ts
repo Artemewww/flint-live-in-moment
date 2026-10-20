@@ -435,7 +435,11 @@ export async function buildPoster(ev: any): Promise<Buffer> {
   const dayLab = d ? (de && de > d ? 'ДАТЫ' : RU_DAYS[d.getUTCDay()]) : 'ДАТА';
   const timeVal = ev.time ? `${ev.time}${ev.time_end ? `–${ev.time_end}` : ''}` : 'сообщим';
   let priceLab = 'ЦЕНА', priceVal = 'бесплатно';
-  if (lg.costModel === 'club_invite') { priceLab = 'ДЛЯ КЛУБА'; priceVal = 'бесплатно'; }
+  // Цена для клуба: на плашке — клубная, рядом зачёркнутая обычная.
+  let priceOld = '';
+  const mpv = lg.memberPrice === '' || lg.memberPrice == null ? null : Number(lg.memberPrice);
+  if (lg.costModel === 'club_invite') { priceLab = 'ДЛЯ КЛУБА'; priceVal = 'бесплатно'; priceOld = String(lg.marketPrice || '').replace(/\s*BYN/i, ''); }
+  else if (mpv !== null && Number.isFinite(mpv) && lg.marketPrice) { priceLab = 'ДЛЯ КЛУБА'; priceVal = mpv > 0 ? `${mpv} BYN` : 'бесплатно'; priceOld = String(lg.marketPrice).replace(/\s*BYN/i, ''); }
   else if (ev.price_type === 'paid' && Number(ev.price_amount) > 0) priceVal = `${ev.price_amount} BYN`;
   else if (lg.costModel === 'self' && Number(lg.costEstimate) > 0) { priceLab = 'КАЖДЫЙ ЗА СЕБЯ'; priceVal = `≈${lg.costEstimate} BYN`; }
   else if (lg.costModel === 'pool') { priceLab = 'ОБЩИЙ ВЗНОС'; priceVal = Number(lg.costEstimate) > 0 ? `≈${lg.costEstimate} BYN` : 'делим'; }
@@ -446,8 +450,16 @@ export async function buildPoster(ev: any): Promise<Buffer> {
     parts.push(`<rect x="${x}" y="${y}" width="${cw}" height="${chH}" rx="18" fill="#161616" stroke="#2C2C2C" stroke-width="2"/>`);
     let ls = 18; while (ls > 12 && textW(F.label, lab, ls, 1.5) > cw - 40) ls -= 1;
     parts.push(textPath(F.label, lab, x + 20, y + 34, ls, 'rgba(255,255,255,0.5)', { track: 1.5 }));
-    let vs = 46; while (vs > 24 && textW(F.title, val.toUpperCase(), vs) > cw - 40) vs -= 2;
+    // Зачёркнутая обычная цена справа от клубной — «было → стало».
+    const old = lime && priceOld && priceOld.length <= 9 ? priceOld : '';
+    const oldW = old ? textW(F.title, old, 32) + 14 : 0;
+    let vs = 46; while (vs > 24 && textW(F.title, val.toUpperCase(), vs) > cw - 40 - oldW) vs -= 2;
     parts.push(textPath(F.title, val.toUpperCase(), x + 20, y + 80, vs, lime ? LIME : '#FFFFFF'));
+    if (old) {
+      const ox = x + 20 + textW(F.title, val.toUpperCase(), vs) + 14;
+      parts.push(textPath(F.title, old, ox, y + 80, 32, 'rgba(255,255,255,0.5)'));
+      parts.push(`<rect x="${ox - 2}" y="${y + 66}" width="${textW(F.title, old, 32) + 4}" height="3" fill="rgba(255,255,255,0.7)"/>`);
+    }
   });
   y += chH;
 
@@ -583,12 +595,46 @@ async function recycleGroup(newEvId: string): Promise<{ ok: boolean; error?: str
     const keepIds = new Set((keep || []).map((m: any) => Number(m.telegram_id)));
     const { data: newRegs } = await supabase.from('registrations').select('telegram_id').eq('event_id', newEvId).neq('status', 'cancelled');
     for (const r2 of newRegs || []) keepIds.add(Number((r2 as any).telegram_id));
+    /**
+     * Кого выводим: записанных на прошлое событие + всех, кто писал в этом чате,
+     * + всех, чей вход бот видел. Список участников группы Bot API не отдаёт —
+     * это все люди, о которых бот вообще может знать.
+     */
+    const { data: writers } = await supabase.from('group_messages').select('telegram_id').eq('chat_id', g.chat_id).limit(5000);
+    const { data: joinRow } = await supabase.from('app_config').select('value').eq('key', `groupjoin:${g.chat_id}`).maybeSingle();
+    let joined: string[] = [];
+    try { joined = Object.keys(JSON.parse(String((joinRow as any)?.value || '{}'))); } catch { /* no-op */ }
+    const known = [
+      ...(regs || []).map((r2: any) => Number(r2.telegram_id)),
+      ...(writers || []).map((w: any) => Number(w.telegram_id)),
+      ...joined.map(Number),
+    ];
+    const admins = await tgApi('getChatAdministrators', { chat_id: g.chat_id });
+    for (const a of admins?.result || []) keepIds.add(Number(a.user?.id));
     let kicked = 0;
-    for (const uid of [...new Set((regs || []).map((r2: any) => Number(r2.telegram_id)).filter((n: number) => n > 0))]) {
+    for (const uid of [...new Set(known.filter((n: number) => Number.isFinite(n) && n > 0))]) {
       if (keepIds.has(uid) || uid === botId) continue;
       const b = await tgApi('banChatMember', { chat_id: g.chat_id, user_id: uid, revoke_messages: false });
       if (b?.ok) { kicked++; await tgApi('unbanChatMember', { chat_id: g.chat_id, user_id: uid, only_if_banned: true }); }
     }
+
+    /**
+     * 2б) ИСТОРИЯ. Удаляем всё, что Telegram позволяет боту: номера сообщений в
+     * супергруппе идут подряд, проходим пачками по 100. Ограничение Telegram:
+     * сообщения старше 48 часов бот удалить НЕ может — их убирает админ
+     * вручную или скрывает настройкой «История чата для новых участников».
+     */
+    let cleared = 0;
+    try {
+      const probe = await tgApi('sendMessage', { chat_id: g.chat_id, text: '🧹', disable_notification: true });
+      const last = Number(probe?.result?.message_id) || 0;
+      for (let hi = last; hi > 0; hi -= 100) {
+        const ids = Array.from({ length: Math.min(100, hi) }, (_, i) => hi - i);
+        const d = await tgApi('deleteMessages', { chat_id: g.chat_id, message_ids: ids });
+        if (d?.ok) cleared += 1;
+      }
+      await supabase.from('group_messages').delete().eq('chat_id', g.chat_id);
+    } catch { /* очистка — по возможности */ }
 
     // 3) Старую ссылку гасим, группу переименовываем под новое событие.
     const oldLink = String((oldEv as any)?.telegram_bot_url || '');
@@ -616,8 +662,9 @@ async function recycleGroup(newEvId: string): Promise<{ ok: boolean; error?: str
       await tgApi('sendMessage', {
         chat_id: process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570', parse_mode: 'HTML',
         text: `🔄 Группа «${escapeHtml(g.chat_title)}» (было: ${escapeHtml(String((oldEv as any)?.title || g.event_id))}) переоформлена под «${escapeHtml(String((ev as any).title))}».\n` +
-          `Выведено прошлых участников: ${kicked}. Сводка старого чата сохранена.\n` +
-          `⚠️ Проверь в настройках группы «История чата для новых участников: скрыта» — иначе новички увидят старую переписку.`,
+          `Выведено прошлых участников: ${kicked}. Свежие сообщения (младше 48 ч) удалены, сводка старого чата сохранена.\n\n` +
+          `⚠️ Сообщения старше 48 часов Telegram не даёт удалить боту. Чтобы новички их не видели: ` +
+          `открой группу → ✏️ → «История чата для новых участников» → «Скрыта». Или удали старое вручную (выдели сообщения → «Удалить у всех»).`,
       });
     } catch { /* no-op */ }
     return { ok: true, title, kicked, link };

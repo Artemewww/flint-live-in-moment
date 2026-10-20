@@ -97,14 +97,22 @@ function ClubValueBlock({ event }: { event: CommunityEvent }) {
         )}
         <div className="rounded-xl bg-black/30 p-3">
           <div className="text-[10px] uppercase text-white/40">Для участника клуба</div>
-          <div className="mt-0.5 text-base font-black text-brand">Бесплатно</div>
+          <div className="mt-0.5 text-base font-black text-brand">{v.memberPrice ? `${v.memberPrice} BYN` : 'Бесплатно'}</div>
         </div>
       </div>
+      {(() => {
+        // Выгода в рублях — когда обычная цена одним числом (не «35–355»).
+        const market = Number(String(v.marketPrice).replace(/[^\d.]/g, ''));
+        const save = /^\D*\d+(\.\d+)?\D*$/.test(v.marketPrice) && v.memberPrice !== null ? market - v.memberPrice : 0;
+        return save > 0 ? <p className="text-[12px] font-bold text-brand">Твоя выгода как члена клуба — {save} BYN</p> : null;
+      })()}
+      {(event.logistics as any)?.costModel === 'club_invite' && (
       <p className="text-[13px] leading-snug text-white/80">
         🎟 У клуба {v.seats ? <b>{v.seats} пригласительных</b> : 'есть пригласительные'}
         {v.sponsor ? <> · партнёр — <b>{v.sponsor}</b></> : null}.
         {v.seats ? <> {left > 0 ? <>Свободно: <b className="text-brand">{left}</b> из {v.seats}.</> : <>Все места разобраны — запишись в лист ожидания.</>}</> : null}
       </p>
+      )}
       {v.ticketUrl && (
         <a href={v.ticketUrl} target="_blank" rel="noreferrer" className="inline-block text-[11px] text-white/45 underline decoration-white/20">
           Цена на сайте продажи билетов →
@@ -201,6 +209,7 @@ function DynamicPrice({ event }: { event: CommunityEvent }) {
     : model === 'food_share' ? 'Еду покупаем вскладчину'
     : model === 'bring_own' ? 'Каждый везёт своё'
     : model === 'club_invite' ? 'Пригласительный от клуба — платить не нужно'
+    : clubValue(event.logistics)?.memberPrice != null ? 'Специальная цена для членов клуба'
     : 'Полностью свободное участие';
 
   return (

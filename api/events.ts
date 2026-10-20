@@ -1113,6 +1113,14 @@ function shareDayPhrase(iso: string): string {
 function costLineOf(ev: any): string {
   const lg = ev?.logistics || {};
   const est = Number(lg.costEstimate) > 0 ? Number(lg.costEstimate) : 0;
+  // Своя цена для членов клуба: «20 BYN для клуба (обычная цена 60 BYN)».
+  {
+    const mp = lg.memberPrice === '' || lg.memberPrice == null ? null : Number(lg.memberPrice);
+    if (lg.costModel !== 'club_invite' && mp !== null && Number.isFinite(mp) && mp >= 0 && lg.marketPrice) {
+      const market = /^\d+(\.\d+)?$/.test(String(lg.marketPrice).trim()) ? `${lg.marketPrice} BYN` : String(lg.marketPrice).trim();
+      return `${mp > 0 ? `${mp} BYN` : 'бесплатно'} для клуба (обычная цена ${market})`;
+    }
+  }
   // Пригласительные клуба: показываем и «рыночную» цену — в ней вся ценность.
   if (lg.costModel === 'club_invite') {
     const seats = Number(lg.clubSeats) > 0 ? Math.round(Number(lg.clubSeats)) : 0;
@@ -1197,7 +1205,9 @@ async function handleShareInvite(body: any, req: any, res: any) {
         // Ценность: пригласительные клуба — одной строкой «было → стало».
         lg.costModel === 'club_invite'
           ? `💎 ${lg.marketPrice ? `Билет ${escapeHtml(String(lg.marketPrice))} → ` : ''}для клуба <b>бесплатно</b>`
-          : `💰 ${escapeHtml(costLineOf(ev))}`,
+          : (lg.memberPrice != null && lg.memberPrice !== '' && lg.marketPrice)
+            ? `💎 Для всех ${escapeHtml(/^\d+(\.\d+)?$/.test(String(lg.marketPrice).trim()) ? `${lg.marketPrice} BYN` : String(lg.marketPrice))} → для клуба <b>${Number(lg.memberPrice) > 0 ? `${Number(lg.memberPrice)} BYN` : 'бесплатно'}</b>`
+            : `💰 ${escapeHtml(costLineOf(ev))}`,
         seats,
       ].filter(Boolean).join('\n') + '\n\n' + (descTeaser((ev as any).description) ? `${escapeHtml(descTeaser((ev as any).description))}\n` : '');
 

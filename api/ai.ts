@@ -629,6 +629,8 @@ export default async function handler(req: any, res: any) {
          `clubSeats — сколько мест/пригласительных у клуба (число; тогда и maxParticipants = clubSeats), ` +
          `clubSponsor — при чьей поддержке/кто организовал места (имя), ` +
          `ticketUrl — ссылка на продажу билетов, если она есть в тексте. Ничего не выдумывай — нет в тексте, оставь пустым;\n` +
+         `- СКИДКА ДЛЯ КЛУБА: если в тексте есть разные цены «для всех» и «для членов/участников клуба» — marketPrice = обычная цена строкой («60 BYN»), ` +
+         `memberPrice = цена для клуба числом (0 — бесплатно), priceType='paid' и priceAmount = memberPrice (или 'free', если 0). Нет такой разницы — memberPrice = -1;\n` +
          `- Если в тексте есть ТОЧНЫЙ адрес площадки, клади его в location (например «БелЭкспо, ул. Павлины Меделки, 24, Минск»), ` +
          `а время работы/запуска по дням — в program;\n` +
          `- costNote: одна фраза-пояснение про деньги (напр. «баня 300 BYN на всех, продукты ≈25 BYN/чел»), без выдуманных сумм — пусто, если не ясно;\n` +
@@ -676,6 +678,7 @@ export default async function handler(req: any, res: any) {
           clubSeats: { type: Type.NUMBER },
           clubSponsor: { type: Type.STRING },
           ticketUrl: { type: Type.STRING },
+          memberPrice: { type: Type.NUMBER },
           needs: { type: Type.ARRAY, items: { type: Type.STRING } },
         },
         required: ['title', 'type', 'description', 'painPoint', 'program', 'entryThreshold', 'houseQualities', 'maxParticipants', 'format'],
@@ -703,7 +706,9 @@ export default async function handler(req: any, res: any) {
       {
         const src = String(prompt);
         const price = src.match(/(\d{1,5})\s*(?:BYN|byn|бел\.?\s*руб|руб(?:лей|\.)?|р\.|Br)\b/i);
-        if (price && !(Number(p.priceAmount) > 0) && !/бесплатн/i.test(src)) { p.priceType = 'paid'; p.priceAmount = Number(price[1]); }
+        const hasMember = Number(p.memberPrice) >= 0 && !!p.marketPrice; // скидка для клуба — цена уже разобрана
+        if (price && !hasMember && !(Number(p.priceAmount) > 0) && !/бесплатн/i.test(src)) { p.priceType = 'paid'; p.priceAmount = Number(price[1]); }
+        if (hasMember) { p.priceType = Number(p.memberPrice) > 0 ? 'paid' : 'free'; p.priceAmount = Number(p.memberPrice); }
         const MON: Record<string, number> = { январ: 1, феврал: 2, март: 3, апрел: 4, мая: 5, май: 5, июн: 6, июл: 7, август: 8, сентябр: 9, октябр: 10, ноябр: 11, декабр: 12 };
         const dm = src.match(/(\d{1,2})(?:\s*[–-]\s*(\d{1,2}))?\s+(январ|феврал|март|апрел|мая|май|июн|июл|август|сентябр|октябр|ноябр|декабр)/i);
         if (dm && !p.date) {
@@ -758,6 +763,7 @@ export default async function handler(req: any, res: any) {
         clubSeats: Number(p.clubSeats) > 0 ? Math.min(500, Math.round(Number(p.clubSeats))) : 0,
         clubSponsor: String(p.clubSponsor || '').slice(0, 80),
         ticketUrl: /^https?:\/\//.test(String(p.ticketUrl || '')) ? String(p.ticketUrl).slice(0, 300) : '',
+        memberPrice: Number.isFinite(Number(p.memberPrice)) && Number(p.memberPrice) >= 0 && p.marketPrice ? Number(p.memberPrice) : null,
         needs: (Array.isArray(p.needs) ? p.needs : []).map((x: any) => String(x).slice(0, 60)).filter(Boolean).slice(0, 10),
         trip: p.scale === 'expedition' && p.trip ? { docs: String(p.trip.docs || ''), flights: String(p.trip.flights || ''), budget: String(p.trip.budget || '') } : null,
       };
