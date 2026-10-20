@@ -378,6 +378,22 @@ def fit_lines(text, font_fn, max_w, sizes, max_lines=2):
     return [' '.join(words)[:28]], f
 
 
+def fit_text(txt, font_fn, sizes, fill, spacing=0, max_w=960):
+    """Одна строка, которая ГАРАНТИРОВАННО влезает в безопасную зону: берём
+    самый крупный кегль из списка, при котором текст уже max_w. Раньше финал
+    («СПАСИБО ВСЕМ» кеглем 150) и подписи рисовались фиксированным размером
+    и на длинных фразах вылезали за край кадра."""
+    txt = str(txt or '').upper()
+    for size in sizes:
+        im = text_img(txt, font_fn(size), fill, spacing)
+        if im.width <= max_w:
+            return im
+    im = text_img(txt, font_fn(sizes[-1]), fill, spacing)
+    if im.width > max_w:  # совсем длинное — ужимаем картинку, но не режем текст
+        im = im.resize((max_w, max(1, round(im.height * max_w / im.width))), Image.LANCZOS)
+    return im
+
+
 def pill(label, max_w=960):
     size = 36
     tl = text_img(label, GUNT(size), BLACK, 3)
@@ -417,15 +433,16 @@ class Graphics:
         title = str(m.get('title') or 'FLINT').split(':')[0].strip()
         lines, f = fit_lines(title, HEAVY, 960, [220, 190, 160, 140, 120, 100])
         self.title = [shadowed(text_img(l, f, LIME), 18, 0.5) for l in lines]
-        self.kicker = shadowed(text_img(str(m.get('kicker') or 'FLINT · ИТОГИ').upper(), GUNT(42), WHITE, 6), 10)
-        self.dates = shadowed(text_img(str(m.get('dates') or '').upper(), GUNT(40), WHITE, 5), 10) if m.get('dates') else None
+        # Все подписи — под тему события из манифеста и с подгонкой по ширине.
+        self.kicker = shadowed(fit_text(m.get('kicker') or 'FLINT · ИТОГИ', GUNT, [42, 38, 34, 30, 26], WHITE, 6), 10)
+        self.dates = shadowed(fit_text(m.get('dates'), GUNT, [40, 36, 32, 28], WHITE, 5), 10) if m.get('dates') else None
         stats = m.get('stats_line')
         self.stats = pill(stats.upper()) if stats else None
-        self.night = shadowed(text_img('А ПОТОМ — НОЧЬ', HEAVY(140), WHITE), 16)
-        self.fin_big = shadowed(text_img(str(m.get('finale') or 'СПАСИБО ВСЕМ').upper(), HEAVY(150), LIME), 16)
-        self.fin_small = shadowed(text_img('КТО БЫЛ С НАМИ · ДО СЛЕДУЮЩЕГО ВЫЕЗДА', GUNT(34), WHITE, 3), 10)
-        self.tag = text_img('ЖИВИ В МОМЕНТЕ', GUNT(54), WHITE, 6)
-        self.cta = text_img('СЛЕДУЮЩИЙ ВЫЕЗД — В ПРИЛОЖЕНИИ FLINT', GUNT(30), (190, 190, 190), 2)
+        self.night = shadowed(fit_text(m.get('night_label') or 'А ПОТОМ — НОЧЬ', HEAVY, [140, 120, 100, 84], WHITE), 16)
+        self.fin_big = shadowed(fit_text(m.get('finale') or 'СПАСИБО ВСЕМ', HEAVY, [150, 130, 112, 96, 84, 72], LIME), 16)
+        self.fin_small = shadowed(fit_text(m.get('finale_sub') or 'КТО БЫЛ С НАМИ', GUNT, [34, 30, 27, 24], WHITE, 3), 10)
+        self.tag = fit_text(m.get('tag') or 'ЖИВИ В МОМЕНТЕ', GUNT, [54, 48, 42], WHITE, 6)
+        self.cta = fit_text(m.get('cta') or 'СЛЕДУЮЩЕЕ СОБЫТИЕ — В ПРИЛОЖЕНИИ FLINT', GUNT, [30, 27, 24, 22], (190, 190, 190), 2)
 
     def place_c(self, fr, im, cx, cy, scale=1.0, a=1.0):
         if a <= 0.003 or scale <= 0.01: return
@@ -522,6 +539,11 @@ def main(manifest_path):
     if len(chosen) < 4:
         raise SystemExit('too_little_media')
     day, night = order(chosen, seed)
+    # «Ночь» — только для выездов с ночёвкой. Форум в тёмном зале или вечерняя
+    # пробежка детектором выглядят «ночью», и в ролик вставлялось
+    # «А ПОТОМ — НОЧЬ» там, где ночи не было.
+    if not m.get('night'):
+        day, night = day + night, []
     # Финал — лучшее фото (часто общее), иначе лучший спокойный кадр.
     pool = day + night
     fin = max([s for s in pool if s['kind'] == 'photo'] or pool, key=lambda s: s['rank'])

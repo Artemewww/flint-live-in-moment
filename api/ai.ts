@@ -107,11 +107,23 @@ async function genJSON(ai: any, apiKey: string, prompt: string, schema: any): Pr
   const errors: string[] = [];
   const retryable: string[] = [];
 
+  /**
+   * БЮДЖЕТ ВРЕМЕНИ. Vercel обрывает функцию на 60 с, а перегруженная модель
+   * могла «висеть» минутами — очередь ждала её до конца, и админка получала
+   * обрыв вместо события («ошибка при создании»). Теперь у попытки свой
+   * таймаут, у всей очереди — общий бюджет 48 с.
+   */
+  const deadline = Date.now() + 48_000;
   const attempt = async (model: string) => {
-    const resp = await ai.models.generateContent({
-      model, contents: prompt,
-      config: { responseMimeType: 'application/json', responseSchema: schema },
-    });
+    const left = deadline - Date.now();
+    if (left < 4_000) throw new Error('нет времени на попытку');
+    const resp: any = await Promise.race([
+      ai.models.generateContent({
+        model, contents: prompt,
+        config: { responseMimeType: 'application/json', responseSchema: schema },
+      }),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('timeout — модель не ответила вовремя')), Math.min(22_000, left))),
+    ]);
     const parsed = JSON.parse(resp.text || '{}');
     if (!parsed || typeof parsed !== 'object' || Object.keys(parsed).length === 0) {
       throw new Error('вернула пустой JSON');
@@ -120,7 +132,42 @@ async function genJSON(ai: any, apiKey: string, prompt: string, schema: any): Pr
     return parsed;
   };
 
-  for (const model of queue) {
+  /**
+   * ГОНКА. В часы пик тяжёлые flash отвечают 503 или думают дольше 20 с, и
+   * последовательная очередь сгорала, не дойдя до лёгких моделей, которые как
+   * раз живы. Теперь первые три модели (одна из них обязательно -lite)
+   * опрашиваются ПАРАЛЛЕЛЬНО — берём первый годный ответ. Не вышло — дальше
+   * по очереди, пока хватает бюджета.
+   */
+  const lite = queue.find((m) => /lite/.test(m));
+  const race = [...new Set([...queue.filter((m) => !/lite/.test(m)).slice(0, 2), ...(lite ? [lite] : [])])];
+  const tries = race.map((m) => attempt(m).then((r) => ({ m, r })).catch((e) => {
+    const msg = (e as Error).message;
+    if (/503|UNAVAILABLE|high demand/i.test(msg)) retryable.push(m);
+    if (/404|no longer available|not found/i.test(msg)) deadModels.add(m);
+    errors.push(`${m}: ${msg.slice(0, 100)}`);
+    throw e;
+  }));
+  try {
+    const first = await Promise.any(tries);
+    // Первой пришла лёгкая модель — она слабее держит детали (цена, дата).
+    // Даём полноценной ещё до 10 с; успела — берём её ответ.
+    if (/lite/.test(first.m)) {
+      const full = tries.filter((_, i) => !/lite/.test(race[i]));
+      if (full.length) {
+        const better = await Promise.race([
+          Promise.any(full).catch(() => null),
+          new Promise<null>((r) => setTimeout(() => r(null), Math.max(0, Math.min(10_000, deadline - Date.now() - 2_000)))),
+        ]);
+        if (better) { usedModel = better.m; return better.r; }
+      }
+    }
+    usedModel = first.m;
+    return first.r;
+  } catch { /* все трое не ответили — идём по остальным */ }
+
+  for (const model of queue.filter((m) => !race.includes(m))) {
+    if (deadline - Date.now() < 4_000) break;
     try {
       return await attempt(model);
     } catch (e) {
@@ -648,6 +695,27 @@ export default async function handler(req: any, res: any) {
         while (dt < today && guard < 6) { dt = new Date(Date.UTC(dt.getUTCFullYear() + 1, dt.getUTCMonth(), dt.getUTCDate())); guard++; }
         return dt.toISOString().slice(0, 10);
       };
+      /**
+       * Явные факты из текста организатора — без надежды на модель (лёгкая
+       * модель теряла «40 BYN», дату и координаты). Заполняем, только если
+       * модель оставила поле пустым.
+       */
+      {
+        const src = String(prompt);
+        const price = src.match(/(\d{1,5})\s*(?:BYN|byn|бел\.?\s*руб|руб(?:лей|\.)?|р\.|Br)\b/i);
+        if (price && !(Number(p.priceAmount) > 0) && !/бесплатн/i.test(src)) { p.priceType = 'paid'; p.priceAmount = Number(price[1]); }
+        const MON: Record<string, number> = { январ: 1, феврал: 2, март: 3, апрел: 4, мая: 5, май: 5, июн: 6, июл: 7, август: 8, сентябр: 9, октябр: 10, ноябр: 11, декабр: 12 };
+        const dm = src.match(/(\d{1,2})(?:\s*[–-]\s*(\d{1,2}))?\s+(январ|феврал|март|апрел|мая|май|июн|июл|август|сентябр|октябр|ноябр|декабр)/i);
+        if (dm && !p.date) {
+          const mo = MON[dm[3].toLowerCase()];
+          const y = Number(todayStr.slice(0, 4));
+          const pad = (n: number) => String(n).padStart(2, '0');
+          p.date = `${y}-${pad(mo)}-${pad(Number(dm[1]))}`;
+          if (dm[2] && !p.dateEnd) p.dateEnd = `${y}-${pad(mo)}-${pad(Number(dm[2]))}`;
+        }
+        const co = src.match(/(5[1-6]\.\d{3,})\s*,\s*(2[3-9]\.\d{3,}|3[0-2]\.\d{3,})/);
+        if (co) p.coordinates = { lat: Number(co[1]), lng: Number(co[2]) };
+      }
       const fixedDate = bumpToFuture(p.date || '');
       const yearShift = (p.date && fixedDate) ? new Date(fixedDate).getUTCFullYear() - new Date(p.date + 'T00:00:00Z').getUTCFullYear() : 0;
       const fixedDateEnd = p.dateEnd && /^\d{4}-\d{2}-\d{2}$/.test(p.dateEnd)
@@ -664,6 +732,7 @@ export default async function handler(req: any, res: any) {
         time: p.time || '',
         timeEnd: p.timeEnd || '',
         location: p.location || '',
+        ...(p.coordinates ? { coordinates: p.coordinates } : {}),
         priceType: p.priceType === 'paid' ? 'paid' : 'free',
         priceAmount: p.priceType === 'paid' ? (Number(p.priceAmount) || 0) : 0,
         program: Array.isArray(p.program) ? p.program : [],

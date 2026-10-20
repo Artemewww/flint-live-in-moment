@@ -53,6 +53,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           RECAP_EVENT_ID: ${{ inputs.event_id }}
         # Пока секреты не добавлены — тихо выходим, а не падаем каждые 2 часа.
         run: |

@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import sharp from 'sharp';
 import * as crypto from 'crypto';
 
 
@@ -863,69 +864,109 @@ export default async function handler(req: any, res: any) {
 
         const desc = String(body.description || '').slice(0, 400);
         const place = String(body.location || '').slice(0, 120);
-        // Текст на картинке ИИ рисует нечитаемым — просим кадр без надписей.
-        const prompt =
-          `Атмосферная рекламная фотография для афиши похода/выезда клуба на природе. ` +
-          `Событие: «${title}»${place ? `, место: ${place}` : ''}. ${desc}\n` +
-          `Стиль: живой репортажный кадр, тёплый естественный свет, глубина, кинематографично, ` +
-          `горизонтальный формат 16:9. БЕЗ каких-либо надписей, букв, цифр, логотипов и водяных знаков. ` +
-          `Не рисовать текст. Люди — со спины или в движении, лица не в фокусе.`;
+        const t0 = Date.now(); // общий бюджет: функция Vercel живёт 60 с
 
-        // Модели проверены по ListModels этого ключа: imagen-*:predict на нём
-        // отдаёт 404, поэтому только image-модели Gemini, от дешёвой к дорогой.
-        const models = ['gemini-2.5-flash-image', 'gemini-3.1-flash-image', 'gemini-3-pro-image'];
+        /**
+         * ВИЗУАЛЬНЫЙ ПРОМПТ ПОД ТЕМУ. Раньше промпт был зашит под «поход на
+         * природе», и бассейн, баня или форум получали лес. Теперь текстовая
+         * модель (бесплатная) сама описывает кадр под суть события, а стиль
+         * общий для всех обложек клуба: кинематограф, без текста.
+         */
+        const STYLE = 'cinematic film still, anamorphic lens, natural dramatic light, rich but true colors, shallow depth of field, ' +
+          'editorial documentary photography, people seen from behind or in motion, faces not in focus, ' +
+          'no text, no letters, no numbers, no logos, no watermark, no signs';
+        let scene = '';
+        try {
+          const ctrl = new AbortController();
+          const tmr = setTimeout(() => ctrl.abort(), 9_000);
+          const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${key}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+            body: JSON.stringify({ contents: [{ parts: [{ text:
+              `You write the visual brief for a cover photo of a community event. Output ONE English sentence (max 45 words), nothing else.\n` +
+              `Rules: show the CORE ACTIVITY from the title in action (what people physically do), in the correct place type ` +
+              `(indoor/outdoor, pool/sauna/forest/city/expo hall). Venue names are proper names, NOT descriptions — ` +
+              `e.g. "Китайский бассейн" is just the name of an indoor sports pool in Minsk, not anything Chinese. ` +
+              `No camera/style words, no text, no signs.\n` +
+              `Event title: "${title}"\nVenue: "${place}"\nDetails: ${desc}` }] }] }),
+          });
+          clearTimeout(tmr);
+          const j: any = await r.json().catch(() => ({}));
+          scene = String(j?.candidates?.[0]?.content?.parts?.[0]?.text || '').replace(/\s+/g, ' ').trim().slice(0, 400);
+        } catch { /* без сцены — соберём из названия */ }
+        if (!scene) scene = `A small group of friends in the middle of the activity "${title}"`;
+        const prompt = `${scene}. ${STYLE}. Horizontal 16:9.`;
 
         let b64: string | null = null;
         let lastErr = '';
         let quotaHit = false;
         let badKey = false;
-        for (const model of models) {
+        // Gemini-картинки на ключе без оплаты молчат минутами — одна короткая
+        // попытка, чтобы не съесть 60 с функции.
+        for (const model of ['gemini-3.1-flash-image']) {
           try {
+            const ctrl = new AbortController();
+            const tmr = setTimeout(() => ctrl.abort(), 14_000);
             const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`, {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
               body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { responseModalities: ['IMAGE'] } }),
             });
+            clearTimeout(tmr);
             const j = await r.json().catch(() => ({}));
             if (r.ok) {
               b64 = (j?.candidates?.[0]?.content?.parts || []).find((p: any) => p?.inlineData?.data)?.inlineData?.data || null;
-              if (b64) break;
-              lastErr = 'Модель вернула ответ без картинки';
-              continue;
+              if (!b64) lastErr = 'Модель вернула ответ без картинки';
+            } else {
+              lastErr = String(j?.error?.message || `HTTP ${r.status}`);
+              if (r.status === 429 || /quota|exhaust|RESOURCE_EXHAUSTED/i.test(lastErr)) quotaHit = true;
+              if (/API key|API_KEY_INVALID|PERMISSION_DENIED/i.test(lastErr)) badKey = true;
             }
-            lastErr = String(j?.error?.message || `HTTP ${r.status}`);
-            if (r.status === 429 || /quota|exhaust|RESOURCE_EXHAUSTED/i.test(lastErr)) quotaHit = true;
-            if (/API key|API_KEY_INVALID|PERMISSION_DENIED/i.test(lastErr)) badKey = true;
           } catch (e) {
-            lastErr = (e as Error).message;
+            lastErr = (e as Error).name === 'AbortError' ? 'Gemini не успел нарисовать' : (e as Error).message;
           }
         }
         /**
-         * ЗАПАСНОЙ ГЕНЕРАТОР — БЕЗ КЛЮЧА И БЕЗ ОПЛАТЫ.
-         * У Gemini картинки не входят в бесплатный тариф: ключ без биллинга
-         * отвечает 429 на любую image-модель, и кнопка «сгенерировать» просто
-         * ничего не делала. Владелец просил именно бесплатный вариант.
-         * Pollinations отдаёт картинку по URL, без ключа и регистрации.
-         * Качество ниже, чем у Gemini с оплатой, зато работает всегда —
-         * поэтому он именно запасной, а не основной: если биллинг включат,
-         * первым по-прежнему пробуется Gemini.
+         * БЕСПЛАТНЫЙ ГЕНЕРАТОР (Pollinations, модель flux) — без ключа. Отдаёт
+         * 1024×576 с водяным знаком в правом нижнем углу: срезаем нижнюю
+         * полосу и вписываем в 1280×720 — знак уходит, кадр остаётся.
          */
         let usedFallback = false;
         if (!b64) {
-          try {
-            const seed = Math.floor(Math.random() * 1e6);
-            const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 900))}`
-              + `?width=1280&height=720&nologo=true&seed=${seed}`;
-            const r = await fetch(url, { headers: { 'User-Agent': 'flint-live-in-moment' } });
-            if (r.ok) {
+          for (let attempt = 0; attempt < 2 && !b64 && Date.now() - t0 < 24_000; attempt++) {
+            try {
+              const seed = Math.floor(Math.random() * 1e6);
+              // POLLINATIONS_TOKEN — бесплатный ключ (enter.pollinations.ai): без него
+              // лимит «1 картинка в 45 с на IP», а IP у Vercel общие.
+              const pk = process.env.POLLINATIONS_TOKEN || '';
+              const url = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt.slice(0, 900))}`
+                + `?width=1280&height=720&nologo=true&model=flux&seed=${seed}${pk ? `&token=${encodeURIComponent(pk)}` : ''}`;
+              const ctrl = new AbortController();
+              const tmr = setTimeout(() => ctrl.abort(), 30_000);
+              const r = await fetch(url, { headers: { 'User-Agent': 'flint-live-in-moment', ...(pk ? { Authorization: `Bearer ${pk}` } : {}) }, signal: ctrl.signal });
+              clearTimeout(tmr);
+              if (r.status === 402 || r.status === 429) {
+                const t = await r.text().catch(() => '');
+                const wait = Number((t.match(/Retry after (\d+)s/i) || [])[1]) || 0;
+                lastErr = 'Бесплатный генератор занят (лимит 1 картинка в 45 с). Нажми ещё раз через минуту или добавь ключ POLLINATIONS_TOKEN.';
+                quotaHit = false;
+                if (wait && wait <= 12 && attempt === 0) { await new Promise((ok) => setTimeout(ok, (wait + 1) * 1000)); }
+                continue;
+              }
+              if (!r.ok) { lastErr = `Запасной генератор: HTTP ${r.status}`; continue; }
               const buf = Buffer.from(await r.arrayBuffer());
-              // Заглушка-ошибка весит считанные килобайты — отличаем её от кадра.
-              if (buf.length > 20_000) { b64 = buf.toString('base64'); usedFallback = true; }
-              else lastErr = 'Запасной генератор вернул пустую картинку';
-            } else {
-              lastErr = `Запасной генератор: HTTP ${r.status}`;
+              if (buf.length < 15_000) { lastErr = 'Запасной генератор вернул пустой кадр'; continue; }
+              const meta = await sharp(buf).metadata();
+              const w = meta.width || 1024, h = meta.height || 576;
+              const cut = Math.round(h * 0.075); // полоса с водяным знаком
+              const out = await sharp(buf)
+                .extract({ left: 0, top: 0, width: w, height: h - cut })
+                .resize(1280, 720, { fit: 'cover', position: 'centre' })
+                .modulate({ saturation: 1.08 })
+                .png().toBuffer();
+              b64 = out.toString('base64');
+              usedFallback = true;
+            } catch (e) {
+              lastErr = `Запасной генератор недоступен: ${(e as Error).message}`;
             }
-          } catch (e) {
-            lastErr = `Запасной генератор недоступен: ${(e as Error).message}`;
           }
         }
 
@@ -964,7 +1005,7 @@ export default async function handler(req: any, res: any) {
         const url = `${process.env.SUPABASE_URL}/storage/v1/object/public/event-images/${path}`;
         // Говорим, чем нарисовано: у бесплатного генератора качество ниже, и
         // организатор должен понимать, почему кадр проще ожидаемого.
-        return res.status(200).json({ ok: true, url, bytes: bin.length, source: usedFallback ? 'free' : 'gemini' });
+        return res.status(200).json({ ok: true, url, bytes: bin.length, source: usedFallback ? 'free' : 'gemini', scene });
       }
 
       // Живой статус расчёта: текущий shopping.split + расходы + сводка.

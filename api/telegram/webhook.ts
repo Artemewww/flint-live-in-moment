@@ -5097,7 +5097,14 @@ export default async function handler(req: any, res: any) {
         await supabase.from('app_config').upsert({ key, value: st }, { onConflict: 'key' });
         try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
         await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: reply });
-        if (act !== 'wait' && act !== 'skip') await dispatchRecap(evIdR);
+        if (act !== 'wait' && act !== 'skip') {
+          const started = await dispatchRecap(evIdR);
+          // Без GH_DISPATCH_TOKEN монтажный сервер стартует плановым прогоном
+          // (раз в 2 часа) — честно говорим, когда ждать.
+          if (!started) {
+            await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '⏱ Мгновенный запуск монтажа не настроен — ролик соберётся в ближайший плановый прогон, в течение 2 часов.' });
+          }
+        }
         return res.status(200).json({ ok: true });
       }
 
@@ -7314,6 +7321,12 @@ export default async function handler(req: any, res: any) {
         const album = String(((evAlb as any)?.logistics || {}).albumUrl || '');
         const rows: any[] = [[{ text: '🖼 Открыть галерею', web_app: { url: `${site}/api/events?action=gallery&id=${encodeURIComponent(evId)}&g=${gallerySigOf(evId)}` } }]];
         if (album) rows.unshift([{ text: '☁️ Общий альбом участников', url: album }]);
+        // Организатору — монтаж сразу, не дожидаясь окна сбора кадров:
+        // загрузил видео → нажал → ролик придёт на проверку.
+        const { data: evOrg } = await supabase.from('events').select('deputy_id').eq('id', evId).maybeSingle();
+        if (tgId === Number((evOrg as any)?.deputy_id) || await isOrganizer(tgId)) {
+          rows.push([{ text: '🎬 Смонтировать ролик сейчас', callback_data: `rc_build_${evId}` }]);
+        }
         await tg('sendMessage', {
           chat_id: chatId, parse_mode: 'HTML',
           text:
@@ -11588,6 +11601,24 @@ export default async function handler(req: any, res: any) {
             if (approve) { try { await tg('setChatMenuButton', { chat_id: applId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } }); } catch { /* no-op */ } }
           } catch { /* заявитель мог не начинать чат */ }
         }
+        return res.status(200).json({ ok: true });
+      }
+
+      // /montage — организатор выбирает недавнее событие и запускает монтаж.
+      if (cmd === '/montage') {
+        if (!(await isOrganizer(msg.from.id))) {
+          await tg('sendMessage', { chat_id: chatId, text: 'Монтаж запускает организатор события.' });
+          return res.status(200).json({ ok: true });
+        }
+        const since = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+        const today = new Date().toISOString().slice(0, 10);
+        const { data: recent } = await supabase.from('events').select('id,title,date').gte('date', since).lte('date', today).order('date', { ascending: false }).limit(8);
+        const rows = (recent || []).map((e: any) => [{ text: `🎬 ${String(e.title).slice(0, 40)}`, callback_data: `rc_build_${e.id}` }]);
+        await tg('sendMessage', {
+          chat_id: chatId, parse_mode: 'HTML',
+          text: rows.length ? '🎬 <b>Смонтировать ролик</b>\n\nВыбери событие — соберу вертикальный видеоотчёт из присланных фото и видео и пришлю на проверку.' : 'За последние 2 недели событий нет.',
+          ...(rows.length ? { reply_markup: kb(rows) } : {}),
+        });
         return res.status(200).json({ ok: true });
       }
 

@@ -19,7 +19,7 @@
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import {
@@ -39,7 +39,90 @@ const BOT_USERNAME = process.env.TELEGRAM_BOT_USERNAME || 'campsflint_bot';
 const SITE = process.env.APP_URL || 'https://flint-live-in-moment.vercel.app';
 const OWNER_ID = 377551019;
 const ROOT = resolve(import.meta.dirname, '../..');
-const MUSIC = ['leto-proshlo-gazuem', 'zhivi-v-momente', 'komanda-flint'];
+/**
+ * МУЗЫКА ПО НАСТРОЕНИЮ. Раньше трек выбирался по номеру версии ролика, и у
+ * первой версии всегда звучал один и тот же. Теперь: все mp3 из
+ * public/assets/music (новый трек — просто положи файл; префикс настроения в
+ * имени — «sport__», «calm__», «epic__», «team__» — помогает выбору), сначала
+ * треки под настроение события, и не тот, что звучал в прошлых роликах.
+ */
+const MUSIC_DIR = join(ROOT, 'public/assets/music');
+const MOOD_OF: Record<string, string[]> = {
+  'leto-proshlo-gazuem': ['sport', 'epic'],
+  'komanda-flint': ['team', 'sport'],
+  'zhivi-v-momente': ['calm', 'team'],
+};
+function tracks(): { name: string; moods: string[] }[] {
+  let files: string[] = [];
+  try { files = readdirSync(MUSIC_DIR).filter((f) => f.toLowerCase().endsWith('.mp3')); } catch { /* нет папки */ }
+  return files.map((f) => {
+    const name = f.replace(/\.mp3$/i, '');
+    const pref = (name.match(/^([a-z]+)__/) || [])[1];
+    return { name, moods: pref ? [pref] : (MOOD_OF[name] || ['team']) };
+  });
+}
+/**
+ * ФИНАЛ ОТ ИИ. Бесплатная модель (Gemini lite) пишет финальную фразу и
+ * подпись под конкретное событие голосом клуба (BRAND_VOICE.md). Не ответила
+ * за 10 с или вышло длинно — остаётся фраза профиля.
+ */
+async function aiFinale(ev: any, prof: { finale: string; finale_sub: string }): Promise<{ finale: string; finale_sub: string }> {
+  const key = process.env.GEMINI_API_KEY || '';
+  if (!key) return prof;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent?key=${key}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: ctrl.signal,
+      body: JSON.stringify({
+        contents: [{ parts: [{ text:
+          `Финальные титры видеоотчёта события клуба «Живи в моменте». Событие: «${ev.title}». ${String(ev.description || '').slice(0, 300)}\n` +
+          `Верни JSON {"finale": "...", "sub": "..."}: finale — 1–3 слова ЗАГЛАВНЫМИ, до 18 символов, про суть события; ` +
+          `sub — до 40 символов ЗАГЛАВНЫМИ, тёплая подпись. Можно одно слово из: синхрон, заряжайся, врывайся, перезагрузка, эволюция, поток, масштаб, стержень. Без кавычек-ёлочек и эмодзи.` }] }],
+        generationConfig: { responseMimeType: 'application/json' },
+      }),
+    });
+    clearTimeout(t);
+    const j: any = await r.json();
+    const o = JSON.parse(j?.candidates?.[0]?.content?.parts?.[0]?.text || '{}');
+    const fin = String(o.finale || '').trim().toUpperCase();
+    const sub = String(o.sub || '').trim().toUpperCase();
+    if (fin && fin.length <= 18 && sub.length <= 40) return { finale: fin, finale_sub: sub || prof.finale_sub };
+  } catch { /* остаёмся на профиле */ }
+  return prof;
+}
+
+async function pickMusic(mood: string, seed: number): Promise<string> {
+  const all = tracks();
+  if (!all.length) return join(MUSIC_DIR, 'komanda-flint.mp3');
+  const { data } = await db.from('app_config').select('value').eq('key', 'recap_music_recent').maybeSingle();
+  const recent: string[] = (() => { try { return JSON.parse((data as any)?.value || '[]'); } catch { return []; } })();
+  const fits = all.filter((t) => t.moods.includes(mood));
+  const pool = (fits.length ? fits : all);
+  const fresh = pool.filter((t) => !recent.slice(0, Math.max(0, all.length - 1)).includes(t.name));
+  const list = fresh.length ? fresh : pool;
+  const pick = list[seed % list.length];
+  await db.from('app_config').upsert({ key: 'recap_music_recent', value: JSON.stringify([pick.name, ...recent.filter((x) => x !== pick.name)].slice(0, 6)) }, { onConflict: 'key' });
+  return join(MUSIC_DIR, `${pick.name}.mp3`);
+}
+
+/**
+ * ПОДПИСИ ПОД ТЕМУ. «ИТОГИ ВЫЕЗДА», «А ПОТОМ — НОЧЬ» и «до следующего выезда»
+ * стояли в каждом ролике — даже у форума и пробежки. Профиль события решает,
+ * что написать, нужна ли «ночь» и какое настроение у музыки.
+ */
+function profileOf(ev: any): { kicker: string; finale: string; finale_sub: string; cta: string; night: boolean; mood: string } {
+  const t = `${ev.title || ''} ${ev.description || ''}`.toLowerCase();
+  const scale = ev.notifications?._scale || '';
+  const overnight = ['overnight', 'multiday', 'expedition'].includes(scale) || Date.parse(lastDayOf(ev)) > Date.parse(ev.date);
+  const cta = 'СЛЕДУЮЩЕЕ СОБЫТИЕ — В ПРИЛОЖЕНИИ FLINT';
+  if (/пробежк|забег|бег\b|марафон|км\b|race|run/.test(t)) return { kicker: 'FLINT · ПРОБЕЖКА', finale: 'ФИНИШ ВЗЯТ', finale_sub: 'КИЛОМЕТРЫ ВМЕСТЕ · ДО СЛЕДУЮЩЕГО СТАРТА', cta, night: false, mood: 'sport' };
+  if (/форум|expo|экспо|конференц|лекци|ai|мастермайнд/.test(t)) return { kicker: 'FLINT · ФОРУМ', finale: 'ЗАРЯДИЛИСЬ ИДЕЯМИ', finale_sub: 'РАСТЁМ В МАСШТАБЕ · ВМЕСТЕ', cta, night: false, mood: 'epic' };
+  if (/бан|сауна|spa|спа/.test(t)) return { kicker: 'FLINT · БАНЯ', finale: 'ПЕРЕЗАГРУЗКА', finale_sub: 'ТЕПЛО, ПАР И СВОИ ЛЮДИ', cta, night: false, mood: 'calm' };
+  if (/прыж|вышк|бассейн|сплав|сап|вод/.test(t)) return { kicker: 'FLINT · ВОДА', finale: 'ВРЫВАЕМСЯ', finale_sub: 'СТРАХ ПОЗАДИ · ДО СЛЕДУЮЩЕГО ПРЫЖКА', cta, night: false, mood: 'sport' };
+  if (overnight) return { kicker: 'FLINT · ИТОГИ ВЫЕЗДА', finale: 'СПАСИБО ВСЕМ', finale_sub: 'КТО БЫЛ С НАМИ · ДО СЛЕДУЮЩЕГО ВЫЕЗДА', cta: 'СЛЕДУЮЩИЙ ВЫЕЗД — В ПРИЛОЖЕНИИ FLINT', night: true, mood: 'team' };
+  return { kicker: 'FLINT · КАК ЭТО БЫЛО', finale: 'В МОМЕНТЕ', finale_sub: 'СПАСИБО, ЧТО БЫЛИ С НАМИ', cta, night: false, mood: 'team' };
+}
 
 const log = (...a: any[]) => console.log('[recap]', ...a);
 const esc = (s: any) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -248,11 +331,15 @@ async function doBuild(ev: any, st: RecapState) {
   const nights = Math.max(0, Math.round((Date.parse(lastDayOf(ev)) - Date.parse(ev.date)) / 86400000));
   const stats = [`${Math.max(people.length, authors)} ${plural(Math.max(people.length, authors), 'человек', 'человека', 'человек')}`,
     `${items.length} ${plural(items.length, 'кадр', 'кадра', 'кадров')}`,
-    nights ? `${nights} ${plural(nights, 'ночь', 'ночи', 'ночей')}` : ''].filter(Boolean).join(' · ');
+    // Ночи — только у выездов с ночёвкой; у трёхдневного форума — «3 дня».
+    nights ? (profileOf(ev).night ? `${nights} ${plural(nights, 'ночь', 'ночи', 'ночей')}` : `${nights + 1} ${plural(nights + 1, 'день', 'дня', 'дней')}`) : ''].filter(Boolean).join(' · ');
   const out = join(dir, `recap-v${seed}.mp4`);
+  const prof = profileOf(ev);
+  Object.assign(prof, await aiFinale(ev, prof));
   const manifest = {
-    title: shortTitle(ev), kicker: 'FLINT · ИТОГИ ВЫЕЗДА', dates: datesLabel(ev),
-    music: join(ROOT, 'public/assets/music', `${MUSIC[seed % MUSIC.length]}.mp3`),
+    title: shortTitle(ev), dates: datesLabel(ev),
+    kicker: prof.kicker, finale: prof.finale, finale_sub: prof.finale_sub, cta: prof.cta, night: prof.night,
+    music: await pickMusic(prof.mood, seed + evId.length),
     seed, stats_line: stats, items, out,
   };
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest));

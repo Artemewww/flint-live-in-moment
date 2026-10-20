@@ -5286,8 +5286,8 @@ function EditEventModal({ event, onClose, onSave }: {
     setCoverBusy(true);
     setCoverNote(null);
     try {
-      const res = await fetch('/api/admin/events?action=gen_cover', {
-        credentials: 'include',
+      // adminFetch: в Mini App куки сессии нет, нужен токен — иначе 401.
+      const res = await adminFetch('/api/admin/events?action=gen_cover', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: fd.title, description: fd.description, location: fd.location }),
       });
@@ -5808,6 +5808,7 @@ function AddEventModal({ onClose, onAdd }: {
 }) {
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProgress, setAiProgress] = useState<string | null>(null);
+  const [coverStatus, setCoverStatus] = useState('');
   const [aiStage, setAiStage] = useState<'prompt' | 'filled' | 'preview'>('prompt');
   const [questions, setQuestions] = useState<string[]>([]);
   const [geoLoading, setGeoLoading] = useState(false);
@@ -5888,6 +5889,9 @@ function AddEventModal({ onClose, onAdd }: {
       priceType: d.costModel === 'club_invite' ? 'free' : d.priceType === 'paid' ? 'paid' : 'free',
       priceAmount: d.costModel !== 'club_invite' && d.priceType === 'paid' ? (Number(d.priceAmount) || 0) : 0,
       maxParticipants: (d.costModel === 'club_invite' && d.clubSeats) || d.maxParticipants || formData.maxParticipants,
+      // Координаты из текста организатора («53.904829, 27.521784») точнее
+      // геокодера: нужный вход, а не центр здания.
+      ...(d.coordinates?.lat ? { coordinates: d.coordinates } : {}),
       program: (d.program && d.program.length) ? d.program : formData.program,
       entryThreshold: d.entryThreshold || formData.entryThreshold,
       houseQualities: (d.houseQualities && d.houseQualities.length) ? qualitiesFromKeys(d.houseQualities) : formData.houseQualities,
@@ -5926,7 +5930,7 @@ function AddEventModal({ onClose, onAdd }: {
     setFormData((f) => ({ ...f, ...updates }));
 
     // У онлайна нет физической локации — геокодить «Zoom» бессмысленно.
-    if (d.format !== 'online' && d.location && d.location !== formData.location) {
+    if (d.format !== 'online' && !d.coordinates?.lat && d.location && d.location !== formData.location) {
       await geocodeLocation(d.location);
     }
   };
@@ -5942,6 +5946,22 @@ function AddEventModal({ onClose, onAdd }: {
         setQuestions(d._questions || []);
         setAiProgress('');
         setAiStage('filled');
+        /**
+         * Обложка — сама, сразу за текстом: кинематографичный кадр под тему
+         * события, без надписей. Организатор может заменить её своим фото.
+         */
+        if (!formData.image && !d.image) {
+          setCoverStatus('🎨 Рисую обложку под тему события…');
+          try {
+            const r = await adminFetch('/api/admin/events?action=gen_cover', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ title: d.title || aiPrompt.slice(0, 80), description: d.description || aiPrompt, location: d.location || '' }),
+            });
+            const j = await r.json();
+            if (j.ok && j.url) { setFormData((f) => ({ ...f, image: j.url })); setCoverStatus('✅ Обложка готова — можно заменить своей'); }
+            else setCoverStatus(`⚠️ Обложку не нарисовал: ${j.error || 'ошибка'}. Загрузи фото вручную.`);
+          } catch { setCoverStatus('⚠️ Обложку не нарисовал — загрузи фото вручную.'); }
+        }
       } else {
         alert(`ИИ не ответил:\n${error || 'неизвестная ошибка'}`);
         setAiProgress('');
@@ -6070,6 +6090,7 @@ function AddEventModal({ onClose, onAdd }: {
             disabled={!!aiProgress}
             className="w-full min-h-[9rem] bg-white/5 border border-white/10 rounded-lg p-3 text-white text-sm leading-relaxed placeholder:text-white/30 disabled:opacity-50"
           />
+          {coverStatus && <p className="text-[11px] text-white/70">{coverStatus}</p>}
           {aiProgress && (
             <div className="bg-black/30 rounded-lg p-2 flex items-center gap-2 text-[11px] text-white/80">
               <span className="w-3 h-3 border-2 border-brand/30 border-t-brand rounded-full animate-spin shrink-0" />
