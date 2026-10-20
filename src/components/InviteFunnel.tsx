@@ -40,7 +40,7 @@ export default function InviteFunnel({ eventId, onMsg, adminFetch }: {
   adminFetch: (input: string, init?: RequestInit) => Promise<Response>;
 }) {
   const [st, setSt] = useState<Stats | null>(null);
-  const [filter, setFilter] = useState<'all' | 'yes' | 'maybe' | 'no' | 'silent' | 'failed'>('all');
+  const [filter, setFilter] = useState<'all' | 'yes' | 'maybe' | 'no' | 'opened' | 'silent' | 'failed'>('all');
   const [busy, setBusy] = useState(false);
 
   const load = () => {
@@ -49,7 +49,7 @@ export default function InviteFunnel({ eventId, onMsg, adminFetch }: {
   };
   useEffect(() => { setSt(null); load(); }, [eventId]);
 
-  const remind = async (target: 'maybe' | 'silent' | 'both') => {
+  const remind = async (target: 'maybe' | 'silent' | 'opened' | 'both') => {
     if (busy) return;
     setBusy(true);
     try {
@@ -78,9 +78,12 @@ export default function InviteFunnel({ eventId, onMsg, adminFetch }: {
   const people = (st.people || []).filter((p) =>
     filter === 'all' ? true
       : filter === 'silent' ? p.delivered && !p.answer
+      : filter === 'opened' ? !!p.openedAt && !p.answer
       : filter === 'failed' ? !p.delivered
       : p.answer === filter);
   const pct = (n: number) => (s.sent ? Math.round((n / s.sent) * 100) : 0);
+  // Посмотрели приглашение, но не нажали ни «Буду», ни «Нет» — самые тёплые для дожима.
+  const openedSilent = (st.people || []).filter((p) => !!p.openedAt && !p.answer).length;
   const steps: [string, number][] = [['Отправлено', s.sent], ['Дошло', s.delivered], ['Открыли', s.opened], ['Ответили', s.yes + s.maybe + s.no], ['Записались', s.registered]];
 
   return (
@@ -105,15 +108,16 @@ export default function InviteFunnel({ eventId, onMsg, adminFetch }: {
             ))}
           </div>
           <div className="flex flex-nowrap gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {([['all', `Все ${s.sent}`], ['yes', `✅ Буду ${s.yes}`], ['maybe', `🤔 Подумают ${s.maybe}`], ['no', `❌ Нет ${s.no}`], ['silent', `🤐 Молчат ${s.silent}`], ['failed', `⚠️ Не дошло ${s.sent - s.delivered}`]] as const).map(([k, l]) => (
+            {([['all', `Все ${s.sent}`], ['yes', `✅ Буду ${s.yes}`], ['maybe', `🤔 Подумают ${s.maybe}`], ['no', `❌ Нет ${s.no}`], ['opened', `👀 Открыли, без ответа ${openedSilent}`], ['silent', `🤐 Молчат ${s.silent}`], ['failed', `⚠️ Не дошло ${s.sent - s.delivered}`]] as const).map(([k, l]) => (
               <button key={k} type="button" onClick={() => setFilter(k)}
                 className={`shrink-0 whitespace-nowrap rounded-lg border-none px-2.5 py-1 text-[10px] font-bold uppercase cursor-pointer ${filter === k ? 'bg-brand text-black' : 'bg-white/5 text-white/50 hover:bg-white/10'}`}>{l}</button>
             ))}
           </div>
-          {(s.maybe > 0 || s.silent > 0) && (
+          {(s.maybe > 0 || s.silent > 0 || openedSilent > 0) && (
             <div className="flex flex-wrap items-center gap-2 rounded-lg bg-black/20 p-2.5">
               <span className="flex-1 text-[11px] text-white/60">Бот сам напомнит через 2 дня. Можно дожать сейчас:</span>
               {s.maybe > 0 && <button type="button" disabled={busy} onClick={() => remind('maybe')} className="rounded-lg border-none bg-amber-500/20 px-2.5 py-1.5 text-[10px] font-bold uppercase text-amber-200 cursor-pointer disabled:opacity-40">🤔 Подумавшим ({s.maybe})</button>}
+              {openedSilent > 0 && <button type="button" disabled={busy} onClick={() => remind('opened')} className="rounded-lg border-none bg-sky-500/20 px-2.5 py-1.5 text-[10px] font-bold uppercase text-sky-200 cursor-pointer disabled:opacity-40">👀 Открывшим ({openedSilent})</button>}
               {s.silent > 0 && <button type="button" disabled={busy} onClick={() => remind('silent')} className="rounded-lg border-none bg-white/10 px-2.5 py-1.5 text-[10px] font-bold uppercase text-white/80 cursor-pointer disabled:opacity-40">🤐 Молчащим ({s.silent})</button>}
             </div>
           )}

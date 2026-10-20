@@ -1157,6 +1157,13 @@ async function autoLinkGroup(chat: any, opts: { announce: boolean; askIfUnsure: 
   return null;
 }
 
+/** Имя для состава: как в анкете клуба (имя + фамилия), иначе из Telegram. */
+async function fullNameOf(tgId: number, from: any): Promise<string> {
+  const { data: m } = await supabase.from('members').select('first_name,last_name').eq('telegram_id', tgId).maybeSingle();
+  const n = [(m as any)?.first_name, (m as any)?.last_name].filter(Boolean).join(' ').trim();
+  return n || [from?.first_name, from?.last_name].filter(Boolean).join(' ').trim() || from?.username || 'Гость';
+}
+
 /** Регистрация из бота с реальным telegram_id (from — Telegram-пользователь). */
 async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | 'error'> {
   try {
@@ -1179,7 +1186,7 @@ async function registerFromBot(from: any, ev: any): Promise<'ok' | 'already' | '
       id: `reg-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       event_id: ev.id,
       telegram_id: telegramId,
-      name: from.first_name || from.username || 'Гость',
+      name: await fullNameOf(telegramId, from),
       source: 'telegram-bot',
       status: 'pending',
     });
@@ -8173,26 +8180,77 @@ export default async function handler(req: any, res: any) {
           } catch { /* сообщение старое — не страшно */ }
         }
 
+        /**
+         * «БУДУ» = ЗАПИСЬ. Раньше кнопка только отмечала ответ и отправляла в
+         * приложение «подтвердить запись» — до состава доходили не все. Теперь
+         * нажал «Буду» — и ты в списке события: с проверкой мест, уведомлением
+         * организатору и кнопкой в чат события.
+         */
         if (kind === 'y') {
           const registered = await hasActiveReg(evId, tgId);
-          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Отлично!' });
+          const cap = Number((ev as any).max_participants) || 0;
+          const { count: taken } = await supabase.from('registrations').select('id', { count: 'exact', head: true })
+            .eq('event_id', evId).neq('status', 'cancelled');
+          if (!registered && cap && (taken || 0) >= cap) {
+            await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Мест уже нет' });
+            await tg('sendMessage', {
+              chat_id: chatId, parse_mode: 'HTML',
+              text: `😔 На «<b>${esc(ev.title)}</b>» места закончились. Я запомнил, что ты хотел — если кто-то освободит место, напишу первым.`,
+            });
+            try { await supabase.from('event_invites').update({ answer: 'maybe' }).eq('event_id', evId).eq('telegram_id', tgId); } catch { /* no-op */ }
+            return res.status(200).json({ ok: true });
+          }
+          if (!registered) {
+            // Снимался раньше — возвращаем ту же запись, а не плодим вторую.
+            const { data: old } = await supabase.from('registrations').select('id').eq('event_id', evId).eq('telegram_id', tgId).maybeSingle();
+            if (old) {
+              await supabase.from('registrations').update({ status: 'confirmed', cancelled_at: null, cancel_reason: null }).eq('id', (old as any).id);
+              try { await supabase.rpc('increment_participants', { event_id: evId }); } catch { /* счётчик best-effort */ }
+            } else {
+              await registerFromBot(cq.from, ev);
+              try { await updateReg(evId, tgId, { status: 'confirmed', source: 'invite' }); } catch { /* no-op */ }
+            }
+          }
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: '🔥 Ты в списке!' });
+          const chatLink = String((ev as any).telegram_bot_url || '');
+          const chatOk = /^https:\/\/t\.me\/(\+|joinchat\/)/.test(chatLink);
+          const left = cap ? Math.max(0, cap - (taken || 0) - (registered ? 0 : 1)) : null;
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: registered
-              ? '🔥 Ты уже записан — ждём тебя!'
-              : `🔥 <b>Супер!</b> Остался один шаг — подтверди запись в приложении (меньше минуты). ` +
-                `Пока не подтвердил, место за тобой не закреплено.`,
-            ...(registered ? {} : { reply_markup: kb([[appBtn('✅ Подтвердить запись', site, { ev: evId })]]) }),
+            text:
+              `🔥 <b>Ты в списке «${esc(ev.title)}»!</b>\n\n` +
+              ((ev as any).date_label ? `📆 ${esc((ev as any).date_label)}\n` : '') +
+              ((ev as any).location ? `📍 ${esc((ev as any).location)}\n` : '') +
+              (left !== null ? `🎟 Свободных мест осталось: ${left}\n` : '') +
+              `\nНичего заполнять не нужно — напоминания и детали придут сюда.` +
+              (chatOk ? ` Вся координация — в чате события 👇` : ''),
+            reply_markup: kb([
+              ...(chatOk ? [[{ text: '💬 Войти в чат события', url: chatLink }]] : []),
+              [appBtn('👀 Открыть карточку события', site, { ev: evId })],
+            ]),
           });
         } else if (kind === 'm') {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Хорошо, напомню через пару дней' });
           await tg('sendMessage', {
             chat_id: chatId, parse_mode: 'HTML',
-            text: '🤔 Понял, подумай. Напомню через пару дней — ответишь той же кнопкой под приглашением.',
+            text: '🤔 Понял, подумай спокойно. Через пару дней напомню — ответишь той же кнопкой под приглашением. Только учти: места разбирают те, кто ответил «Буду».',
           });
         } else if (kind === 'n') {
+          // Передумал после «Буду» — снимаем запись и освобождаем место.
+          let freed = false;
+          if (await hasActiveReg(evId, tgId)) {
+            try {
+              await updateReg(evId, tgId, { status: 'cancelled', cancelled_at: new Date().toISOString(), cancel_reason: 'ответ на приглашение: не смогу' });
+              try { await supabase.rpc('decrement_participants', { event_id: evId }); } catch { /* no-op */ }
+              freed = true;
+            } catch { /* no-op */ }
+          }
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Спасибо, что ответил' });
-          await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: '👌 Спасибо, что ответил! Позовём на следующее.' });
+          await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: (freed ? '👌 Снял тебя с события — место освободилось для другого.\n\n' : '') +
+              'Спасибо, что ответил честно — так организатору проще собрать состав. Позовём на следующее: может, оно будет как раз твоим 🙌',
+          });
         } else {
           await tg('answerCallbackQuery', { callback_query_id: cq.id });
           await tg('sendMessage', {

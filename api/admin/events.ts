@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js';
 import sharp from 'sharp';
+import opentype from 'opentype.js';
 import * as crypto from 'crypto';
 
 
@@ -301,6 +302,219 @@ function clearCookie(): string {
 }
 
 
+
+// ─── КВАДРАТНАЯ АФИША СОБЫТИЯ (1080×1080) ────────────────────────────────
+// Telegram показывает квадрат без пустых полей по бокам — в отличие от
+// горизонтального баннера. Афиша как у хороших клубов: фото, крупный
+// заголовок фирменным шрифтом, плашки «день / время / цена», что ждёт, призыв.
+// Шрифты на Vercel не установлены — текст переводим в векторные контуры
+// (opentype.js), шрифты лежат в приватном бакете club-tickets/_assets.
+const POSTER_LOGO = `<g transform="translate(56,48) scale(0.56)" fill="#E6FD3A">
+    <path d="M298.968 88.0317V46.2721H282.499V36.5674H327.347V46.2721H310.878V88.0317H298.968Z"/>
+    <path d="M264.368 36.5674H276.131V88.0317H266.353L240.694 56.7855V88.0317H228.931V36.5674H238.782L264.368 67.8136V36.5674Z"/>
+    <path d="M204.807 88.0317V36.5674H216.717V88.0317H204.807Z"/>
+    <path d="M160.436 88.0317V36.5674H172.346V78.327H198.152V88.0317H160.436Z"/>
+    <path d="M152.373 46.125H125.391V59.7263H149.212V69.284H125.391V88.0317H113.481V36.5674H152.373V46.125Z"/>
+    <path d="M6.16253 90.5462L0 74.2944L14.636 45.6601L16.947 28.6343L30.8127 18.5736L44.6784 0L50.8409 9.28679L68.5582 20.1214L76.2613 59.5903L80.8833 66.5554L83.1942 92.8679L74.7207 109.12L37.7455 116.085L4.6219 105.25L6.16253 90.5462Z"/>
+    <path d="M19.8315 80.0155C21.1436 77.9019 22.6769 75.9415 24.0786 73.8933L44.9654 43.7988C46.248 41.9432 49.9629 36.2843 51.4682 34.9199L51.5702 34.8262C50.2877 37.9946 49.8978 41.1933 49.3601 44.5643L46.9246 59.0641C46.6653 60.5121 46.367 61.9645 46.1552 63.4203C47.2617 63.2248 48.3583 62.8554 49.4433 62.5508L60.0543 59.5153C61.1008 59.2162 62.159 58.9522 63.1984 58.6272C63.7357 58.4882 64.2846 58.3673 64.8145 58.2001C60.8749 64.1218 57.202 70.3298 53.2207 76.1731L39.3124 96.7016C38.2354 98.3151 36.5731 100.815 35.8117 102.542C35.8386 92.3086 38.6007 84.0047 39.6217 74.4123L22.6637 79.2193C21.737 79.474 20.72 79.6441 19.8315 80.0155Z" fill="#0B0B0B"/>
+  </g>`;
+let posterFontCache: { title: any; label: any; body: any } | null = null;
+async function posterFonts() {
+  if (posterFontCache) return posterFontCache;
+  const load = async (p: string) => {
+    const { data, error } = await supabase.storage.from('club-tickets').download(p);
+    if (error || !data) throw new Error(`шрифт ${p}: ${error?.message || 'нет'}`);
+    return opentype.parse(await data.arrayBuffer());
+  };
+  const [title, label, body] = await Promise.all([load('_assets/title.otf'), load('_assets/label.otf'), load('_assets/medium.ttf')]);
+  posterFontCache = { title, label, body };
+  return posterFontCache;
+}
+function textW(font: any, t: string, size: number, track = 0) {
+  return font.getAdvanceWidth(t, size) + Math.max(0, t.length - 1) * track;
+}
+/** Символы, которых нет в шрифте («≈», эмодзи), — заменяем или убираем, иначе рисуется квадрат. */
+function glyphSafe(font: any, t: string): string {
+  return [...String(t).replace(/≈/g, '~')].filter((ch) => ch === ' ' || font.charToGlyph(ch).index > 0).join('');
+}
+/** Строка текста как SVG-контур; anchor — левый край или центр. */
+function textPath(font: any, t: string, x: number, y: number, size: number, fill: string, opts: { anchor?: 'start' | 'middle'; track?: number } = {}) {
+  t = glyphSafe(font, t);
+  const track = opts.track || 0;
+  let cx = opts.anchor === 'middle' ? x - textW(font, t, size, track) / 2 : x;
+  if (!track) return `<path d="${font.getPath(t, cx, y, size).toPathData(2)}" fill="${fill}"/>`;
+  let d = '';
+  for (const ch of t) { d += font.getPath(ch, cx, y, size).toPathData(2); cx += font.getAdvanceWidth(ch, size) + track; }
+  return `<path d="${d}" fill="${fill}"/>`;
+}
+function wrapText(font: any, t: string, size: number, maxW: number, maxLines: number): string[] {
+  const words = String(t || '').split(/\s+/).filter(Boolean);
+  const lines: string[] = []; let cur = '';
+  for (const w of words) {
+    const nx = cur ? `${cur} ${w}` : w;
+    if (font.getAdvanceWidth(nx, size) <= maxW) { cur = nx; continue; }
+    if (cur) lines.push(cur);
+    cur = w;
+    if (lines.length >= maxLines) break;
+  }
+  if (cur && lines.length < maxLines) lines.push(cur);
+  const used = lines.join(' ').split(/\s+/).length;
+  if (used < words.length && lines.length) {
+    let last = lines[lines.length - 1];
+    while (last && font.getAdvanceWidth(`${last}…`, size) > maxW) last = last.slice(0, -1);
+    lines[lines.length - 1] = `${last.replace(/[,.;:—-]\s*$/, '')}…`;
+  }
+  return lines;
+}
+const RU_DAYS = ['ВОСКРЕСЕНЬЕ', 'ПОНЕДЕЛЬНИК', 'ВТОРНИК', 'СРЕДА', 'ЧЕТВЕРГ', 'ПЯТНИЦА', 'СУББОТА'];
+const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+
+async function posterPhoto(ev: any): Promise<Buffer | null> {
+  const src = String(ev.image || '') || (/\/posters\//.test(String(ev.telegram_image || '')) ? '' : String(ev.telegram_image || ''));
+  try {
+    const m = /^data:image\/[a-zA-Z+]+;base64,(.+)$/.exec(src);
+    if (m) return Buffer.from(m[1], 'base64');
+    if (/^https:\/\/[^/]+\.supabase\.co\/storage\//.test(src)) {
+      const r = await fetch(src);
+      if (r.ok) return Buffer.from(await r.arrayBuffer());
+    }
+  } catch { /* без фото — фирменный фон */ }
+  return null;
+}
+
+export async function buildPoster(ev: any): Promise<Buffer> {
+  const S = 1080, P = 56, LIME = '#E6FD3A';
+  const F = await posterFonts();
+  const lg = ev.logistics || {};
+  const PH = 500;
+  // 1) Фото: верх афиши, сочнее, с плавным уходом в фон.
+  const raw = await posterPhoto(ev);
+  const photo = raw
+    ? await sharp(raw).rotate().resize(S, PH, { fit: 'cover', position: 'centre' }).modulate({ saturation: 1.15, brightness: 1.03 }).toBuffer()
+    : await sharp({ create: { width: S, height: PH, channels: 3, background: '#1d2412' } }).png().toBuffer();
+
+  const parts: string[] = [];
+  // Плашка справа сверху.
+  const tag = 'ЖИВИ В МОМЕНТЕ';
+  const tw = textW(F.label, tag, 22, 2) + 40;
+  parts.push(`<rect x="${S - P - tw}" y="50" width="${tw}" height="46" rx="23" fill="rgba(0,0,0,0.35)" stroke="${LIME}" stroke-width="2"/>`);
+  parts.push(textPath(F.label, tag, S - P - tw / 2, 81, 22, LIME, { anchor: 'middle', track: 2 }));
+
+  let y = PH - 14;
+  // 2) Место — мелко над заголовком.
+  if (ev.location) {
+    const loc = wrapText(F.label, String(ev.location).toUpperCase(), 24, S - P * 2, 1)[0];
+    parts.push(textPath(F.label, loc, P, y, 24, 'rgba(255,255,255,0.72)', { track: 1.5 }));
+    y += 16;
+  }
+  // 3) Заголовок: часть до «:»/«—» белым, после — лаймом. Кегль подбираем.
+  const [t1raw, ...rest] = String(ev.title || '').split(/\s*[:—|]\s*/);
+  const t1 = t1raw.toUpperCase(), t2 = rest.join(' ').toUpperCase();
+  let ts = 96, l1: string[] = [], l2: string[] = [];
+  for (; ts >= 60; ts -= 4) {
+    l1 = wrapText(F.title, t1, ts, S - P * 2, 2);
+    l2 = t2 ? wrapText(F.title, t2, ts, S - P * 2, 2) : [];
+    if (l1.length + l2.length <= 3 && !l1.concat(l2).some((l) => l.endsWith('…'))) break;
+  }
+  const lh = ts * 0.92;
+  for (const l of l1) { y += lh; parts.push(textPath(F.title, l, P, y, ts, '#FFFFFF')); }
+  for (const l of l2) { y += lh; parts.push(textPath(F.title, l, P, y, ts, LIME)); }
+
+  // 4) Описание — одна-две строки.
+  const desc = String(ev.description || '').replace(/\s+/g, ' ').split(/(?<=[.!?])\s/)[0] || '';
+  const room = S - y;
+  if (desc && room > 330) {
+    y += 14;
+    for (const l of wrapText(F.body, desc, 26, S - P * 2, room > 420 ? 2 : 1)) { y += 34; parts.push(textPath(F.body, l, P, y, 26, 'rgba(255,255,255,0.75)')); }
+  }
+  // 5) Плашки «день / время / цена».
+  y += 30;
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(String(ev.date || '')) ? new Date(`${ev.date}T12:00:00Z`) : null;
+  const de = /^\d{4}-\d{2}-\d{2}$/.test(String(ev.date_end || '')) ? new Date(`${ev.date_end}T12:00:00Z`) : null;
+  const dayVal = d ? (de && de > d ? `${d.getUTCDate()}–${de.getUTCDate()} ${RU_MON[de.getUTCMonth()]}` : `${d.getUTCDate()} ${RU_MON[d.getUTCMonth()]}`) : 'скоро';
+  const dayLab = d ? (de && de > d ? 'ДАТЫ' : RU_DAYS[d.getUTCDay()]) : 'ДАТА';
+  const timeVal = ev.time ? `${ev.time}${ev.time_end ? `–${ev.time_end}` : ''}` : 'сообщим';
+  let priceLab = 'ЦЕНА', priceVal = 'бесплатно';
+  if (lg.costModel === 'club_invite') { priceLab = 'ДЛЯ КЛУБА'; priceVal = 'бесплатно'; }
+  else if (ev.price_type === 'paid' && Number(ev.price_amount) > 0) priceVal = `${ev.price_amount} BYN`;
+  else if (lg.costModel === 'self' && Number(lg.costEstimate) > 0) { priceLab = 'КАЖДЫЙ ЗА СЕБЯ'; priceVal = `≈${lg.costEstimate} BYN`; }
+  else if (lg.costModel === 'pool') { priceLab = 'ОБЩИЙ ВЗНОС'; priceVal = Number(lg.costEstimate) > 0 ? `≈${lg.costEstimate} BYN` : 'делим'; }
+  const chips: [string, string, boolean][] = [[dayLab, dayVal, false], ['ВРЕМЯ', timeVal, false], [priceLab, priceVal, true]];
+  const gap = 16, cw = (S - P * 2 - gap * 2) / 3, chH = 100;
+  chips.forEach(([lab, val, lime], i) => {
+    const x = P + i * (cw + gap);
+    parts.push(`<rect x="${x}" y="${y}" width="${cw}" height="${chH}" rx="18" fill="#161616" stroke="#2C2C2C" stroke-width="2"/>`);
+    let ls = 18; while (ls > 12 && textW(F.label, lab, ls, 1.5) > cw - 40) ls -= 1;
+    parts.push(textPath(F.label, lab, x + 20, y + 34, ls, 'rgba(255,255,255,0.5)', { track: 1.5 }));
+    let vs = 46; while (vs > 24 && textW(F.title, val.toUpperCase(), vs) > cw - 40) vs -= 2;
+    parts.push(textPath(F.title, val.toUpperCase(), x + 20, y + 80, vs, lime ? LIME : '#FFFFFF'));
+  });
+  y += chH;
+
+  // 6) Что ждёт — до 4 пунктов в 2 колонки, если хватает места.
+  const items = (Array.isArray(lg.included) && lg.included.length ? lg.included : (Array.isArray(ev.program) ? ev.program : []))
+    .map((x: any) => String(x).replace(/^\s*\d{1,2}[:.]\d{2}\s*[—–-]\s*/, '').replace(/^\[[^\]]*\]\s*/, '').trim())
+    .filter((x: string) => x && x.length <= 70).slice(0, 4);
+  const colW = (S - P * 2 - 30) / 2;
+  if (items.length >= 2 && S - y > 150) {
+    y += 30;
+    // Высота ряда — по самому длинному пункту: двухстрочный не налезает на соседний.
+    const twoLine = items.some((it: string) => wrapText(F.body, it, 22, colW - 34, 2).length > 1);
+    let rows = Math.ceil(items.length / 2);
+    const rowH = twoLine ? 66 : 44;
+    while (rows > 1 && y + rows * rowH > S - 90) { rows -= 1; items.splice(rows * 2); }
+    items.forEach((it: string, i: number) => {
+      const cx = P + (i % 2) * (colW + 30), cy = y + Math.floor(i / 2) * rowH;
+      parts.push(`<path d="M${cx} ${cy + 10} l7 8 l14 -16" stroke="${LIME}" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`);
+      wrapText(F.body, it, 22, colW - 34, 2).forEach((l, k) => parts.push(textPath(F.body, l, cx + 34, cy + 18 + k * 27, 22, 'rgba(255,255,255,0.82)')));
+    });
+    y += rows * rowH;
+  }
+
+  // 7) Призыв внизу по центру.
+  const cap = Number(ev.max_participants) || 0;
+  const cta1 = cap ? 'Количество мест ограничено — запись в боте ' : 'Запись — в боте ';
+  const fy = S - 44, fs = 24;
+  const w1 = textW(F.body, cta1, fs), w2 = textW(F.title, 'FLINT', fs + 4);
+  const fx = (S - w1 - w2) / 2;
+  parts.push(textPath(F.body, cta1, fx, fy, fs, 'rgba(255,255,255,0.85)'));
+  parts.push(textPath(F.title, 'FLINT', fx + w1, fy, fs + 4, LIME));
+
+  const svg = `<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#0B0B0B" stop-opacity="0"/><stop offset="1" stop-color="#0B0B0B" stop-opacity="1"/>
+      </linearGradient>
+      <linearGradient id="top" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#000" stop-opacity="0.45"/><stop offset="1" stop-color="#000" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="${S}" height="170" fill="url(#top)"/>
+    <rect x="0" y="${PH - 230}" width="${S}" height="231" fill="url(#fade)"/>
+    ${POSTER_LOGO}
+    ${parts.join('\n')}
+  </svg>`;
+  return sharp({ create: { width: S, height: S, channels: 3, background: '#0B0B0B' } })
+    .composite([{ input: photo, top: 0, left: 0 }, { input: Buffer.from(svg), top: 0, left: 0 }])
+    .jpeg({ quality: 90, progressive: true })
+    .toBuffer();
+}
+
+/** Собрать афишу и положить её в telegram_image — оттуда её берут шеринг и рассылки. */
+export async function refreshPoster(evId: string): Promise<string> {
+  const { data: ev } = await supabase.from('events')
+    .select('id,title,description,date,date_end,time,time_end,location,image,telegram_image,price_type,price_amount,max_participants,program,logistics')
+    .eq('id', evId).maybeSingle();
+  if (!ev) return '';
+  const jpg = await buildPoster(ev);
+  const path = `posters/${evId}-${Date.now().toString(36)}.jpg`;
+  const { error } = await supabase.storage.from('event-images').upload(path, jpg, { contentType: 'image/jpeg', upsert: true });
+  if (error) throw new Error(error.message);
+  const url = supabase.storage.from('event-images').getPublicUrl(path).data.publicUrl;
+  await supabase.from('events').update({ telegram_image: url }).eq('id', evId);
+  return url;
+}
+
 // ─── ПЕРЕИСПОЛЬЗОВАНИЕ ГРУПП ─────────────────────────────────────────────
 // Групп под события у клуба больше, чем идёт событий: после выезда чат
 // пустеет. Новое событие берёт свободную группу прошедшего: бот сохраняет
@@ -595,6 +809,12 @@ export default async function handler(req: any, res: any) {
 
   // Подобрать свободную группу под событие вручную (кнопка в админке) и
   // список свободных групп — для подсказки.
+  // Квадратная афиша события — пересобрать сейчас.
+  if (req.method === 'POST' && req.query?.action === 'make_poster') {
+    const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+    try { return res.status(200).json({ ok: true, url: await refreshPoster(String(b.eventId || '')) }); }
+    catch (e) { return res.status(200).json({ ok: false, error: (e as Error).message }); }
+  }
   if (req.method === 'POST' && req.query?.action === 'recycle_group') {
     const b = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
     return res.status(200).json(await recycleGroup(String(b.eventId || '')));
@@ -1324,6 +1544,12 @@ export default async function handler(req: any, res: any) {
       // события (before есть). Ошибки рассылки не роняют сохранение.
       let notified = 0;
       try { if (before) notified = await notifyEventChanges(body.id, before, event); } catch { /* no-op */ }
+
+      // Афиша для шеринга и приглашений — всегда по свежим данным события.
+      // Челленджу квадратная афиша с «днём/временем» не подходит — пропускаем.
+      if ((event as any)?.notifications?._format !== 'challenge') {
+        try { const url = await refreshPoster(String((event as any).id)); if (url) (event as any).telegram_image = url; } catch { /* афиша — не блокер сохранения */ }
+      }
 
       // Новое событие — сразу берёт свободную группу прошедшего события.
       let group: any = null;

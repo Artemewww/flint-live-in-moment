@@ -5526,6 +5526,14 @@ function EditEventModal({ event, onClose, onSave }: {
               onClick={async () => {
                 setShareBusy(true); setShareNote('');
                 try {
+                  // Квадратная афиша 1080×1080 собирается на сервере из СОХРАНЁННОГО
+                  // события (фото, заголовок, плашки, «что ждёт»). Она же сама
+                  // обновляется при каждом сохранении — кнопка для «прямо сейчас».
+                  const r = await adminFetch('/api/admin/events?action=make_poster', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ eventId: event.id }),
+                  });
+                  const pj = await r.json();
+                  if (pj.ok && pj.url) { setFormData((f) => ({ ...f, telegramImage: pj.url })); setShareNote('Афиша обновлена из сохранённых данных. Поменял текст — сначала «Сохранить», афиша пересоберётся сама.'); return; }
                   const url = await makeShareCard({ title: formData.title, date: formData.date, dateEnd: formData.dateEnd, time: formData.time, location: prettyPlaceShort(formData.location), image: formData.image });
                   setFormData((f) => ({ ...f, telegramImage: url }));
                   setShareNote('Готово — не забудь «Сохранить».');

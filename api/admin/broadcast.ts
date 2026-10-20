@@ -195,12 +195,14 @@ export default async function handler(req: any, res: any) {
      * кнопками. Автоматически то же делает крон (api/cron/reminders.ts).
      */
     if (body.action === 'invite_remind') {
-      const target: 'maybe' | 'silent' | 'both' = ['maybe', 'silent'].includes(body.target) ? body.target : 'both';
+      const target: 'maybe' | 'silent' | 'opened' | 'both' = ['maybe', 'silent', 'opened'].includes(body.target) ? body.target : 'both';
       const { data: inv, error } = await supabase.from('event_invites')
-        .select('telegram_id,answer,delivered,remind_count').eq('event_id', eventId);
+        .select('telegram_id,answer,delivered,remind_count,opened_at').eq('event_id', eventId);
       if (error) return res.status(200).json({ ok: false, error: 'Нет таблицы event_invites — примени миграцию 2026-10-event-invites.sql' });
+      // opened — открыли приглашение (нажали «Подробнее»), но так и не ответили.
       const ids = (inv || []).filter((r: any) =>
-        (target !== 'silent' && r.answer === 'maybe') || (target !== 'maybe' && !r.answer && r.delivered),
+        target === 'opened' ? (!r.answer && !!r.opened_at)
+          : (target !== 'silent' && r.answer === 'maybe') || (target !== 'maybe' && !r.answer && r.delivered),
       ).map((r: any) => Number(r.telegram_id));
       let sent = 0;
       for (const id of ids) {
@@ -345,7 +347,7 @@ export default async function handler(req: any, res: any) {
       // Для пригласительных цена — в строке ценности, иначе она дублировалась.
       (isClubInvite ? valueLineOf(event) : `💰 ${esc(costLineOf(event))}\n`) +
       seatsLine +
-      `\nОтветь одной кнопкой 👇`;
+      `\nНажми «✅ Буду» — и ты в списке, ничего заполнять не нужно 👇`;
 
     /**
      * Блок «кто уже подтвердил». Считается ОДИН раз до отправки и подставляется
