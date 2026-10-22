@@ -119,6 +119,20 @@ function dayOffset(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/**
+ * Костяк клуба. Нужен там, где автоматика кого-то наказывает: у костяка
+ * роль, а не отметки, и выкидывать организаторов из их же события нельзя.
+ * Кэша нет намеренно — крон ходит раз в сутки, лишний запрос ничего не стоит.
+ */
+async function coreMemberIds(): Promise<Set<number>> {
+  try {
+    const { data } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+    return new Set((data || []).map((m: any) => Number(m.telegram_id)));
+  } catch {
+    return new Set();
+  }
+}
+
 /** Реальные Telegram-получатели: веб-заявки имеют отрицательный хеш вместо id. */
 function realIds(regs: any[]): any[] {
   return regs.filter((r) => Number.isFinite(Number(r.telegram_id)) && Number(r.telegram_id) > 0);
@@ -1305,6 +1319,155 @@ export default async function handler(req: any, res: any) {
         (report as any).challengeNudges = ((report as any).challengeNudges || 0) + 1;
       }
     } catch (e) { report.errors.push(`challenge: ${(e as Error).message}`); }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // БЛОК D2: «Пассажиры» челленджа — предупреждение, потом снятие
+    // ══════════════════════════════════════════════════════════════════════════
+    /**
+     * Челлендж держится на том, что все делают работу. Один человек, который
+     * отметился в первый день и дальше просто читает чат, ломает его сильнее,
+     * чем кажется: остальные видят, что можно не делать, и «можно» заражает.
+     * Дословно от владельца: «чтобы они не просто сидели и наблюдали».
+     *
+     * Как это решают там, где такие марафоны работают (75 Hard, беговые клубы,
+     * трезвые челленджи):
+     *   1. Дают раскачаться. Первые дни не судят: люди заходят позже старта и
+     *      разбираются, как отмечаться. Отсюда graceDays.
+     *   2. Никогда не выкидывают молча. Сначала личное предупреждение с
+     *      конкретикой: сколько пропущено и сколько осталось до вылета.
+     *   3. Выкидывают по порогу, а не по настроению организатора. Порог
+     *      объявлен заранее и одинаков для всех.
+     *   4. Выкидывают ТИХО. Публичный позор выгоняет человека из сообщества
+     *      целиком, а не возвращает в строй. Поэтому и предупреждение, и
+     *      снятие уходят в личку, а в чат не пишется ничего.
+     *   5. Возврат открыт. Снятие с челленджа — не бан: записаться заново
+     *      можно в любой момент, серия просто начинается с нуля.
+     *
+     * Пороги настраиваются в карточке события (notifications), без миграции:
+     *   _chGrace   — сколько первых дней не судим (по умолчанию 2)
+     *   _chWarn    — пропусков подряд до предупреждения (по умолчанию 2)
+     *   _chKick    — пропусков подряд до снятия (по умолчанию 4)
+     * Снятие можно выключить совсем: _chKick = 0.
+     *
+     * Организатора и костяк не трогаем никогда: у них роль, а не отметки.
+     */
+    try {
+      // Та же «минская» дата, что и у утреннего пинга выше: день челленджа
+      // заканчивается по Минску, а не по UTC, иначе в полночь люди ловили бы
+      // пропуск за день, который ещё идёт.
+      const todayMinsk = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const { data: chEvents } = await supabase
+        .from('events')
+        .select('id,title,date,date_end,notifications,deputy_id')
+        .lte('date', todayMinsk)
+        .gte('date_end', todayMinsk);
+
+      for (const ev of chEvents || []) {
+        const n = ((ev as any).notifications || {}) as Record<string, any>;
+        if (n._format !== 'challenge' && n.is_challenge !== true) continue;
+
+        const grace = Number.isFinite(Number(n._chGrace)) ? Number(n._chGrace) : 2;
+        const warnAt = Number.isFinite(Number(n._chWarn)) ? Number(n._chWarn) : 2;
+        const kickAt = Number.isFinite(Number(n._chKick)) ? Number(n._chKick) : 4;
+
+        // День челленджа: пока идёт раскачка — никого не судим.
+        const dayNo = Math.round(
+          (new Date(todayMinsk).getTime() - new Date((ev as any).date).getTime()) / 86400000) + 1;
+        if (dayNo <= grace) continue;
+
+        const { data: rows } = await supabase
+          .from('app_config').select('key')
+          .ilike('key', `challenge_checkin:${(ev as any).id}:%`)
+          .limit(20000);
+        // telegram_id → множество дат, когда человек отметился.
+        const byPerson = new Map<number, Set<string>>();
+        for (const r of rows || []) {
+          const parts = String((r as any).key).split(':');
+          const tgId = Number(parts[2]);
+          const date = String(parts[3] || '');
+          if (!Number.isFinite(tgId) || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
+          if (!byPerson.has(tgId)) byPerson.set(tgId, new Set());
+          (byPerson.get(tgId) as Set<string>).add(date);
+        }
+
+        const { data: regs } = await supabase
+          .from('registrations').select('id,telegram_id,name')
+          .eq('event_id', (ev as any).id).neq('status', 'cancelled');
+
+        const coreIds = await coreMemberIds();
+        const start = new Date(`${(ev as any).date}T00:00:00Z`).getTime();
+
+        for (const r of realIds(regs || [])) {
+          const tgId = Number((r as any).telegram_id);
+          if (tgId === Number((ev as any).deputy_id) || coreIds.has(tgId)) continue;
+
+          // Пропуски подряд считаем от ВЧЕРА: сегодняшний день ещё не прожит,
+          // и человек, который отметится вечером, не должен ловить
+          // предупреждение утром.
+          const done = byPerson.get(tgId) || new Set<string>();
+          let missed = 0;
+          const cur = new Date(`${todayMinsk}T00:00:00Z`);
+          cur.setUTCDate(cur.getUTCDate() - 1);
+          for (let i = 0; i < 400; i += 1) {
+            if (cur.getTime() < start) break;
+            const ymd = cur.toISOString().slice(0, 10);
+            if (done.has(ymd)) break;
+            missed += 1;
+            cur.setUTCDate(cur.getUTCDate() - 1);
+          }
+          if (missed === 0) continue;
+
+          const totalDone = done.size;
+          const warnKey = `challenge_warned:${(ev as any).id}:${tgId}`;
+
+          // ── Снятие ──
+          if (kickAt > 0 && missed >= kickAt) {
+            await supabase.from('registrations')
+              .update({ status: 'cancelled', cancelled_at: new Date().toISOString(),
+                        cancel_reason: `Челлендж: ${missed} дней без отметки` })
+              .eq('id', (r as any).id);
+            await supabase.from('app_config').delete().eq('key', warnKey);
+            await send(tgId,
+              `⬛ <b>Ты вне челленджа «${esc((ev as any).title)}»</b>\n\n` +
+              `Пропущено подряд: <b>${missed}</b> ${missed === 1 ? 'день' : 'дней'}. ` +
+              `Порог был ${kickAt}, и он один для всех — иначе это не челлендж, а чат по интересам.\n\n` +
+              `Это не бан и не обида. Захочешь вернуться — запишись заново, ` +
+              `серия начнётся с нуля. Дверь открыта.`,
+              undefined, 'events');
+            if ((ev as any).deputy_id) {
+              await send(Number((ev as any).deputy_id),
+                `⬛ <b>${esc((r as any).name || 'Участник')}</b> снят с челленджа «${esc((ev as any).title)}» — ` +
+                `${missed} дней без отметки (всего отметок: ${totalDone}).`,
+                undefined, 'events');
+            }
+            (report as any).challengeKicked = ((report as any).challengeKicked || 0) + 1;
+            continue;
+          }
+
+          // ── Предупреждение ── один раз на серию пропусков.
+          if (missed >= warnAt) {
+            const { data: warned } = await supabase
+              .from('app_config').select('value').eq('key', warnKey).maybeSingle();
+            if ((warned as any)?.value === String(missed)) continue;
+            const left = kickAt > 0 ? Math.max(0, kickAt - missed) : 0;
+            await send(tgId,
+              `⚠️ <b>Челлендж «${esc((ev as any).title)}» идёт без тебя</b>\n\n` +
+              `Пропущено подряд: <b>${missed}</b> ${missed === 1 ? 'день' : 'дней'}.` +
+              (totalDone === 1 ? ' Отметка была всего одна — в самом начале.' : ` Всего отметок: ${totalDone}.`) +
+              `\n\n` +
+              (left > 0
+                ? `Ещё <b>${left}</b> ${left === 1 ? 'день' : 'дня/дней'} молчания — и челлендж продолжится без тебя.\n\n`
+                : '') +
+              `Вернуться просто: <b>кружок, фото или слово</b> в чат — бот засчитает день. ` +
+              `Серия начнётся заново, но важно не это, а то, что ты снова в деле.`,
+              undefined, 'events');
+            await supabase.from('app_config')
+              .upsert({ key: warnKey, value: String(missed) }, { onConflict: 'key' });
+            (report as any).challengeWarned = ((report as any).challengeWarned || 0) + 1;
+          }
+        }
+      }
+    } catch (e) { report.errors.push(`challenge-passengers: ${(e as Error).message}`); }
 
     // ══════════════════════════════════════════════════════════════════════════
     // БЛОК D: Авто-кик «молчаливых» из чата события

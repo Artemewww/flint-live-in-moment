@@ -1271,6 +1271,53 @@ export default function EventDetailModal({
               />
             )}
 
+            {/* ПРАВИЛА ЧЕЛЛЕНДЖА — до таблицы и до кнопки «вступить».
+                Порог вылета должен быть объявлен ЗАРАНЕЕ и одинаков для всех:
+                иначе снятие выглядит как решение организатора по настроению, а
+                не как правило, под которое человек подписался. Пороги берутся
+                из карточки события, поэтому текст не врёт даже если их
+                поменяли. */}
+            {isChallenge && (() => {
+              const n: any = (event as any).notifications || {};
+              const grace = Number.isFinite(Number(n._chGrace)) ? Number(n._chGrace) : 2;
+              const warn = Number.isFinite(Number(n._chWarn)) ? Number(n._chWarn) : 2;
+              const kick = Number.isFinite(Number(n._chKick)) ? Number(n._chKick) : 4;
+              return (
+                <div className="bg-white/5 border border-white/5 rounded-2xl p-4 space-y-2.5">
+                  <span className="text-white/40 uppercase text-[9px] tracking-wider flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-brand" /> Правила челленджа
+                  </span>
+                  <ul className="space-y-1.5">
+                    <li className="text-white/75 text-[12px] leading-snug flex gap-2">
+                      <span className="text-brand shrink-0">•</span>
+                      <span><b>Каждый день — отметка.</b> Кружок, фото или слово в чат. Бот засчитает день сам.</span>
+                    </li>
+                    <li className="text-white/75 text-[12px] leading-snug flex gap-2">
+                      <span className="text-brand shrink-0">•</span>
+                      <span><b>Первые {grace} {grace === 1 ? 'день' : 'дня'} — раскачка.</b> Заходишь позже старта — ничего не теряешь.</span>
+                    </li>
+                    <li className="text-white/75 text-[12px] leading-snug flex gap-2">
+                      <span className="text-amber-400 shrink-0">•</span>
+                      <span><b>{warn} {warn === 1 ? 'день' : 'дня'} молчания — предупреждение</b> в личку. Не в чат: позорить никто не будет.</span>
+                    </li>
+                    {kick > 0 && (
+                      <li className="text-white/75 text-[12px] leading-snug flex gap-2">
+                        <span className="text-rose-400 shrink-0">•</span>
+                        <span><b>{kick} {kick === 1 ? 'день' : 'дней'} молчания — челлендж идёт дальше без тебя.</b> Порог один для всех.</span>
+                      </li>
+                    )}
+                    <li className="text-white/75 text-[12px] leading-snug flex gap-2">
+                      <span className="text-brand shrink-0">•</span>
+                      <span><b>Дверь открыта.</b> Сняли — записывайся заново. Серия с нуля, но это не бан.</span>
+                    </li>
+                  </ul>
+                  <p className="text-white/35 text-[10px] leading-snug">
+                    Смотреть со стороны тут нечего: челлендж держится на том, что работу делают все.
+                  </p>
+                </div>
+              );
+            })()}
+
             {/* ТАБЛИЦА ПРОГРЕССА: аватар + полоса из 92 точек по месяцам.
                 Тап по залитой точке → сторис этого дня. */}
             {isChallenge && (
