@@ -5577,8 +5577,12 @@ function EditEventModal({ event, onClose, onSave }: {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            <div>
+          {/* Деньги — в одной строке. Раньше «Тип цены» стоял слева вверху, а
+              «Сумма аренды» уезжала отдельной строкой ниже, и два поля про одно
+              и то же оказывались в разных концах формы. Кто может участвовать —
+              это про доступ, а не про цену, поэтому он теперь отдельно. */}
+          <div className="grid grid-cols-2 gap-2 items-end">
+            <div className={formData.priceType === 'paid' ? '' : 'col-span-2'}>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
                 Тип цены
               </label>
@@ -5592,36 +5596,36 @@ function EditEventModal({ event, onClose, onSave }: {
               </select>
             </div>
 
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Кто может участвовать
-              </label>
-              <select
-                value={formData.entryType}
-                onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-              >
-                <option value="all">Все</option>
-                <option value="male">Только мужчины</option>
-                <option value="female">Только женщины</option>
-              </select>
-            </div>
+            {formData.priceType === 'paid' && (
+              <div>
+                <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+                  Сумма аренды, Br
+                </label>
+                <input
+                  type="number"
+                  value={formData.priceAmount}
+                  onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                  placeholder="500"
+                />
+              </div>
+            )}
           </div>
 
-          {formData.priceType === 'paid' && (
-            <div>
-              <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
-                Сумма аренды (Br) — делится поровну на всех
-              </label>
-              <input
-                type="number"
-                value={formData.priceAmount}
-                onChange={(e) => setFormData({...formData, priceAmount: parseInt(e.target.value) || 0})}
-                className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
-                placeholder="500"
-              />
-            </div>
-          )}
+          <div>
+            <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
+              Кто может участвовать
+            </label>
+            <select
+              value={formData.entryType}
+              onChange={(e) => setFormData({...formData, entryType: e.target.value as any})}
+              className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+            >
+              <option value="all">Все</option>
+              <option value="male">Только мужчины</option>
+              <option value="female">Только женщины</option>
+            </select>
+          </div>
 
           <div className="bg-white/5 border border-white/10 rounded-xl p-3">
             <p className="text-[10px] text-white/40 uppercase font-mono mb-1">Как увидят цену участники</p>
@@ -5983,7 +5987,19 @@ function AddEventModal({ onClose, onAdd }: {
 
   const [creating, setCreating] = useState(false);
   const handleAdd = async () => {
-    if (!formData.title || !formData.date || !organizerId || creating) return;
+    if (creating) return;
+    /**
+     * Раньше здесь был молчаливый `return`: нет названия, даты или
+     * организатора — функция просто выходила, и человек не понимал, почему
+     * нажатие ничего не делает. Теперь говорим, чего не хватает, и
+     * проматываем форму к началу, где висит подсказка.
+     */
+    if (!formData.title || !formData.date || !organizerId) {
+      setShowMissing(true);
+      document.getElementById('add-event-scroll')?.scrollTo({ top: 0, behavior: 'smooth' });
+      return;
+    }
+    setShowMissing(false);
     setCreating(true);
     // Карточка для шеринга собирается сама: без неё пересланная ссылка
     // выглядит голой. Не получилось (нет обложки/сети) — событие всё равно создаём.
@@ -6059,6 +6075,8 @@ function AddEventModal({ onClose, onAdd }: {
     !organizerId && 'организатора',
   ].filter(Boolean) as string[];
   const canCreate = missing.length === 0 && !creating;
+  /** Показать, чего не хватает, прямо под шапкой — после попытки создать. */
+  const [showMissing, setShowMissing] = useState(false);
 
   /**
    * Портал в body: панель админки — свой стекинг-контекст (z-50 + анимация
@@ -6076,15 +6094,34 @@ function AddEventModal({ onClose, onAdd }: {
           <p className="text-[10px] font-mono uppercase tracking-widest text-white/40">Создание</p>
           <h3 className="truncate font-bold text-base uppercase sm:text-lg">Новое мероприятие</h3>
         </div>
-        <button onClick={handleAdd} disabled={!canCreate}
-          className="shrink-0 rounded-xl border-none bg-brand px-4 py-2.5 text-xs font-black uppercase text-black cursor-pointer hover:bg-brand-hover disabled:opacity-50">
-          {creating ? 'Создаю…' : '✅ Создать'}
+        {/*
+          Кнопка в шапке была просто disabled, и нажатие не делало НИЧЕГО:
+          человек жал, ничего не происходило, и выглядело это как «верхняя
+          кнопка не работает» — хотя не хватало, например, организатора.
+          Подсказка «чтобы создать, укажи…» жила только внизу формы, и до неё
+          надо было домотать. Теперь кнопка живая: не хватает полей — она
+          говорит об этом и подсвечивает их, а не молчит серым.
+        */}
+        <button onClick={handleAdd} disabled={creating}
+          className={`shrink-0 rounded-xl border-none px-4 py-2.5 text-xs font-black uppercase cursor-pointer disabled:opacity-50 ${
+            canCreate ? 'bg-brand text-black hover:bg-brand-hover' : 'bg-amber-400/20 text-amber-200'}`}>
+          {creating ? 'Создаю…' : canCreate ? '✅ Создать' : '⚠️ Чего-то не хватает'}
         </button>
       </div>
 
       {/* Весь экран под контент: промпт ИИ, превью и расширенный редактор
           вводятся в полноформатном окне, а не в маленькой карточке. */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Чего не хватает — под шапкой, где человек нажал кнопку, а не только
+          в самом низу формы: именно поэтому «верхняя кнопка не работала». */}
+      {showMissing && missing.length > 0 && (
+        <div className="shrink-0 border-b border-amber-400/30 bg-amber-400/10 px-4 py-2.5 sm:px-8">
+          <p className="mx-auto w-full max-w-3xl text-[12px] text-amber-200">
+            Чтобы создать мероприятие, укажи: <b>{missing.join(', ')}</b>.
+            {!organizerId && ' Организатор выбирается в самом низу формы.'}
+          </p>
+        </div>
+      )}
+<div id="add-event-scroll" className="flex-1 overflow-y-auto">
         <div className="form-stable mx-auto w-full max-w-3xl space-y-4 px-4 py-5 pb-8 sm:px-8">
           <h3 className="sr-only">Новое мероприятие</h3>
 
