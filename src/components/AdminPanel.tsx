@@ -8,7 +8,7 @@ import Avatar, { AvatarStack } from './Avatar';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
-import { CommunityEvent, HouseQuality, UserProfile } from '../types';
+import { CommunityEvent, HouseQuality, UserProfile, priceTag } from '../types';
 import { getInitData, isInsideTelegram } from '../telegram';
 import { HOUSE_QUALITIES, qualitiesFromKeys } from '../houseQualities';
 import { analyzeCommunityRequests, formatQualityDistribution, QUALITY_MAP } from '../development';
@@ -874,7 +874,8 @@ const CHECKLIST_ITEMS: { key: string; label: string }[] = [
 interface AdminPanelProps {
   events: CommunityEvent[];
   onUpdateEvent: (event: CommunityEvent) => void;
-  onAddEvent: (event: CommunityEvent) => void;
+  /** null — создано; строка — причина отказа (окно создания остаётся открытым). */
+  onAddEvent: (event: CommunityEvent) => Promise<string | null> | void;
   onDeleteEvent: (eventId: string) => void;
   onClose: () => void;
   /** Открыть главную афишу как админ (минуя шлюз-приглашение). */
@@ -4975,13 +4976,15 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
         {showAddForm && (
           <AddEventModal
             onClose={() => setShowAddForm(false)}
-            onAdd={(newEvent) => {
-              onAddEvent(newEvent);
+            onAdd={async (newEvent) => {
+              const err = await onAddEvent(newEvent);
+              if (err) return err;
               setShowAddForm(false);
               // Сразу предлагаем позвать людей: событие без участников никому не
               // видно, а вспомнить про приглашения потом — отдельный шаг, который
               // владелец и просил убрать.
               openInvite(newEvent);
+              return null;
             }}
           />
         )}
@@ -5343,7 +5346,7 @@ function EditEventModal({ event, onClose, onSave }: {
       maxParticipants: formData.maxParticipants,
       participantsCount: formData.participantsCount,
       status: formData.status,
-      priceType: formData.priceType,
+      priceType: formData.priceType === 'paid' && formData.priceAmount > 0 ? 'paid' : 'free',
       priceLabel: computedPriceLabel(),
       priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount,
       entryThreshold: formData.entryThreshold,
@@ -5361,7 +5364,12 @@ function EditEventModal({ event, onClose, onSave }: {
     /* Правка события — во весь экран, а не в окошке шириной с телефон:
        полей десятки, и в узком контейнере со скроллом в 60% высоты их было
        неудобно править. Шапка с «Сохранить» всегда на виду. */
-    <div className="fixed inset-0 z-[70] flex flex-col bg-[#0E0E0E]" id="edit-event-modal">
+    /* Портал в body, как у окна создания: внутри панели админки (z-50 +
+       анимация motion) окно оказывалось под чужими слоями, и верхняя
+       «Сохранить» не нажималась — работала только нижняя. */
+    createPortal(
+    <div className="fixed inset-0 z-[90] flex flex-col bg-[#0E0E0E]" id="edit-event-modal"
+      style={{ paddingTop: 'env(safe-area-inset-top)' }}>
       <div className="sticky top-0 z-10 flex items-center gap-3 border-b border-white/10 bg-[#121212]/95 px-4 py-3 backdrop-blur sm:px-8">
         <button onClick={onClose} className="shrink-0 rounded-full border-none bg-white/10 p-2 text-white cursor-pointer" aria-label="Закрыть"><X className="w-5 h-5" /></button>
         <div className="min-w-0 flex-1">
@@ -5625,7 +5633,15 @@ function EditEventModal({ event, onClose, onSave }: {
 
           <div className="bg-white/5 border border-white/10 rounded-xl p-3">
             <p className="text-[10px] text-white/40 uppercase font-mono mb-1">Как увидят цену участники</p>
-            <p className="text-sm text-brand font-bold">{computedPriceLabel()}</p>
+            {/* Та же функция, что у карточки: цена для клуба, «каждый за себя» и
+                комментарий видны здесь так же, как их увидят участники. */}
+            {(() => {
+              const tag = priceTag({ priceType: formData.priceType === 'paid' && formData.priceAmount > 0 ? 'paid' : 'free', priceAmount: formData.priceType === 'free' ? 0 : formData.priceAmount, priceLabel: computedPriceLabel(), logistics: formData.logistics });
+              return (<>
+                <p className="text-sm text-brand font-bold">{tag.short}</p>
+                {tag.note && <p className="mt-1 whitespace-pre-line text-[11px] text-white/50">{tag.note}</p>}
+              </>);
+            })()}
             {formData.priceType === 'paid' && (
               <p className="text-[9px] text-white/40 mt-1 italic">
                 Итоговая доля пересчитывается по числу участников. Если не набрался минимум — оплата возвращается.
@@ -5755,7 +5771,9 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
+    )
   );
 }
 
@@ -5812,8 +5830,9 @@ function TripEditor({ value, onChange }: { value: any; onChange: (v: any) => voi
 
 function AddEventModal({ onClose, onAdd }: {
   onClose: () => void;
-  onAdd: (event: CommunityEvent) => void;
+  onAdd: (event: CommunityEvent) => Promise<string | null>;
 }) {
+  const [createError, setCreateError] = useState('');
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiProgress, setAiProgress] = useState<string | null>(null);
   const [coverStatus, setCoverStatus] = useState('');
@@ -5985,6 +6004,7 @@ function AddEventModal({ onClose, onAdd }: {
   const handleAdd = async () => {
     if (!formData.title || !formData.date || !organizerId || creating) return;
     setCreating(true);
+    setCreateError('');
     // Карточка для шеринга собирается сама: без неё пересланная ссылка
     // выглядит голой. Не получилось (нет обложки/сети) — событие всё равно создаём.
     let shareUrl = '';
@@ -6016,7 +6036,9 @@ function AddEventModal({ onClose, onAdd }: {
       maxParticipants: formData.maxParticipants,
       participantsCount: 0,
       telegramBotUrl: 'https://t.me/campsflint_bot',
-      priceType: formData.priceType,
+      // «Платно» без суммы — не цена: карточка писала «Платно» вместо
+      // «≈40 Br · общий взнос». Сумма 0 — значит, взноса организатору нет.
+      priceType: formData.priceType === 'paid' && formData.priceAmount > 0 ? 'paid' : 'free',
       priceLabel: formData.priceType === 'paid' && formData.priceAmount > 0
         ? `Аренда ${formData.priceAmount} Br — делится поровну на всех`
         : 'Взнос отсутствует',
@@ -6033,8 +6055,11 @@ function AddEventModal({ onClose, onAdd }: {
       deputyId: organizerId,
       ...(shareUrl ? { telegramImage: shareUrl } : {}),
     };
+    // Ждём ответа сервера: при отказе форма остаётся заполненной, а причина
+    // видна над кнопкой — можно поправить и нажать ещё раз.
+    const err = await onAdd(newEvent).catch((e) => (e as Error).message || 'неизвестная ошибка');
     setCreating(false);
-    onAdd(newEvent);
+    if (err) setCreateError(err);
   };
 
   const scale: EventScale = (formData.notifications?._scale as EventScale) || inferScale(formData);
@@ -6287,6 +6312,11 @@ function AddEventModal({ onClose, onAdd }: {
         <div className="mx-auto w-full max-w-3xl">
           {missing.length > 0 && (
             <p className="mb-2 text-center text-[11px] text-amber-300/90">Чтобы создать, укажи: {missing.join(', ')}</p>
+          )}
+          {createError && (
+            <p className="mb-2 rounded-lg border border-red-400/30 bg-red-400/10 p-2 text-center text-[11px] text-red-300">
+              Событие не создалось: {createError}. Форма сохранена — поправь и нажми ещё раз.
+            </p>
           )}
           <button onClick={handleAdd} disabled={!canCreate}
             className="w-full rounded-xl border-none bg-brand py-3.5 text-sm font-black uppercase text-black cursor-pointer hover:bg-brand-hover disabled:opacity-40">

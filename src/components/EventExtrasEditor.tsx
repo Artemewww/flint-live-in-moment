@@ -148,14 +148,16 @@ export default function EventExtrasEditor({ value, onChange }: { value: any; onC
         {v.costModel !== 'club_invite' && (
           <div className="space-y-2 rounded-xl border border-white/10 bg-white/[.03] p-3">
             <span className="block text-[10px] font-mono uppercase text-white/50">💎 Цена для членов клуба (если есть скидка)</span>
-            <div className="grid grid-cols-2 gap-2">
+            {/* items-end: подписи разной длины переносятся по-разному, а поля
+                должны стоять на одной линии. */}
+            <div className="grid grid-cols-2 items-end gap-2">
               <label className="block">
-                <span className="text-[11px] text-white/55">Обычная цена (для всех)</span>
+                <span className="text-[11px] text-white/55">Обычная цена, BYN</span>
                 <input value={v.marketPrice ?? ''} onChange={(e) => set('marketPrice', e.target.value)} placeholder="60 BYN"
                   className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
               </label>
               <label className="block">
-                <span className="text-[11px] text-white/55">Для клуба, BYN (0 — бесплатно)</span>
+                <span className="text-[11px] text-white/55">Для клуба, BYN (0 = бесплатно)</span>
                 <input type="number" inputMode="decimal" min={0} value={v.memberPrice ?? ''} onChange={(e) => set('memberPrice', e.target.value === '' ? undefined : Number(e.target.value))}
                   placeholder="20" className="mt-1 w-full rounded-lg border border-white/10 bg-white/5 p-2 text-sm text-white" />
               </label>

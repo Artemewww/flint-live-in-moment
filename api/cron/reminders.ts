@@ -1297,7 +1297,8 @@ export default async function handler(req: any, res: any) {
           text: `🔥 <b>День ${dayNo}. Отметься.</b>\n\n` +
             (doneIds.size ? `Уже отметились: <b>${doneIds.size}</b>` : '') +
             (silent.length ? (doneIds.size ? ' · ' : '') + `ждём: <b>${silent.length}</b>` : '') +
-            '\n\n<b>Кружок · фото · слово</b> — сюда. Бот засчитает день.',
+            '\n\n<b>Кружок · фото · слово</b> — сюда. Бот засчитает день.' +
+            '\n<i>3 дня тишины — 🟨, ещё день — 🟥 и выход из челленджа.</i>',
         });
         await supabase.from('events')
           .update({ notifications: { ...n, _challengeNudge: todayMinsk } })
@@ -1305,6 +1306,168 @@ export default async function handler(req: any, res: any) {
         (report as any).challengeNudges = ((report as any).challengeNudges || 0) + 1;
       }
     } catch (e) { report.errors.push(`challenge: ${(e as Error).message}`); }
+
+    /**
+     * ЖЁЛТАЯ И КРАСНАЯ КАРТОЧКИ ЧЕЛЛЕНДЖА — «пассажиров» выводим.
+     *
+     * Записался, отметился раз-другой и дальше молча читает, как стараются
+     * другие. Для группы это хуже, чем его отсутствие: «нас 7» на деле значит
+     * «нас 4», и смотреть, как кто-то сдался без последствий, — разрешение
+     * сдаться самому.
+     *
+     * Правило — как в 75 Hard, Duolingo и беговых клубах Strava: считаем не
+     * общее число отметок, а ТИШИНУ ПОДРЯД, и перед выводом всегда есть
+     * предупреждение с шансом вернуться:
+     *   • 1–2 дня без отметки — ничего, бывает (серия просто обнуляется);
+     *   • 3 дня подряд — 🟨 жёлтая карточка: фирменный баннер в чат + личка;
+     *   • после карточки ещё день тишины — 🟥 красная: баннер, вывод из чата,
+     *     запись снимается. Не бан: в новом сезоне можно зайти с первого дня.
+     * Отметка — кружок, фото или СЛОВО (вебхук засчитывает и текст), поэтому
+     * «заболел» или «в дороге» одним сообщением спасают серию от карточки.
+     *
+     * Не трогаем: организатора события, костяк и владельца. Новичку отсчёт
+     * идёт с дня записи, а не со старта челленджа.
+     *
+     * Карточка хранится в app_config `challenge_warn:<eventId>:<tgId>` (дата):
+     * отметился после неё — карточка снимается сама. Крон раз в сутки, поэтому
+     * от жёлтой до красной ровно один день на исправление.
+     */
+    try {
+      const WARN_AFTER_DAYS = 3;
+      const SITE = (process.env.SITE_URL || 'https://flint-live-in-moment.vercel.app').replace(/\/$/, '');
+      const DAY = 86400000;
+      const minskNow = new Date(Date.now() + 3 * 60 * 60 * 1000);
+      const todayMinsk = minskNow.toISOString().slice(0, 10);
+      const dayDiff = (a: string, b: string) => Math.round((new Date(a).getTime() - new Date(b).getTime()) / DAY);
+      const minskDate = (iso: string) => new Date(new Date(iso).getTime() + 3 * 60 * 60 * 1000).toISOString().slice(0, 10);
+      const days = (k: number) => `${k} ${k % 10 === 1 && k % 100 !== 11 ? 'день' : [2, 3, 4].includes(k % 10) && ![12, 13, 14].includes(k % 100) ? 'дня' : 'дней'}`;
+      const mention = (id: number, name: string) => `<a href="tg://user?id=${id}">${escH(name || 'Участник')}</a>`;
+
+      const { data: challengeEvents } = await supabase
+        .from('events')
+        .select('id,title,date,date_end,status,deputy_id,notifications')
+        .lte('date', todayMinsk)
+        .gte('date_end', todayMinsk);
+      for (const ev of (challengeEvents || []) as any[]) {
+        if (!isChallengeEvent(ev) || ev.status === 'closed' || ev.status === 'cancelled') continue;
+        const { data: grp } = await supabase
+          .from('event_groups').select('chat_id').eq('event_id', ev.id).eq('active', true).maybeSingle();
+        const chatId = grp ? Number((grp as any).chat_id) : 0;
+        if (!chatId) continue;
+
+        // Правила — один раз, закреплённым сообщением: карточка без
+        // объявленного заранее правила выглядит произволом.
+        const n = (ev.notifications || {}) as Record<string, any>;
+        if (!n._challengeRules) {
+          const r = await tg('sendMessage', {
+            chat_id: chatId, parse_mode: 'HTML',
+            text: `📜 <b>Правила челленджа FLINT</b>\n\n` +
+              `1. Каждый день — отметка здесь: <b>кружок, фото или одно слово</b> о том, что сделал. Бот засчитывает день.\n` +
+              `2. Пропустил день — бывает: серия обнулится, но ты в игре.\n` +
+              `3. <b>${WARN_AFTER_DAYS} дня подряд</b> без отметки — 🟨 жёлтая карточка: предупреждение здесь и в личке.\n` +
+              `4. Не отметился на следующий день после карточки — 🟥 красная: выбываешь, бот выводит из чата.\n` +
+              `5. Заболел, в дороге — напиши об этом сюда одним словом. Это тоже отметка.\n` +
+              `6. Молча наблюдать нельзя: челлендж держится на том, что все видят друг друга.\n\n` +
+              `Выбывший может вернуться в новом сезоне — с первого дня.`,
+          });
+          if (r?.ok) await tg('pinChatMessage', { chat_id: chatId, message_id: r.result.message_id, disable_notification: true });
+          await supabase.from('events')
+            .update({ notifications: { ...n, _challengeRules: todayMinsk } })
+            .eq('id', ev.id);
+        }
+
+        const { data: regs } = await supabase
+          .from('registrations').select('id,telegram_id,name,registered_at')
+          .eq('event_id', ev.id).neq('status', 'cancelled');
+        const people = realIds(regs || []);
+        if (!people.length) continue;
+
+        const { data: checkRows } = await supabase
+          .from('app_config').select('key').ilike('key', `challenge_checkin:${ev.id}:%`);
+        const lastCheckin = new Map<number, string>();
+        for (const r of checkRows || []) {
+          const [, , id, d] = String((r as any).key).split(':');
+          const uid = Number(id);
+          if (d && (!lastCheckin.has(uid) || d > lastCheckin.get(uid)!)) lastCheckin.set(uid, d);
+        }
+        const { data: warnRows } = await supabase
+          .from('app_config').select('key,value').ilike('key', `challenge_warn:${ev.id}:%`);
+        const warnedOn = new Map<number, string>(
+          (warnRows || []).map((r: any) => [Number(String(r.key).split(':')[2]), String(r.value)]));
+
+        const ids = people.map((p: any) => Number(p.telegram_id));
+        const { data: mems } = await supabase
+          .from('members').select('telegram_id,is_core,role').in('telegram_id', ids);
+        const immune = new Set<number>((mems || [])
+          .filter((m: any) => m.is_core === true || m.role === 'owner')
+          .map((m: any) => Number(m.telegram_id)));
+        if (ev.deputy_id) immune.add(Number(ev.deputy_id));
+
+        for (const p of people as any[]) {
+          const uid = Number(p.telegram_id);
+          if (immune.has(uid)) continue;
+          const name = String(p.name || 'Участник').split(' ')[0];
+          // Тишина = полные прошедшие дни после последней отметки. Не
+          // отмечался ни разу — отсчёт с дня записи (или старта челленджа).
+          const start = [ev.date, p.registered_at ? minskDate(p.registered_at) : ev.date].sort().pop()!;
+          const lastActive = lastCheckin.get(uid) || new Date(new Date(start).getTime() - DAY).toISOString().slice(0, 10);
+          const silent = Math.max(0, dayDiff(todayMinsk, lastActive) - 1);
+          const warnKey = `challenge_warn:${ev.id}:${uid}`;
+          const warned = warnedOn.get(uid);
+
+          if (silent < WARN_AFTER_DAYS) {
+            // Вернулся после карточки — снимаем её.
+            if (warned) await supabase.from('app_config').delete().eq('key', warnKey);
+            continue;
+          }
+
+          if (!warned) {
+            await tg('sendPhoto', {
+              chat_id: chatId, parse_mode: 'HTML',
+              photo: `${SITE}/assets/challenge/warning.png`,
+              caption: `🟨 ${mention(uid, name)}, <b>${days(silent)} без отметки.</b>\n\n` +
+                `Отметься сегодня — кружок, фото или одно слово. Завтра утром без отметки — красная карточка и выход из челленджа.`,
+            });
+            await send(uid,
+              `🟨 <b>Жёлтая карточка в челлендже «${escH(ev.title)}»</b>\n\n` +
+              `${days(silent)} без отметки. Сегодня — последний день, чтобы вернуться: ` +
+              `кружок, фото или одно слово в чат челленджа. Иначе завтра утром бот выведет тебя из чата.`);
+            await supabase.from('app_config').upsert({ key: warnKey, value: todayMinsk }, { onConflict: 'key' });
+            (report as any).challengeWarned = ((report as any).challengeWarned || 0) + 1;
+            continue;
+          }
+
+          // Карточка уже была, и с того дня — ни одной отметки.
+          if (warned >= todayMinsk) continue;
+          // ban + unban = «вывести, но не запретить вход»: kick в Bot API
+          // без разбана — это пожизненный бан в группе.
+          const out = await tg('banChatMember', { chat_id: chatId, user_id: uid, revoke_messages: false });
+          if (out?.ok) await tg('unbanChatMember', { chat_id: chatId, user_id: uid, only_if_banned: true });
+          await tg('sendPhoto', {
+            chat_id: chatId, parse_mode: 'HTML',
+            photo: `${SITE}/assets/challenge/out.png`,
+            caption: `🟥 ${mention(uid, name)} выбывает: ${days(silent)} тишины после жёлтой карточки.\n\n` +
+              `Остальные — в игре. Отметка сегодня держит серию.`,
+          });
+          await send(uid,
+            `🟥 <b>Ты выбыл из челленджа «${escH(ev.title)}»</b>\n\n` +
+            `После жёлтой карточки отметки не было. Без обид — так работает правило для всех. ` +
+            `Вернуться можно в новом сезоне, с первого дня.`);
+          await supabase.from('registrations')
+            .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancel_reason: 'challenge_inactive' })
+            .eq('id', p.id);
+          await supabase.from('app_config').delete().eq('key', warnKey);
+          // Бот без права ограничивать участников молча не справится —
+          // организатор должен узнать, что человека надо убрать руками.
+          if (!out?.ok && ev.deputy_id) {
+            await send(Number(ev.deputy_id),
+              `⚠️ Не смог вывести ${escH(name)} из чата челленджа: ${escH(String(out?.description || 'нет прав'))}. ` +
+              `Дай боту право «Блокировка пользователей» или убери вручную.`);
+          }
+          (report as any).challengeOut = ((report as any).challengeOut || 0) + 1;
+        }
+      }
+    } catch (e) { report.errors.push(`challenge-cards: ${(e as Error).message}`); }
 
     // ══════════════════════════════════════════════════════════════════════════
     // БЛОК D: Авто-кик «молчаливых» из чата события

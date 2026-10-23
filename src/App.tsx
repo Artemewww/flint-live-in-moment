@@ -914,18 +914,26 @@ export default function App() {
     } catch { /* приватный режим */ }
     return base;
   };
-  const adminSaveEvent = async (ev: CommunityEvent, isNew: boolean) => {
+  /**
+   * Сохраняет событие и отвечает, получилось ли: окно создания закрывается
+   * только после «да». Раньше оно закрывалось сразу, ошибка всплывала уже
+   * после — и заполненная форма пропадала (так и не создалась баня 22.10).
+   */
+  const adminSaveEvent = async (ev: CommunityEvent, isNew: boolean): Promise<string | null> => {
     try {
       const res = await fetch('/api/admin/events', {
         method: 'POST',
         headers: adminAuthHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify(ev),
       });
-      if (res.status === 401) { handleAdminExpired(); return; }
+      if (res.status === 401) { handleAdminExpired(); return 'Сессия админки истекла — войди заново'; }
       if (!res.ok) {
         const body = await res.json().catch(() => ({} as any));
-        alert(`Не удалось сохранить событие: ${body.details || body.error || `HTTP ${res.status}`}`);
-        return;
+        const msg = res.status === 413
+          ? 'Слишком большой запрос — обложка весит много, загрузи фото поменьше'
+          : [body.error, body.details].filter(Boolean).join(': ') || `HTTP ${res.status}`;
+        if (!isNew) alert(`Не удалось сохранить событие: ${msg}`);
+        return msg;
       }
       // Сервер возвращает event в camelCase. Обновляем стейт из ответа.
       // Refetch НЕ вызываем — он перезапишет стейт старыми данными из /api/events,
@@ -933,8 +941,11 @@ export default function App() {
       const data = await res.json().catch(() => ({} as any));
       const saved = data?.event || ev;
       setEvents((prev) => (isNew ? [...prev, saved] : prev.map((x) => (x.id === saved.id ? saved : x))));
+      return null;
     } catch (err) {
-      alert(`Ошибка сети при сохранении события: ${(err as Error).message}`);
+      const msg = `Ошибка сети: ${(err as Error).message}`;
+      if (!isNew) alert(`${msg} при сохранении события`);
+      return msg;
     }
   };
   const adminDeleteEvent = async (eventId: string) => {
