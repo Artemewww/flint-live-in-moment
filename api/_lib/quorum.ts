@@ -23,7 +23,7 @@
  *
  * Модуль не знает, откуда его зовут: клиент Supabase и отправка в Telegram
  * приходят параметрами — его используют и бот (Vercel), и почасовой
- * scripts/quorum.mts (GitHub Actions).
+ * scripts/pulse.mts (GitHub Actions).
  */
 
 export interface QuorumCfg { min: number; hours: number }
@@ -163,7 +163,7 @@ async function warmAudience(db: any, evId: string, exclude: number[]): Promise<n
 }
 
 /**
- * Один шаг автомата для события. Зовётся раз в час (scripts/quorum.mts) и
+ * Один шаг автомата для события. Зовётся раз в час (scripts/pulse.mts) и
  * сразу после записи — поэтому «набрали» приходит в ту же минуту.
  */
 export async function stepQuorum(db: any, send: Send, ev: any, now = Date.now()): Promise<string> {

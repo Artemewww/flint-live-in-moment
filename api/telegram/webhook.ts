@@ -3293,6 +3293,31 @@ async function setSession(tgId: number, state: string, context: any) {
   // в фолбэк «Нажми кнопку ниже» — так уже ломался ввод точки выезда.
   if (error) throw new Error(`bot_sessions upsert: ${error.message}`);
 }
+/**
+ * Поздравление с днём рождения (кнопки из scripts/pulse.mts → api/_lib/birthday.ts).
+ * Копим в app_config `bdwish:<tid>:<год>`: вечером имениннику уходит одна
+ * «открытка от клуба» со всеми пожеланиями, а не двадцать сообщений подряд.
+ * Открытка уже ушла — пожелание доставляем сразу. Дубль от того же человека
+ * заменяет прошлый: передумал и написал своё — в открытке будет своё.
+ */
+async function saveBirthdayWish(heroId: number, fromId: number, fromName: string, wish: string): Promise<'saved' | 'sent'> {
+  const year = new Date(Date.now() + 3 * 3600_000).toISOString().slice(0, 4);
+  const key = `bdwish:${heroId}:${year}`;
+  const { data } = await supabase.from('app_config').select('value').eq('key', key).maybeSingle();
+  let list: any[] = [];
+  try { const v = (data as any)?.value; list = Array.isArray(v) ? v : JSON.parse(v || '[]'); } catch { list = []; }
+  list = list.filter((w: any) => Number(w.from) !== fromId);
+  list.push({ from: fromId, name: fromName, text: wish.slice(0, 300), at: new Date().toISOString() });
+  await supabase.from('app_config').upsert({ key, value: JSON.stringify(list) }, { onConflict: 'key' });
+  const { data: st } = await supabase.from('app_config').select('value').eq('key', `bday:${heroId}:${year}`).maybeSingle();
+  const card = (() => { try { const v = (st as any)?.value; return (typeof v === 'string' ? JSON.parse(v) : v)?.card; } catch { return false; } })();
+  if (card) {
+    await tg('sendMessage', { chat_id: heroId, parse_mode: 'HTML', text: `🎂 Тебя поздравляет <b>${esc(fromName)}</b>: ${esc(wish.slice(0, 300))}` });
+    return 'sent';
+  }
+  return 'saved';
+}
+
 async function clearSession(tgId: number) {
   await supabase.from('bot_sessions').delete().eq('telegram_id', tgId);
 }
@@ -5115,9 +5140,32 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /** bdp_<n>_<tid> — поздравить готовой фразой; bdw_<tid> — написать своё. */
+      if (/^bd[pw]_/.test(data)) {
+        const parts = data.split('_');
+        const heroId = Number(parts[parts.length - 1]);
+        if (!heroId || heroId === tgId) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: heroId === tgId ? 'Себя поздравлять — это сильно 😄' : 'Не нашёл именинника' });
+          return res.status(200).json({ ok: true });
+        }
+        const me = await memberOf(tgId);
+        const myName = String((me as any)?.first_name || cq.from?.first_name || 'Друг').trim().split(/\s+/)[0];
+        if (data.startsWith('bdw_')) {
+          await setSession(tgId, 'bd_wish', { heroId });
+          await tg('answerCallbackQuery', { callback_query_id: cq.id });
+          await tg('sendMessage', { chat_id: chatId, text: '✍️ Напиши пожелание одним сообщением — я положу его в открытку от клуба.' });
+          return res.status(200).json({ ok: true });
+        }
+        const PRESETS: Record<string, string> = { '1': 'С днём рождения! 🎉', '2': 'Расти и кайфуй — до встречи на ближайшем событии 🔥' };
+        const how = await saveBirthdayWish(heroId, tgId, myName, PRESETS[parts[1]] || PRESETS['1']);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: how === 'sent' ? 'Передал! 🎂' : 'Положил в открытку 🎂' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        return res.status(200).json({ ok: true });
+      }
+
       /**
        * qgo_/qno_<eventId> — решение организатора по событию «состоится при N»,
-       * когда к дедлайну кворум не набрался (вопрос шлёт scripts/quorum.mts).
+       * когда к дедлайну кворум не набрался (вопрос шлёт scripts/pulse.mts).
        * Логика дублирует api/_lib/quorum.ts → cancelQuorum НАМЕРЕННО: общий
        * api/_lib/ Vercel в рантайме вебхука не видит (см. шапку файла).
        */
@@ -10482,6 +10530,21 @@ export default async function handler(req: any, res: any) {
           }
           await tg('sendMessage', { chat_id: msg.chat.id, text: '🙏 Передал организатору. Спасибо, что помогаешь делать выезды лучше!' });
           return res.status(200).json({ ok: true });
+        }
+        if (sess && sess.state === 'bd_wish') {
+          if (MENU_BTNS.has(text)) {
+            await clearSession(msg.from.id);
+          } else {
+            const heroId = Number(sess.context?.heroId) || 0;
+            const me = await memberOf(msg.from.id);
+            const myName = String((me as any)?.first_name || msg.from.first_name || 'Друг').trim().split(/\s+/)[0];
+            await clearSession(msg.from.id);
+            if (heroId && String(text).trim()) {
+              const how = await saveBirthdayWish(heroId, msg.from.id, myName, String(text).trim());
+              await tg('sendMessage', { chat_id: chatId, text: how === 'sent' ? '🎂 Передал имениннику!' : '🎂 Положил в открытку — вечером её получит именинник.' });
+            }
+            return res.status(200).json({ ok: true });
+          }
         }
         if (sess && sess.state === 'set_birthday') {
           if (MENU_BTNS.has(text)) {

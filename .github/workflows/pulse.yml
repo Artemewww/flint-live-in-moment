@@ -1,9 +1,9 @@
-name: Кворум событий
+name: Пульс клуба
 
-# «Состоится при N» (баня от 10 человек): прогресс, «позови друга», последний
-# призыв, решение к дедлайну. Логика — api/_lib/quorum.ts, запуск —
-# scripts/quorum/run.mts. Раз в час: дедлайн «за 4 часа до старта» суточный
-# крон Vercel не поймает. Событий с кворумом нет — прогон занимает секунды.
+# Раз в час, scripts/pulse.mts:
+#   • «состоится при N» (баня от 10 человек) — api/_lib/quorum.ts;
+#   • дни рождения: 10:00 именной баннер, 20:00 «открытка от клуба» — api/_lib/birthday.ts.
+# Суточный крон Vercel не поймает ни дедлайн «за 4 часа», ни 10:00/20:00.
 
 on:
   schedule:
@@ -16,11 +16,11 @@ on:
         default: ''
 
 concurrency:
-  group: quorum
+  group: pulse
   cancel-in-progress: false
 
 jobs:
-  quorum:
+  pulse:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,11 +30,12 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - name: Кворум
+      - name: Пульс
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           if [ -z "$SUPABASE_URL" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then echo "нет секретов — пропускаю"; exit 0; fi
-          if [ -n "${{ inputs.event_id }}" ]; then npx -y tsx scripts/quorum/run.mts --event "${{ inputs.event_id }}"; else npx -y tsx scripts/quorum/run.mts; fi
+          if [ -n "${{ inputs.event_id }}" ]; then npx -y tsx scripts/pulse.mts --event "${{ inputs.event_id }}"; else npx -y tsx scripts/pulse.mts; fi
