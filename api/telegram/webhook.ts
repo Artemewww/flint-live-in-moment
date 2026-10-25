@@ -5115,6 +5115,47 @@ export default async function handler(req: any, res: any) {
         return res.status(200).json({ ok: true });
       }
 
+      /**
+       * qgo_/qno_<eventId> — решение организатора по событию «состоится при N»,
+       * когда к дедлайну кворум не набрался (вопрос шлёт scripts/quorum.mts).
+       * Логика дублирует api/_lib/quorum.ts → cancelQuorum НАМЕРЕННО: общий
+       * api/_lib/ Vercel в рантайме вебхука не видит (см. шапку файла).
+       */
+      if (/^q(go|no)_/.test(data)) {
+        const go = data.startsWith('qgo_');
+        const evIdQ = data.slice(4);
+        if (!(await isOrganizer(tgId))) {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решает организатор' });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: stRow } = await supabase.from('app_config').select('value').eq('key', `quorum:${evIdQ}`).maybeSingle();
+        const st = (() => { try { const v = (stRow as any)?.value; return typeof v === 'string' ? JSON.parse(v) : (v || {}); } catch { return {}; } })();
+        if (st.stage === 'held' || st.stage === 'cancelled') {
+          await tg('answerCallbackQuery', { callback_query_id: cq.id, text: st.stage === 'held' ? 'Уже решено: проводим' : 'Уже отменено' });
+          return res.status(200).json({ ok: true });
+        }
+        const { data: evQ } = await supabase.from('events').select('id,title,logistics').eq('id', evIdQ).maybeSingle();
+        const { data: regsQ } = await supabase.from('registrations').select('telegram_id,guest_count')
+          .eq('event_id', evIdQ).not('status', 'in', '("cancelled","declined")');
+        const idsQ = Array.from(new Set((regsQ || []).map((r: any) => Number(r.telegram_id)).filter((x: number) => x > 0)));
+        const totalQ = (regsQ || []).reduce((n: number, r: any) => n + 1 + Math.max(0, Math.min(5, Number(r.guest_count) || 0)), 0);
+        const minQ = Number((evQ as any)?.logistics?.quorum?.min) || 0;
+        const nameQ = esc(String((evQ as any)?.title || 'Событие').split(':')[0].trim());
+        await supabase.from('app_config').upsert({ key: `quorum:${evIdQ}`, value: JSON.stringify({ stage: go ? 'held' : 'cancelled', updated_at: new Date().toISOString() }) }, { onConflict: 'key' });
+        for (const id of idsQ) {
+          await tg('sendMessage', { chat_id: id, parse_mode: 'HTML', text: go
+            ? `🔥 <b>${nameQ}</b> — проводим. Нас ${totalQ}: камерно, зато все свои. До встречи!`
+            : `😕 <b>${nameQ}</b> в этот раз не собралась: нас ${totalQ} из ${minQ} нужных.\n\nТы ничего не теряешь — оплаты не было. Новую дату пришлю первым, и ты будешь в списке одним тапом.` });
+          await new Promise((r) => setTimeout(r, 40));
+        }
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: go ? 'Проводим ✅' : 'Отменили' });
+        try { await tg('editMessageReplyMarkup', { chat_id: chatId, message_id: msgId, reply_markup: { inline_keyboard: [] } }); } catch { /* no-op */ }
+        await tg('sendMessage', { chat_id: chatId, parse_mode: 'HTML', text: go
+          ? `✅ Проводим с ${totalQ}. Участникам написал — подтверди площадке.`
+          : `❌ Отменили. Участникам (${idsQ.length}) написал — осталось предупредить площадку.` });
+        return res.status(200).json({ ok: true });
+      }
+
       /** rr_<fire|ok|meh>_<eventId> — оценка выезда из итоговой рассылки. */
       if (/^rr_(fire|ok|meh)_/.test(data)) {
         const [, rate, ...rest] = data.split('_');

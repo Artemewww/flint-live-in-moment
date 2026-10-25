@@ -20,6 +20,8 @@ import { getEventGuide } from '../eventGuide';
 import { LogisticsPanel } from './LogisticsPanel';
 import { EventRules } from './EventRules';
 import ChallengeProgress from './ChallengeProgress';
+import QuorumStatus from './QuorumStatus';
+import { quorumInfo } from '../quorum';
 import ChallengeStories from './ChallengeStories';
 
 /**
@@ -915,6 +917,11 @@ export default function EventDetailModal({
                 <Tag className="w-4 h-4 text-brand shrink-0" />
                 <DynamicPrice event={event} />
               </div>
+
+              {/* «Состоится при N» — на всю ширину: это главный повод записаться сейчас */}
+              {quorumInfo(event) && (
+                <div className="col-span-2"><QuorumStatus event={event} /></div>
+              )}
 
               <div className="bg-white/5 border border-white/5 rounded-2xl p-4 flex gap-3 items-start">
                 <Users className="w-5 h-5 text-brand shrink-0" />

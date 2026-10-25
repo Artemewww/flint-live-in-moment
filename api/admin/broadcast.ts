@@ -353,6 +353,24 @@ export default async function handler(req: any, res: any) {
       const left = Math.max(0, cap - (taken || 0));
       seatsLine = left > 0 ? `⏳ Свободно <b>${left} из ${cap}</b> — места за теми, кто ответит первым\n` : `⏳ Места закончились — ответь «Буду», поставлю в лист ожидания\n`;
     }
+    /**
+     * «Состоится при N» и «что входит» — прямо в приглашение. Внутрь карточки
+     * заходят не все: человек решает по тексту сообщения. Логика кворума —
+     * копия api/_lib/quorum.ts (общий _lib Vercel в рантайме не видит).
+     */
+    let quorumLine = '';
+    const qmin = Math.round(Number(event?.logistics?.quorum?.min) || 0);
+    if (qmin >= 2) {
+      const { data: qr } = await supabase.from('registrations').select('guest_count').eq('event_id', eventId).not('status', 'in', '("cancelled","declined")');
+      const have = (qr || []).reduce((n: number, r: any) => n + 1 + Math.max(0, Math.min(5, Number(r.guest_count) || 0)), 0);
+      quorumLine = have >= qmin
+        ? `✅ Нас уже ${have} — минимум ${qmin} набран, всё состоится\n`
+        : `🔥 Состоится при ${qmin}: нас ${have}, ещё ${qmin - have} — и всё в силе. Гости «+1» тоже в счёт\n`;
+    }
+    const incRaw = event?.logistics?.included;
+    const inc: string[] = (Array.isArray(incRaw) ? incRaw : String(incRaw || '').split(/\n|;|•/))
+      .map((x: any) => String(x?.text ?? x).trim().replace(/^[-–•✓✅\s]+/, '')).filter(Boolean);
+    const includedBlock = inc.length ? `\n<b>Что входит:</b>\n${inc.slice(0, 4).map((x) => `✓ ${esc(x)}`).join('\n')}\n` : '';
     // Пригласительные или своя цена для клуба — цена живёт в строке ценности.
     const isClubInvite = !!valueLineOf(event);
     const inviteText =
@@ -361,7 +379,8 @@ export default async function handler(req: any, res: any) {
       (event?.location ? `📍 ${esc(event.location)}\n` : '') +
       // Для пригласительных цена — в строке ценности, иначе она дублировалась.
       (isClubInvite ? valueLineOf(event) : `💰 ${esc(costLineOf(event))}\n`) +
-      seatsLine +
+      (quorumLine || seatsLine) +
+      includedBlock +
       `\nНажми «✅ Буду» — и ты в списке, ничего заполнять не нужно 👇`;
 
     /**
@@ -427,7 +446,7 @@ export default async function handler(req: any, res: any) {
           : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
             (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
             (event?.location ? `📍 ${esc(event.location)}\n` : '') +
-            `\n💰 ${esc(costLineOf(event))}\n` +
+            `\n💰 ${esc(costLineOf(event))}\n` + quorumLine + includedBlock +
             `\n🔗 <a href="https://t.me/campsflint_bot?start=event_${eventId}">Открыть в боте</a>`);
 
     const site = `https://${req.headers['x-forwarded-host'] || req.headers.host || 'flint-live-in-moment.vercel.app'}`;

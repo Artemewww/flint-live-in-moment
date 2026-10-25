@@ -6,6 +6,8 @@ import {
 } from 'lucide-react';
 import { CommunityEvent, EventType, getEventPhase, getToday, isEventOver, prettyPlace, priceTag } from '../types';
 import { lazyWithRetry } from '../lazy';
+import QuorumStatus from './QuorumStatus';
+import { quorumInfo } from '../quorum';
 import HomeScreenButton from './HomeScreenButton';
 
 /**
@@ -264,7 +266,8 @@ export default function EventFeed({
                       })() : null}
 
                       {/* Места: шкала заполнения. Пустую шкалу у «без лимита» не рисуем. */}
-                      {!isPast && !event.isChallenge && event.maxParticipants ? (() => {
+                      {!isPast && quorumInfo(event) ? <QuorumStatus event={event} /> : null}
+                      {!isPast && !event.isChallenge && event.maxParticipants && !quorumInfo(event) ? (() => {
                         const max = event.maxParticipants;
                         const taken = Math.min(max, event.participantsCount || 0);
                         const left = Math.max(0, max - taken);

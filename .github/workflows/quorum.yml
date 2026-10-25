@@ -1,0 +1,40 @@
+name: Кворум событий
+
+# «Состоится при N» (баня от 10 человек): прогресс, «позови друга», последний
+# призыв, решение к дедлайну. Логика — api/_lib/quorum.ts, запуск —
+# scripts/quorum/run.mts. Раз в час: дедлайн «за 4 часа до старта» суточный
+# крон Vercel не поймает. Событий с кворумом нет — прогон занимает секунды.
+
+on:
+  schedule:
+    - cron: '7 * * * *'
+  workflow_dispatch:
+    inputs:
+      event_id:
+        description: 'ID события (пусто — все ближайшие)'
+        required: false
+        default: ''
+
+concurrency:
+  group: quorum
+  cancel-in-progress: false
+
+jobs:
+  quorum:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Кворум
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then echo "нет секретов — пропускаю"; exit 0; fi
+          if [ -n "${{ inputs.event_id }}" ]; then npx -y tsx scripts/quorum/run.mts --event "${{ inputs.event_id }}"; else npx -y tsx scripts/quorum/run.mts; fi

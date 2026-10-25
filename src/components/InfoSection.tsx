@@ -4,6 +4,8 @@ import { Calendar, MapPin, Users, Heart, ArrowUpRight, Compass, ShieldCheck, Inf
 import { CommunityEvent, getYandexMapsUrl, isEventOver } from '../types';
 import { getVectorIconByKey } from './VectorIcons';
 import { AvatarStack } from './Avatar';
+import QuorumStatus from './QuorumStatus';
+import { eventStartMs, quorumInfo } from '../quorum';
 import { getToday } from '../data';
 
 interface InfoSectionProps {
@@ -73,8 +75,8 @@ export default function InfoSection({
 
   // Определяем время ближайшего события для обратного отсчёта
   const isToday = featuredEvent.date === today;
-  const eventDateStr = `${featuredEvent.date}T19:00:00`;
-  const targetDate = new Date(eventDateStr).getTime();
+  // Старт — по времени события и по Минску (раньше: всегда 19:00 по часам телефона).
+  const targetDate = eventStartMs(featuredEvent);
   const [timeLeft, setTimeLeft] = useState({ days: '00', hours: '00', minutes: '00', seconds: '00' });
   /**
    * Событие уже началось — таймер до старта бессмысленен.
@@ -214,10 +216,12 @@ export default function InfoSection({
             </span>
           </div>
 
-          {/* Wide progress slider indicator */}
-          <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-            <div className="h-full bg-brand" style={{ width: `${percentFull}%` }} />
-          </div>
+          {/* «Состоится при N» — статус сбора вместо безликой полосы мест */}
+          {quorumInfo(featuredEvent) ? <QuorumStatus event={featuredEvent} /> : (
+            <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div className="h-full bg-brand" style={{ width: `${percentFull}%` }} />
+            </div>
+          )}
 
           {/* Action trigger row */}
           <div className="flex flex-row gap-2 pt-2 items-stretch">

@@ -5585,6 +5585,44 @@ function EditEventModal({ event, onClose, onSave }: {
             </div>
           </div>
 
+          {/* «Состоится при N»: баня от 10 человек, площадке ответ за 4 ч.
+              Бот сам ведёт сбор и решение — scripts/quorum (api/_lib/quorum.ts). */}
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
+            <div className="text-[10px] text-white/40 uppercase font-mono">Минимальный состав (необязательно)</div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[10px] text-white/40 font-mono block mb-1">Состоится, если наберётся</label>
+                <input
+                  type="number" min={0} placeholder="напр. 10"
+                  value={formData.logistics?.quorum?.min || ''}
+                  onChange={(e) => {
+                    const min = parseInt(e.target.value) || 0;
+                    const lg = { ...(formData.logistics || {}) };
+                    if (min >= 2) lg.quorum = { hours: 4, ...(lg.quorum || {}), min }; else delete lg.quorum;
+                    setFormData({ ...formData, logistics: lg });
+                  }}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] text-white/40 font-mono block mb-1">Решение за, ч до старта</label>
+                <input
+                  type="number" min={1} max={72} placeholder="4"
+                  disabled={!formData.logistics?.quorum}
+                  value={formData.logistics?.quorum?.hours || ''}
+                  onChange={(e) => setFormData({ ...formData, logistics: { ...(formData.logistics || {}), quorum: { ...(formData.logistics?.quorum || {}), hours: parseInt(e.target.value) || 4 } } })}
+                  className="w-full bg-white/5 border border-white/10 rounded-xl p-3 text-white disabled:opacity-40"
+                />
+              </div>
+            </div>
+            {formData.logistics?.quorum && (
+              <p className="text-[10px] text-white/45 leading-snug">
+                Бот покажет «N из {formData.logistics.quorum.min}» в карточке и рассылках, позовёт друзей на полпути,
+                сделает последний призыв за 3 ч до решения, а к дедлайну сам сообщит «состоится» или спросит тебя «проводим или отменяем».
+              </p>
+            )}
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div>
               <label className="text-[10px] text-white/40 uppercase font-mono block mb-1">
