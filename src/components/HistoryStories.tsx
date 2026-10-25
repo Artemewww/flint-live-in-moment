@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useState } from 'react';
-import { motion } from 'motion/react';
-import { X, Play, Calendar, MapPin, Images, Clapperboard, ChevronLeft, ChevronRight, Users } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { X, Play, MapPin, Clapperboard, ChevronLeft, ChevronRight, Users, Images, Film } from 'lucide-react';
 import { getInitData } from '../telegram';
 import { LEGACY_VIDEOS } from '../history';
 import Avatar from './Avatar';
+
+interface Media { id: string; src: string; poster?: string }
 
 interface HistoryItem {
   id: string;
@@ -13,7 +15,8 @@ interface HistoryItem {
   dateLabel: string;
   location: string;
   cover: string;
-  videos: { id: string; src: string; poster: string }[];
+  recap?: Media | null;
+  videos: Media[];
   photos: { id: string; src: string }[];
   attendees: { telegramId: number; name: string; avatar: string }[];
   videoCount: number;
@@ -27,43 +30,78 @@ interface HistoryStoriesProps {
   initialId?: string | null;
 }
 
-/** Сколько фото показываем в просмотре: дальше всё равно лента вниз. */
-const MAX_PHOTOS = 24;
+/** Плиток кадров за раз: дальше — «Показать ещё», чтобы не грузить сотню файлов. */
+const PAGE = 30;
+
+type Slide = { id: string; kind: 'video' | 'photo'; src: string; poster?: string; recap?: boolean };
+
+/** Видеоотчёт события: смонтированный ролик или старый файл из /public. */
+function recapOf(h: HistoryItem): Media | null {
+  if (h.recap) return h.recap;
+  const l = LEGACY_VIDEOS[h.id];
+  return l ? { id: `legacy-${h.id}`, src: l.src, poster: l.poster } : null;
+}
+
+/** Кандидаты в лицо открытки по порядку: афиша события (её рисуют под
+ *  событие) → кадр из клипа → фото → кадр отчёта (на нём уже впечатано
+ *  название, поверх нашей подписи выходит дважды). Не загрузился — следующий. */
+function facesOf(h: HistoryItem): string[] {
+  const afisha = h.cover && h.cover.includes('action=image') ? h.cover : '';
+  return [afisha, h.videos[0]?.poster, h.photos[0]?.src, h.cover, recapOf(h)?.poster]
+    .filter((x, i, a): x is string => !!x && a.indexOf(x) === i);
+}
+
+/** <img>, который при ошибке берёт следующий источник, а не рисует пустоту. */
+function Fallback({ srcs, className, lazy }: { srcs: string[]; className: string; lazy?: boolean }) {
+  const [i, setI] = useState(0);
+  if (i >= srcs.length) return null;
+  return <img src={srcs[i]} alt="" loading={lazy ? 'lazy' : undefined} decoding="async" onError={() => setI(i + 1)} className={className} />;
+}
+
+const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
+/** «24 октября» / «9–11 октября»: в date_label лежит афишная строка со временем
+ *  и днём недели — для архива это шум. */
+function when(h: HistoryItem): string {
+  const [y, m, d] = String(h.date || '').split('-').map(Number);
+  if (!m || !d) return h.dateLabel || '';
+  const [, m2, d2] = String(h.dateEnd || '').split('-').map(Number);
+  const yr = y !== new Date().getFullYear() ? ` ${y}` : '';
+  if (d2 && (d2 !== d || m2 !== m)) return m2 === m ? `${d}–${d2} ${MONTHS[m - 1]}${yr}` : `${d} ${MONTHS[m - 1]} — ${d2} ${MONTHS[m2 - 1]}${yr}`;
+  return `${d} ${MONTHS[m - 1]}${yr}`;
+}
+/** Место — до первой запятой: «Китайский бассейн», а не адрес со входом. */
+const place = (h: HistoryItem) => String(h.location || '').split(',')[0].trim();
+
+const plural = (n: number, one: string, few: string, many: string) =>
+  n % 10 === 1 && n % 100 !== 11 ? one : n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 10 || n % 100 >= 20) ? few : many;
 
 /**
- * «История сообщества» — АРХИВ ПРОШЕДШИХ МЕРОПРИЯТИЙ ИЗ БАЗЫ.
+ * «ИСТОРИЯ СООБЩЕСТВА» — архив прошедших событий из базы.
  *
- * Раньше страница рисовалась по жёсткому списку из src/history.ts — пять
- * пунктов, вписанных руками. Отсюда три жалобы, которые тут и закрываются:
- *
- *  1) ПОРЯДОК. Список не был отсортирован вообще, и «Live in Moment» с датой
- *     «2026» стоял последним. Теперь сортировку делает сервер (date DESC):
- *     самое свежее всегда сверху, и руками его не сдвинуть.
- *  2) СОСТАВ. Bison Race с его галереей в хардкоде не было вообще. Теперь
- *     архив = прошедшие события из той же таблицы, что и афиша: залил
- *     галерею — кадры появились здесь сами.
- *  3) ОБЛОЖКИ. У видео не было превью (тёмный квадрат), а фото были и вовсе
- *     недоступны. Сервер отдаёт готовый poster у каждого ролика, внизу —
- *     сетка фотографий события.
- *
- * Плюс «кружки» — аватарки тех, кто был: событие видно не строкой, а составом.
+ * Как устроено (и почему так):
+ *  • СПИСОК. Свежее событие — крупной карточкой, его видеоотчёт крутится без
+ *    звука: так человек сразу видит, что здесь «живое», а не архив-таблица.
+ *    Остальные — сеткой вертикальных открыток (весь контент у нас вертикальный).
+ *    Раньше все открытки были затемнены до 70 % и выглядели серыми — теперь
+ *    градиент только под текстом.
+ *  • СОБЫТИЕ. Видеоотчёт — главный экран, кадры участников — сеткой под ним.
+ *    Стрелки «следующее событие» переехали из-под пальца в шапку.
+ *  • ПРОСМОТР. Всё листается одним свайпом: отчёт, клипы, фото — со счётчиком.
+ *  • БИТЫЕ ФАЙЛЫ. Плитка, которая не загрузилась, исчезает, а не висит пустым
+ *    квадратом; события без единого кадра сервер в архив не отдаёт.
  */
 export default function HistoryStories({ onClose, initialId }: HistoryStoriesProps) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
-  // Индекс активного события: null — сетка, иначе полный просмотр.
   const [active, setActive] = useState<number | null>(null);
-  /**
-   * Три уровня внутри события. Раньше их было два, и ролик открывался сразу на
-   * весь экран: он перекрывал шапку, а крестик выкидывал сразу на главную.
-   * Теперь сетка → видео → крупный кадр, и назад идём по одному шагу.
-   */
-  const [view, setView] = useState<'grid' | 'video' | 'photos'>('grid');
-  const [videoIdx, setVideoIdx] = useState(0);
-  const [photoIdx, setPhotoIdx] = useState<number | null>(null);
-  // Подробный список «кто был» — по тапу на кружки.
+  const [slide, setSlide] = useState<number | null>(null);
   const [peopleOpen, setPeopleOpen] = useState(false);
+  const [shown, setShown] = useState(PAGE);
+  // Файлы, которые не загрузились, — прячем (id → true).
+  const [broken, setBroken] = useState<Record<string, true>>({});
+  const scroller = useRef<HTMLDivElement>(null);
+  const hide = useCallback((id: string) => setBroken((b) => (b[id] ? b : { ...b, [id]: true })), []);
 
   useEffect(() => {
     let alive = true;
@@ -85,399 +123,356 @@ export default function HistoryStories({ onClose, initialId }: HistoryStoriesPro
 
   const item = active !== null ? items[active] ?? null : null;
 
-  const go = useCallback((dir: 1 | -1) => {
-    if (active === null) return;
-    setActive((active + dir + items.length) % items.length);
-    setView('grid');
-    setVideoIdx(0);
-    setPhotoIdx(null);
-    setPeopleOpen(false);
-  }, [active, items.length]);
+  /** Всё, что листается в просмотре: отчёт → клипы → фото, без битых. */
+  const slides: Slide[] = useMemo(() => {
+    if (!item) return [];
+    const r = recapOf(item);
+    return [
+      ...(r ? [{ id: r.id, kind: 'video' as const, src: r.src, poster: r.poster, recap: true }] : []),
+      ...item.videos.map((v) => ({ id: v.id, kind: 'video' as const, src: v.src, poster: v.poster })),
+      ...item.photos.map((p) => ({ id: p.id, kind: 'photo' as const, src: p.src })),
+    ].filter((s) => !broken[s.id]);
+  }, [item, broken]);
+  const tiles = slides.filter((s) => !s.recap);
+  const recap = slides.find((s) => s.recap) || null;
 
-  /** Назад к сетке открыток (из просмотра события). */
-  const back = () => { setActive(null); setPhotoIdx(null); setVideoIdx(0); setView('grid'); setPeopleOpen(false); };
-
-  /**
-   * Крестик идёт НА ОДИН ШАГ НАЗАД, а не сразу закрывает архив.
-   * Раньше любой тап по нему отправлял человека на главную: зашёл в историю,
-   * посмотрел ролик, закрыл — и пропала сетка открыток вместе с позицией.
-   */
+  const open = (i: number) => {
+    setActive(i); setSlide(null); setPeopleOpen(false); setShown(PAGE);
+    scroller.current?.scrollTo({ top: 0 });
+  };
+  const go = (dir: 1 | -1) => { if (active !== null && items.length > 1) open((active + dir + items.length) % items.length); };
+  /** Крестик — на один шаг назад: кадр → событие → список → закрыть. */
   const stepBack = () => {
-    if (photoIdx !== null) { setPhotoIdx(null); return; }
-    if (peopleOpen) { setPeopleOpen(false); return; }
-    if (view !== 'grid') { setView('grid'); return; }
-    if (active !== null) { back(); return; }
+    if (slide !== null) return setSlide(null);
+    if (peopleOpen) return setPeopleOpen(false);
+    if (active !== null) return setActive(null);
     onClose();
   };
-  const video = item?.videos[videoIdx] || null;
-
-  /**
-   * Видео для просмотра с учётом роликов, лежащих файлом в /public (LEGACY_VIDEOS).
-   * Сервер их не знает — они никогда не заливались в галерею события. Подставляем
-   * только если у события нет своего видео, чтобы свежая загрузка не дублировалась.
-   */
-  const legacy = item && item.videos.length === 0 ? LEGACY_VIDEOS[item.id] : undefined;
-  const activeVideo = video || (legacy ? { id: `legacy-${item!.id}`, src: legacy.src, poster: legacy.poster } : null);
-  const videoTotal = item ? item.videos.length + (legacy ? 1 : 0) : 0;
+  const totalShots = items.reduce((n, h) => n + h.videoCount + h.photoCount, 0);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center md:p-4" id="history-stories-root">
-      {/* Backdrop */}
+      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} onClick={onClose}
+        className="absolute inset-0 bg-black/90 backdrop-blur-md" />
       <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={{ opacity: 0 }}
-        onClick={active === null ? onClose : back}
-        className="absolute inset-0 bg-black/90 backdrop-blur-md"
-      />
-
-      {/* Modal */}
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 30 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 30 }}
-        transition={{ type: 'spring', damping: 25, stiffness: 350 }}
-        className="bg-[#121212] md:rounded-3xl w-full max-w-lg shadow-2xl relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-auto md:max-h-[90vh] text-white overflow-hidden"
+        initial={{ opacity: 0, y: 30 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ type: 'spring', damping: 26, stiffness: 320 }}
+        className="bg-[#0d0d0d] md:rounded-3xl w-full max-w-lg relative z-10 md:border md:border-white/10 flex flex-col h-[100dvh] md:h-[90vh] text-white overflow-hidden"
       >
-        {/* Close Button — идёт НА ОДИН ШАГ НАЗАД, а не закрывает архив */}
-        <button
-          onClick={stepBack}
-          className="absolute top-4 right-4 z-40 p-2.5 rounded-full bg-black/70 backdrop-blur border border-white/15 hover:border-brand/40 text-white/80 hover:text-[#E6FD3A] hover:scale-105 transition-all outline-none cursor-pointer"
-          aria-label="Назад"
-        >
-          <X className="w-5 h-5" />
-        </button>
-
-        {/* ===== Полный просмотр события ===== */}
-        {item && (
-          <div className="absolute inset-0 z-20 flex flex-col" id="history-viewer">
-            {/**
-             * ШАПКА СВЕРХУ. Раньше блок «были · N» висел внизу и перекрывал и
-             * ролик, и фотографии. Теперь он наверху, над названием, на
-             * полупрозрачной подложке-градиенте: белый текст на светлых кадрах
-             * видео иначе не читался.
-             */}
-            <div className="absolute inset-x-0 top-0 z-30 bg-gradient-to-b from-black/95 via-black/65 to-transparent px-4 pt-4 pb-10">
-              <div className="pr-11 min-w-0">
-                <div className="text-white font-display font-black text-sm uppercase tracking-tight leading-tight truncate">
-                  {item.title}
-                </div>
-                {item.dateLabel && <div className="text-brand/80 text-[10px] font-mono mt-0.5">{item.dateLabel}</div>}
+        {/* ── Шапка: назад, название, листание событий ── */}
+        <div className="shrink-0 flex items-center gap-2 px-3 pt-3 pb-2 bg-[#0d0d0d]/95 backdrop-blur z-30 border-b border-white/5">
+          <button onClick={stepBack} aria-label={active === null ? 'Закрыть' : 'Назад'}
+            className="p-2 rounded-full bg-white/[0.06] text-white/80 hover:text-brand transition-colors cursor-pointer">
+            {active === null ? <X className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+          </button>
+          <div className="min-w-0 flex-1">
+            {item ? (
+              <>
+                <div className="font-display font-black text-[13px] uppercase tracking-tight truncate">{item.title}</div>
+                <div className="text-[10px] font-mono text-brand/80 truncate">{when(item)}</div>
+              </>
+            ) : (
+              <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-widest text-brand">
+                <Clapperboard className="w-4 h-4" /> История сообщества
               </div>
-              {item.attendees.length > 0 && (
-                <button
-                  onClick={() => setPeopleOpen(true)}
-                  className="mt-2.5 flex items-center gap-2 max-w-full cursor-pointer group"
-                  aria-label={`Кто был на событии — ${item.peopleCount}`}
-                >
-                  <span className="flex -space-x-2 shrink-0">
-                    {item.attendees.slice(0, 6).map((a) => (
-                      <span key={a.telegramId} className="w-6 h-6 rounded-full ring-2 ring-black/70 overflow-hidden bg-white/10 flex items-center justify-center">
-                        {a.avatar
-                          ? <img src={a.avatar} alt="" loading="lazy" className="w-full h-full object-cover" />
-                          : <Avatar name={a.name} size={24} />}
-                      </span>
-                    ))}
-                    {item.attendees.length > 6 && (
-                      <span className="w-6 h-6 rounded-full ring-2 ring-black/70 bg-black/85 text-white/80 text-[8px] font-mono flex items-center justify-center">
-                        +{item.attendees.length - 6}
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-[10px] font-mono text-white/60 group-hover:text-brand transition-colors truncate">
-                    Были · {item.peopleCount} — состав
-                  </span>
-                </button>
+            )}
+          </div>
+          {item && items.length > 1 && (
+            <div className="flex gap-1">
+              <button onClick={() => go(-1)} aria-label="Предыдущее событие"
+                className="p-2 rounded-full bg-white/[0.06] text-white/70 hover:text-white cursor-pointer"><ChevronLeft className="w-4 h-4" /></button>
+              <button onClick={() => go(1)} aria-label="Следующее событие"
+                className="p-2 rounded-full bg-white/[0.06] text-white/70 hover:text-white cursor-pointer"><ChevronRight className="w-4 h-4" /></button>
+            </div>
+          )}
+        </div>
+
+        <div ref={scroller} className="flex-1 overflow-y-auto scrollbar-none">
+          {/* ════════ СПИСОК СОБЫТИЙ ════════ */}
+          {!item && (
+            <div className="p-4 space-y-5">
+              <div>
+                <h2 className="font-display font-black text-[28px] leading-none uppercase tracking-tight">Как это было</h2>
+                {items.length > 0 && (
+                  <p className="text-white/50 text-xs mt-2">
+                    {items.length} {plural(items.length, 'событие', 'события', 'событий')} · {totalShots} {plural(totalShots, 'кадр', 'кадра', 'кадров')} от участников
+                  </p>
+                )}
+              </div>
+
+              {loading && <Skeleton />}
+              {!loading && failed && <Empty text="Не удалось загрузить историю. Открой приложение ещё раз." />}
+              {!loading && !failed && items.length === 0 && <Empty text="Здесь появятся прошедшие события клуба — с роликами и кадрами участников." />}
+
+              {items[0] && <Featured h={items[0]} onOpen={() => open(0)} />}
+
+              {items.length > 1 && (
+                <div className="grid grid-cols-2 gap-3">
+                  {items.slice(1).map((h, k) => (
+                    <Card key={h.id} h={h} onOpen={() => open(k + 1)} />
+                  ))}
+                </div>
               )}
             </div>
+          )}
 
-            {/* ===== Сетка: видео и фото плитками (как лента Instagram) =====
-                 Раньше ролик открывался сразу на весь экран и занимал всю
-                 высоту, не оставляя места ни шапке, ни выбору. Теперь сначала
-                 сетка: тап по ролику — и он открывается. */}
-            {view === 'grid' && (
-              <div className="absolute inset-0 overflow-y-auto scrollbar-none bg-black px-3 pt-32 pb-20">
-                {videoTotal > 0 && (
-                  <>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-2">Видео</div>
-                    <div className="grid grid-cols-2 gap-2 mb-6">
-                      {(legacy && item.videos.length === 0
-                        ? [{ id: `legacy-${item.id}`, src: legacy.src, poster: legacy.poster }]
-                        : item.videos
-                      ).map((v) => (
-                        <button
-                          key={v.id}
-                          onClick={() => { setVideoIdx(Math.max(0, item.videos.findIndex((x) => x.id === v.id))); setView('video'); }}
-                          className="relative aspect-[3/4] rounded-xl overflow-hidden bg-white/5 cursor-pointer group"
-                          aria-label="Открыть видео"
-                        >
-                          {v.poster
-                            ? <img src={v.poster} alt="" loading="lazy" className="w-full h-full object-cover opacity-90 group-hover:opacity-100 transition-opacity" />
-                            : <video src={v.src} muted playsInline preload="metadata" className="w-full h-full object-cover" />}
-                          <span className="absolute inset-0 flex items-center justify-center">
-                            <span className="w-11 h-11 rounded-full bg-black/60 backdrop-blur border border-white/20 flex items-center justify-center text-white">
-                              <Play className="w-5 h-5 ml-0.5" />
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
-                {item.photos.length > 0 && (
-                  <>
-                    <div className="text-[10px] font-mono uppercase tracking-widest text-white/40 mb-2">Фото</div>
-                    <div className="grid grid-cols-3 gap-1.5">
-                      {item.photos.slice(0, MAX_PHOTOS).map((p, i) => (
-                        <button
-                          key={p.id}
-                          onClick={() => setPhotoIdx(i)}
-                          className="aspect-square overflow-hidden rounded-lg bg-white/5 cursor-pointer"
-                          aria-label={`Фото ${i + 1}`}
-                        >
-                          <img src={p.src} alt="" loading="lazy" className="w-full h-full object-cover" />
-                        </button>
-                      ))}
-                    </div>
-                    {item.photos.length > MAX_PHOTOS && (
-                      <div className="text-center text-white/40 text-[10px] font-mono mt-3">
-                        показаны первые {MAX_PHOTOS} из {item.photos.length}
-                      </div>
-                    )}
-                  </>
-                )}
-                {videoTotal === 0 && item.photos.length === 0 && item.cover && (
-                  <img src={item.cover} alt={item.title} className="w-full rounded-xl opacity-80" />
-                )}
-                {videoTotal === 0 && item.photos.length === 0 && !item.cover && (
-                  <div className="text-white/40 text-xs font-mono py-10 text-center">
-                    По этому событию пока нет ни видео, ни фотографий.
-                  </div>
+          {/* ════════ СОБЫТИЕ ════════ */}
+          {item && (
+            <div className="pb-8">
+              {/* Главный экран: видеоотчёт, иначе лучший кадр */}
+              {recap ? (
+                <button onClick={() => setSlide(0)} aria-label="Смотреть видеоотчёт"
+                  className="relative block w-full aspect-[4/5] bg-black overflow-hidden cursor-pointer group">
+                  {/* Беззвучное превью вместо статичной обложки: на обложке отчёта
+                      впечатан титр, и кнопка по центру закрывала его. */}
+                  <video key={recap.id} src={recap.src} poster={recap.poster} muted loop playsInline autoPlay preload="metadata"
+                    className="absolute inset-0 w-full h-full object-cover" />
+                  <div className="absolute inset-x-0 bottom-0 h-1/3 bg-gradient-to-t from-black/80 to-transparent" />
+                  <span className="absolute right-4 bottom-4 w-14 h-14 rounded-full bg-brand text-black flex items-center justify-center shadow-[0_0_40px_rgba(230,253,58,0.35)] group-hover:scale-105 transition-transform">
+                    <Play className="w-6 h-6 ml-0.5" fill="currentColor" />
+                  </span>
+                  <span className="absolute left-4 bottom-4 inline-flex items-center gap-1.5 rounded-full bg-brand px-3 py-1.5 text-[10px] font-mono font-bold tracking-widest text-black">
+                    <Film className="w-3.5 h-3.5" /> СМОТРЕТЬ ОТЧЁТ СО ЗВУКОМ
+                  </span>
+                </button>
+              ) : (tiles[0] || item.cover) ? (
+                <div className="relative w-full aspect-[4/5] bg-black overflow-hidden">
+                  <img src={tiles[0]?.poster || tiles[0]?.src || item.cover} alt="" className="absolute inset-0 w-full h-full object-cover" />
+                </div>
+              ) : null}
+
+              <div className="px-4 pt-4 space-y-3">
+                <div className="flex flex-wrap items-center gap-2 text-[10px] font-mono">
+                  {item.location && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-2.5 py-1 text-white/70">
+                      <MapPin className="w-3 h-3" /> {place(item)}
+                    </span>
+                  )}
+                  {tiles.length > 0 && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-2.5 py-1 text-white/70">
+                      <Images className="w-3 h-3" /> {tiles.length} {plural(tiles.length, 'кадр', 'кадра', 'кадров')}
+                    </span>
+                  )}
+                </div>
+                {item.attendees.length > 0 && (
+                  <button onClick={() => setPeopleOpen(true)} className="flex items-center gap-2.5 cursor-pointer group"
+                    aria-label={`Кто был на событии — ${item.peopleCount}`}>
+                    <Faces list={item.attendees} max={7} size={30} />
+                    <span className="text-xs text-white/60 group-hover:text-brand transition-colors">
+                      {item.peopleCount} {plural(item.peopleCount, 'человек был', 'человека были', 'человек были')}
+                    </span>
+                  </button>
                 )}
               </div>
-            )}
 
-            {view === 'video' && activeVideo && (
-              <>
-                <motion.video
-                  key={activeVideo.id}
-                  src={activeVideo.src}
-                  poster={activeVideo.poster}
-                  playsInline
-                  controls
-                  autoPlay
-                  preload="metadata"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="absolute inset-0 w-full h-full object-contain bg-black"
-                />
-                {/* Кнопка «назад к сетке» прямо на ролике */}
-                <button
-                  onClick={() => setView('grid')}
-                  className="absolute bottom-5 left-1/2 -translate-x-1/2 z-30 px-4 py-2 rounded-full bg-black/70 backdrop-blur border border-white/15 text-white/85 text-[10px] font-mono font-bold tracking-widest hover:bg-white/15 transition-colors cursor-pointer"
-                >
-                  ← К СЕТКЕ
-                </button>
-              </>
-            )}
+              {tiles.length > 0 && (
+                <div className="px-3 pt-5">
+                  <div className="px-1 mb-2 text-[10px] font-mono uppercase tracking-widest text-white/40">Кадры участников</div>
+                  <div className="grid grid-cols-3 gap-1">
+                    {tiles.slice(0, shown).map((t) => {
+                      const idx = slides.indexOf(t);
+                      return (
+                        <button key={t.id} onClick={() => setSlide(idx)} aria-label={t.kind === 'video' ? 'Открыть видео' : 'Открыть фото'}
+                          className="relative aspect-[3/4] overflow-hidden rounded-md bg-white/[0.04] cursor-pointer">
+                          <img src={t.kind === 'video' ? (t.poster || '') : t.src} alt="" loading="lazy" decoding="async"
+                            onError={() => hide(t.id)} className="w-full h-full object-cover" />
+                          {t.kind === 'video' && (
+                            <span className="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/55 backdrop-blur flex items-center justify-center">
+                              <Play className="w-3 h-3 ml-px" fill="currentColor" />
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {tiles.length > shown && (
+                    <button onClick={() => setShown((n) => n + PAGE)}
+                      className="mt-3 w-full rounded-xl bg-white/[0.06] py-3 text-[11px] font-mono tracking-widest text-white/70 hover:text-brand cursor-pointer">
+                      ПОКАЗАТЬ ЕЩЁ · {tiles.length - shown}
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
 
-            {/* Ни видео, ни фото — показываем обложку, а не пустоту */}
-            {view === 'grid' && videoTotal === 0 && item.photos.length === 0 && item.cover && (
-              <img src={item.cover} alt={item.title} className="absolute inset-0 w-full h-full object-cover opacity-60" />
-            )}
-
-            {/* Крупный кадр поверх всего */}
-            {photoIdx !== null && item.photos[photoIdx] && (
-              <button
-                onClick={() => setPhotoIdx(null)}
-                className="absolute inset-0 z-40 flex items-center justify-center bg-black/95 cursor-pointer"
-                aria-label="Закрыть кадр"
-              >
-                <img src={item.photos[photoIdx].src} alt="" className="max-w-full max-h-full object-contain" />
-              </button>
-            )}
-
-            {/* Ни видео, ни фото — показываем обложку, а не пустоту */}
-            {view === 'grid' && videoTotal === 0 && item.photos.length === 0 && item.cover && (
-              <img src={item.cover} alt={item.title} className="absolute inset-0 w-full h-full object-cover opacity-60" />
-            )}
-
-            {/* Подробный состав — по тапу на кружки в шапке */}
-            {peopleOpen && (
-              <button
-                onClick={() => setPeopleOpen(false)}
-                className="absolute inset-0 z-40 bg-black/80 backdrop-blur-sm cursor-pointer"
-                aria-label="Закрыть состав"
-              />
-            )}
-            {peopleOpen && (
-              <div className="absolute inset-x-3 bottom-3 z-50 bg-[#171717] border border-white/12 rounded-2xl p-4 max-h-[60vh] overflow-y-auto scrollbar-none">
+        {/* ── Состав ── */}
+        <AnimatePresence>
+          {item && peopleOpen && (
+            <>
+              <motion.button initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                onClick={() => setPeopleOpen(false)} className="absolute inset-0 z-40 bg-black/70 cursor-pointer" aria-label="Закрыть состав" />
+              <motion.div initial={{ y: 40, opacity: 0 }} animate={{ y: 0, opacity: 1 }} exit={{ y: 40, opacity: 0 }}
+                className="absolute inset-x-3 bottom-3 z-50 bg-[#171717] border border-white/10 rounded-2xl p-4 max-h-[60vh] overflow-y-auto scrollbar-none">
                 <div className="flex items-center justify-between mb-3">
                   <div className="text-[10px] font-mono uppercase tracking-widest text-brand flex items-center gap-1.5">
                     <Users className="w-3.5 h-3.5" /> Были · {item.peopleCount}
                   </div>
-                  <button
-                    onClick={() => setPeopleOpen(false)}
-                    className="p-1.5 rounded-full bg-white/10 text-white/70 hover:text-white transition-colors cursor-pointer"
-                    aria-label="Закрыть"
-                  >
+                  <button onClick={() => setPeopleOpen(false)} className="p-1.5 rounded-full bg-white/10 text-white/70 cursor-pointer" aria-label="Закрыть">
                     <X className="w-4 h-4" />
                   </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {item.attendees.map((a) => (
                     <div key={a.telegramId} className="flex items-center gap-2 bg-white/5 rounded-xl px-2 py-1.5 min-w-0">
-                      {a.avatar
-                        ? <img src={a.avatar} alt="" loading="lazy" className="w-8 h-8 rounded-full object-cover shrink-0" />
-                        : <Avatar name={a.name} size={32} />}
+                      <Face a={a} size={32} />
                       <span className="text-xs text-white/85 truncate">{a.name || 'Участник'}</span>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              </motion.div>
+            </>
+          )}
+        </AnimatePresence>
 
-            {/* Стрелки навигации по событиям */}
-            {items.length > 1 && (
-              <>
-                <button
-                  onClick={() => go(-1)}
-                  className="absolute bottom-6 left-4 z-30 p-2.5 rounded-full bg-black/70 backdrop-blur border border-white/15 text-white cursor-pointer hover:bg-black/90"
-                  aria-label="Предыдущее событие"
-                >
-                  <ChevronLeft className="w-5 h-5" />
-                </button>
-                <button
-                  onClick={() => go(1)}
-                  className="absolute bottom-6 right-4 z-30 p-2.5 rounded-full bg-black/70 backdrop-blur border border-white/15 text-white cursor-pointer hover:bg-black/90"
-                  aria-label="Следующее событие"
-                >
-                  <ChevronRight className="w-5 h-5" />
-                </button>
-              </>
-            )}
-          </div>
+        {/* ── Просмотр: всё листается свайпом ── */}
+        {item && slide !== null && slides[slide] && (
+          <Viewer slides={slides} index={slide} onIndex={setSlide} onClose={() => setSlide(null)} onBroken={hide} />
         )}
-
-        {/* ===== Сетка открыток ===== */}
-        {active === null && (
-          <div className="overflow-y-auto w-full flex-grow scrollbar-none p-4 sm:p-5 space-y-4">
-            {/* Header */}
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Clapperboard className="w-5 h-5 text-brand" />
-                <span className="text-[10px] uppercase font-mono font-bold tracking-widest text-brand">
-                  История сообщества
-                </span>
-              </div>
-              <h2 className="font-display font-black text-2xl uppercase tracking-tight text-white">
-                Наши мероприятия
-              </h2>
-              <p className="text-white/60 text-xs font-sans">
-                Прошедшие события FLINT — выбери, что посмотреть.
-              </p>
-            </div>
-
-            {/* Открытки: свежайшая первой — порядок гарантирует сервер (date DESC) */}
-            <div className="grid grid-cols-1 gap-4">
-              {loading && (
-                <div className="text-white/50 text-xs font-mono py-8 text-center">Загружаю историю…</div>
-              )}
-              {!loading && failed && (
-                <div className="text-white/50 text-xs font-mono py-8 text-center">
-                  Не удалось загрузить архив. Открой приложение ещё раз.
-                </div>
-              )}
-              {!loading && !failed && items.length === 0 && (
-                <div className="text-white/50 text-xs font-mono py-8 text-center">
-                  Здесь появятся прошедшие события клуба.
-                </div>
-              )}
-              {items.map((h, i) => (
-                <button
-                  key={h.id}
-                  onClick={() => { setActive(i); setView('grid'); setVideoIdx(0); setPhotoIdx(null); setPeopleOpen(false); }}
-                  className="relative w-full h-44 sm:h-52 overflow-hidden rounded-2xl text-left transition-transform cursor-pointer group shadow-lg shadow-black/40"
-                  aria-label={`Открыть ${h.title}`}
-                >
-                  {h.cover ? (
-                    <img
-                      src={h.cover}
-                      alt={h.title}
-                      loading="lazy"
-                      className="absolute inset-0 w-full h-full object-cover brightness-[0.7] group-hover:brightness-[0.85] transition-all"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 bg-gradient-to-br from-white/10 to-black/60" />
-                  )}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent" />
-
-                  {/* Кнопка play — только если ролик действительно есть */}
-                  {(h.videoCount > 0 || LEGACY_VIDEOS[h.id]) && (
-                    <span className="absolute inset-0 flex items-center justify-center">
-                      <span className="w-16 h-16 flex items-center justify-center rounded-full bg-brand text-black shadow-xl shadow-brand/30 transition-transform group-hover:scale-110">
-                        <Play className="w-7 h-7 ml-0.5" />
-                      </span>
-                    </span>
-                  )}
-
-                  {/* Счётчики: что вообще можно посмотреть у этого события */}
-                  <span className="absolute top-3 right-3 flex flex-col items-end gap-1.5">
-                    {h.videoCount > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[10px] font-mono text-white/85 border border-white/10">
-                        <Clapperboard className="w-3.5 h-3.5" /> {h.videoCount}
-                      </span>
-                    )}
-                    {h.photoCount > 0 && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-black/70 px-2 py-1 text-[10px] font-mono text-white/85 border border-white/10">
-                        <Images className="w-3.5 h-3.5" /> {h.photoCount}
-                      </span>
-                    )}
-                  </span>
-
-                  {/* Кружки тех, кто был — состав виден прямо на открытке */}
-                  {h.attendees.length > 0 && (
-                    <span className="absolute top-3 left-3 flex -space-x-2">
-                      {h.attendees.slice(0, 5).map((a) => (
-                        <span key={a.telegramId} className="w-7 h-7 rounded-full ring-2 ring-black/60 overflow-hidden bg-white/10 flex items-center justify-center">
-                          {a.avatar
-                            ? <img src={a.avatar} alt="" loading="lazy" className="w-full h-full object-cover" />
-                            : <Avatar name={a.name} size={28} />}
-                        </span>
-                      ))}
-                      {h.attendees.length > 5 && (
-                        <span className="w-7 h-7 rounded-full ring-2 ring-black/60 bg-black/80 text-white/80 text-[9px] font-mono flex items-center justify-center">
-                          +{h.attendees.length - 5}
-                        </span>
-                      )}
-                    </span>
-                  )}
-
-                  {/* Подпись: дата, место, название */}
-                  <div className="absolute bottom-0 left-0 right-0 p-3">
-                    {h.dateLabel && (
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] font-mono">
-                        <span className="inline-flex items-center gap-1 text-brand">
-                          <Calendar className="w-3 h-3" /> {h.dateLabel}
-                        </span>
-                        {h.location && (
-                          <span className="inline-flex items-center gap-1 text-white/60">
-                            <MapPin className="w-3 h-3" /> {h.location}
-                          </span>
-                        )}
-                      </div>
-                    )}
-                    <div className="font-display font-black text-lg uppercase tracking-tight text-white leading-tight mt-0.5">
-                      {h.title}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
       </motion.div>
     </div>
   );
+}
+
+/** Свежее событие — крупно, с беззвучным превью отчёта. */
+function Featured({ h, onOpen }: { h: HistoryItem; onOpen: () => void }) {
+  const r = recapOf(h);
+  const [videoOk, setVideoOk] = useState(true);
+  return (
+    <button onClick={onOpen} aria-label={`Открыть ${h.title}`}
+      className="relative block w-full aspect-[4/5] rounded-3xl overflow-hidden bg-white/[0.04] text-left cursor-pointer group">
+      <Fallback srcs={facesOf(h)} className="absolute inset-0 w-full h-full object-cover" />
+      {r && videoOk && (
+        <video src={r.src} poster={r.poster} muted loop playsInline autoPlay preload="metadata"
+          onError={() => setVideoOk(false)} className="absolute inset-0 w-full h-full object-cover" />
+      )}
+      <div className="absolute inset-x-0 bottom-0 h-3/5 bg-gradient-to-t from-black via-black/60 to-transparent" />
+      <span className="absolute top-3 left-3 rounded-full bg-brand px-2.5 py-1 text-[9px] font-mono font-bold tracking-widest text-black">СВЕЖЕЕ</span>
+      <div className="absolute inset-x-0 bottom-0 p-4">
+        <div className="text-[10px] font-mono text-brand">{when(h)}{place(h) ? ` · ${place(h)}` : ''}</div>
+        <div className="font-display font-black text-2xl uppercase tracking-tight leading-[1.05] mt-1 line-clamp-2">{h.title}</div>
+        <div className="mt-3 flex items-center justify-between gap-3">
+          {h.attendees.length > 0 ? <Faces list={h.attendees} max={5} size={26} /> : <span />}
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-white text-black px-3.5 py-2 text-[11px] font-bold group-hover:bg-brand transition-colors">
+            <Play className="w-3.5 h-3.5" fill="currentColor" /> {r ? 'Смотреть отчёт' : 'Смотреть кадры'}
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/** Открытка события в сетке. */
+function Card({ h, onOpen }: { h: HistoryItem; onOpen: () => void }) {
+  const shots = h.videoCount + h.photoCount;
+  return (
+    <button onClick={onOpen} aria-label={`Открыть ${h.title}`}
+      className="relative block aspect-[3/4] rounded-2xl overflow-hidden text-left cursor-pointer group bg-gradient-to-br from-[#1d1f12] to-[#0d0d0d]">
+      <Fallback srcs={facesOf(h)} lazy className="absolute inset-0 w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500" />
+      <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-t from-black/90 via-black/40 to-transparent" />
+      {recapOf(h) && (
+        <span className="absolute top-2 left-2 w-7 h-7 rounded-full bg-brand text-black flex items-center justify-center">
+          <Play className="w-3.5 h-3.5 ml-px" fill="currentColor" />
+        </span>
+      )}
+      <div className="absolute inset-x-0 bottom-0 p-2.5">
+        <div className="font-display font-black text-[13px] uppercase tracking-tight leading-tight line-clamp-2">{h.title}</div>
+        <div className="mt-1 flex items-center gap-1.5 text-[9px] font-mono text-white/55">
+          <span className="text-brand/90">{when(h)}</span>
+          {shots > 0 && <span>· {shots} {plural(shots, 'кадр', 'кадра', 'кадров')}</span>}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/** Полноэкранный просмотр: свайп/тап по краям, счётчик, крестик. */
+function Viewer({ slides, index, onIndex, onClose, onBroken }: {
+  slides: Slide[]; index: number; onIndex: (i: number) => void; onClose: () => void; onBroken: (id: string) => void;
+}) {
+  const s = slides[index];
+  const x0 = useRef<number | null>(null);
+  const step = (d: 1 | -1) => { const n = index + d; if (n >= 0 && n < slides.length) onIndex(n); };
+  useEffect(() => {
+    const k = (e: KeyboardEvent) => { if (e.key === 'ArrowRight') step(1); if (e.key === 'ArrowLeft') step(-1); if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  });
+  return (
+    <div className="absolute inset-0 z-50 bg-black flex flex-col"
+      onPointerDown={(e) => {
+        // снизу — полоса перемотки видео: её протяжка не должна листать кадры
+        const r = e.currentTarget.getBoundingClientRect();
+        x0.current = e.clientY > r.bottom - 90 ? null : e.clientX;
+      }}
+      onPointerUp={(e) => {
+        if (x0.current === null) return;
+        const dx = e.clientX - x0.current; x0.current = null;
+        if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+      }}>
+      <div className="absolute top-0 inset-x-0 z-10 flex items-center justify-between p-3 bg-gradient-to-b from-black/70 to-transparent">
+        <span className="text-[11px] font-mono text-white/70">
+          {s.recap ? 'ВИДЕООТЧЁТ' : `${index + 1 - (slides[0]?.recap ? 1 : 0)} / ${slides.length - (slides[0]?.recap ? 1 : 0)}`}
+        </span>
+        <button onClick={onClose} aria-label="Закрыть" className="p-2 rounded-full bg-white/10 text-white cursor-pointer"><X className="w-5 h-5" /></button>
+      </div>
+      <div className="flex-1 flex items-center justify-center">
+        {s.kind === 'video' ? (
+          <video key={s.id} src={s.src} poster={s.poster} controls autoPlay playsInline preload="auto"
+            onError={() => { onBroken(s.id); }} className="max-w-full max-h-full w-full h-full object-contain" />
+        ) : (
+          <img key={s.id} src={s.src} alt="" onError={() => onBroken(s.id)} className="max-w-full max-h-full object-contain select-none" draggable={false} />
+        )}
+      </div>
+      {index > 0 && (
+        <button onClick={() => step(-1)} aria-label="Предыдущий кадр"
+          className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/10 text-white cursor-pointer"><ChevronLeft className="w-5 h-5" /></button>
+      )}
+      {index < slides.length - 1 && (
+        <button onClick={() => step(1)} aria-label="Следующий кадр"
+          className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-white/10 text-white cursor-pointer"><ChevronRight className="w-5 h-5" /></button>
+      )}
+    </div>
+  );
+}
+
+function Face({ a, size }: { a: { name: string; avatar: string }; size: number }) {
+  const [ok, setOk] = useState(!!a.avatar);
+  return ok
+    ? <img src={a.avatar} alt="" loading="lazy" onError={() => setOk(false)} style={{ width: size, height: size }} className="rounded-full object-cover shrink-0" />
+    : <Avatar name={a.name} size={size} />;
+}
+
+function Faces({ list, max, size }: { list: HistoryItem['attendees']; max: number; size: number }) {
+  return (
+    <span className="flex -space-x-2 shrink-0">
+      {list.slice(0, max).map((a) => (
+        <span key={a.telegramId} className="rounded-full ring-2 ring-black overflow-hidden bg-white/10 flex">
+          <Face a={a} size={size} />
+        </span>
+      ))}
+      {list.length > max && (
+        <span style={{ width: size, height: size }} className="rounded-full ring-2 ring-black bg-[#222] text-white/80 text-[9px] font-mono flex items-center justify-center">
+          +{list.length - max}
+        </span>
+      )}
+    </span>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div className="space-y-3 animate-pulse">
+      <div className="aspect-[4/5] rounded-3xl bg-white/[0.05]" />
+      <div className="grid grid-cols-2 gap-3">
+        <div className="aspect-[3/4] rounded-2xl bg-white/[0.05]" />
+        <div className="aspect-[3/4] rounded-2xl bg-white/[0.05]" />
+      </div>
+    </div>
+  );
+}
+
+function Empty({ text }: { text: string }) {
+  return <div className="text-white/45 text-xs text-center py-14 px-6">{text}</div>;
 }

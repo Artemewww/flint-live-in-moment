@@ -576,8 +576,13 @@ async function handleArchive(req: any, res: any) {
   }
   const regName = new Map<number, string>((regs || []).map((r: any) => [Number(r.telegram_id), r.name || '']));
 
+  // Файлы, которые Telegram не отдаёт (>20 МБ и т. п.), — см. scripts/media/migrate.mts.
+  // Показывать их — значит рисовать мёртвые плитки.
+  const { data: lostRow } = await supabase.from('app_config').select('value').eq('key', 'media_lost').maybeSingle();
+  const lost = new Set<string>((() => { try { return JSON.parse((lostRow as any)?.value || '[]').map(String); } catch { return []; } })());
   const mediaByEvent = new Map<string, any[]>();
   for (const m of media || []) {
+    if (lost.has(String(m.id))) continue;
     const list = mediaByEvent.get(m.event_id) || [];
     list.push(m);
     mediaByEvent.set(m.event_id, list);
@@ -586,7 +591,14 @@ async function handleArchive(req: any, res: any) {
   const items = past.map((e: any) => {
     const evId: string = e.id;
     const list = mediaByEvent.get(evId) || [];
-    const videos = list.filter((m) => m.media_type === 'video').map((m) => ({
+    // Смонтированный видеоотчёт (recaps/…) — отдельно: в интерфейсе он главный
+    // экран события, а не одна из плиток среди клипов участников.
+    // Клипы участников после переноса лежат в media/…; всё остальное видео в
+    // бакете — смонтированное клубом (recaps/… или ручные ролики вроде Ислочи).
+    const isRecap = (m: any) => m.media_type === 'video' && isStorageMedia(String(m.file_id)) && !String(m.file_id).includes('/event-images/media/');
+    const recapRow = list.filter(isRecap).sort((a: any, b: any) => String(b.file_id).localeCompare(String(a.file_id)))[0];
+    const recap = recapRow ? { id: recapRow.id, src: mediaUrl(recapRow.file_id, evId), poster: mediaPosterUrl(recapRow.file_id, evId) } : null;
+    const videos = list.filter((m) => m.media_type === 'video' && !isRecap(m)).map((m) => ({
       id: m.id, src: mediaUrl(m.file_id, evId), poster: mediaPosterUrl(m.file_id, evId),
     }));
     const photos = list.filter((m) => m.media_type !== 'video').map((m) => ({ id: m.id, src: mediaUrl(m.file_id, evId) }));
@@ -617,6 +629,7 @@ async function handleArchive(req: any, res: any) {
       // Обложка карточки: афиша события. Если её нет — первый кадр из галереи,
       // иначе карточка выходит пустой серой прямоугольником.
       cover: e.image ? `/api/events?action=image&id=${encodeURIComponent(evId)}` : (photos[0]?.src || videos[0]?.poster || ''),
+      recap,
       videos,
       photos,
       attendees,
@@ -627,8 +640,11 @@ async function handleArchive(req: any, res: any) {
     };
   });
 
+  // Событие без единого кадра в «Истории» — пустая открытка, которую не
+  // посмотреть. Архив — это про то, что можно увидеть.
+  const visible = items.filter((it: any) => it.recap || it.videoCount > 0 || it.photoCount > 0);
   res.setHeader('Cache-Control', 'no-store');
-  return res.status(200).json({ items });
+  return res.status(200).json({ items: visible });
 }
 
 /**
@@ -690,6 +706,9 @@ function mediaSigValid(fid: string, sig: string): boolean {
  *  `escapeHtml` (HTML-контекст).
  */
 function mediaUrl(fid: string, eventId?: string): string {
+  // Файл уже на CDN нашего публичного бакета — отдаём ссылку напрямую: без
+  // лишнего захода в функцию и редиректа на каждую плитку галереи.
+  if (isStorageMedia(fid)) return fid;
   if (!fid || !BOT_TOKEN) return '';
   const owner = eventId ? `&id=${encodeURIComponent(eventId)}` : '';
   return `/api/events?action=media&fid=${encodeURIComponent(fid)}&s=${mediaSig(fid)}${owner}`;
@@ -743,6 +762,7 @@ function storagePosterOf(fid: string): string {
   return fid.replace(/\.[a-z0-9]{2,5}$/i, '') + '.jpg';
 }
 function mediaPosterUrl(fid: string, eventId?: string): string {
+  if (isStorageMedia(fid)) return storagePosterOf(fid);
   if (!fid || !BOT_TOKEN) return '';
   const owner = eventId ? `&id=${encodeURIComponent(eventId)}` : '';
   return `/api/events?action=media_poster&fid=${encodeURIComponent(fid)}&s=${mediaSig(fid)}${owner}`;

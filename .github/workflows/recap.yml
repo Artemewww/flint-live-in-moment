@@ -48,6 +48,16 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg > /dev/null
           python3 -m pip install --quiet Pillow
 
+      # Кадры от бота — в Storage: обложки, 720p, Range (иначе в «Истории» пустые плитки).
+      - name: Перенос медиа в Storage
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$TELEGRAM_BOT_TOKEN" ]; then exit 0; fi
+          npx -y tsx scripts/media/migrate.mts || echo "перенос медиа не удался — не блокирует итоги"
+
       - name: Оркестратор
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
