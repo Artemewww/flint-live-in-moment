@@ -16,7 +16,16 @@ const args = process.argv.slice(2);
 const DRY = args.includes('--dry-run');
 const ONLY = args.includes('--only') ? args[args.indexOf('--only') + 1] : '';
 const EVENT = args.includes('--event') ? args[args.indexOf('--event') + 1] : '';
-const db = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+const real = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
+/**
+ * В --dry-run состояние (app_config) не пишем: иначе «посмотреть, кому уйдёт»
+ * помечало именинника поздравленным, и настоящий прогон уже ничего не слал.
+ */
+const db: any = DRY
+  ? new Proxy(real, { get: (t: any, k) => k === 'from'
+      ? (tbl: string) => { const q = t.from(tbl); return tbl === 'app_config' || tbl === 'members' ? Object.assign(Object.create(q), { upsert: async () => ({}), update: () => ({ eq: async () => ({}) }) }) : q; }
+      : t[k] })
+  : real;
 const BOT = process.env.TELEGRAM_BOT_TOKEN || '';
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 

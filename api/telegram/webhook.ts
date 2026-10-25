@@ -1047,7 +1047,8 @@ function fmtBirthday(v: any): string {
   const m = String(v || '').match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (!m) return String(v || '');
   const MON = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
-  return `${Number(m[3])} ${MON[Number(m[2]) - 1] || ''} ${m[1]}`;
+  // 0000 — год неизвестен (организатор внёс только день и месяц).
+  return `${Number(m[3])} ${MON[Number(m[2]) - 1] || ''}${m[1] === '0000' ? '' : ` ${m[1]}`}`;
 }
 
 function eventCard(ev: any): string {
