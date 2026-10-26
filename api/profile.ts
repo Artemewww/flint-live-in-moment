@@ -391,7 +391,15 @@ export default async function handler(req: any, res: any) {
     };
     const lim = typeof action === 'string' ? LIMITED[action] : undefined;
     if (lim) {
-      const rl = await rateLimit(lim.scope, clientIp(req), lim.max, lim.windowMs);
+      // Ключ лимита — Telegram-аккаунт из initData, а не IP: у мобильных
+      // операторов один IP на сотни людей (CGNAT), и чужие заявки съедали лимит.
+      // Подделанный id ничего не даёт: initData дальше проверяется подписью.
+      let limitKey = clientIp(req);
+      try {
+        const uid = JSON.parse(new URLSearchParams(String(body?.initData || '')).get('user') || '{}')?.id;
+        if (uid) limitKey = `tg:${uid}`;
+      } catch { /* нет initData — остаётся IP */ }
+      const rl = await rateLimit(lim.scope, limitKey, lim.max, lim.windowMs);
       if (!rl.allowed) {
         res.setHeader('Retry-After', String(rl.retryAfter));
         slog('warn', `rate limit: ${action}`, { ip: clientIp(req), retryAfter: rl.retryAfter });
@@ -1075,7 +1083,7 @@ export default async function handler(req: any, res: any) {
         const body2 = `💬 <b>Сообщение из профиля (сайт)</b>\nОт: ${escHtml(author)} (id ${user.id})\n\n<i>${escHtml(safeText.slice(0, 1500))}</i>`;
         const markup = { inline_keyboard: [[{ text: '✍️ Ответить', callback_data: `reply_${user.id}` }]] };
         const targets: (string | number)[] = [];
-        const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID;
+        const adminChatId = process.env.TELEGRAM_ADMIN_CHAT_ID || '-1003935660570'; // как в webhook.ts
         if (adminChatId) targets.push(adminChatId);
         try {
           const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
@@ -2299,6 +2307,20 @@ export default async function handler(req: any, res: any) {
           }
           if (!adminNotified) { adminNotifyErr = errs.join('; ') || 'sendMessage не ok'; slog('warn', 'apply admin-notify нигде не доставлено', errs); }
         }
+      }
+
+      // Заявителю — подтверждение в бот. Раньше его не было вовсе: человек
+      // отправлял анкету и не понимал, дошла ли она.
+      if (BOT_TOKEN) {
+        try {
+          await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              chat_id: telegramId, parse_mode: 'HTML',
+              text: `✅ <b>Заявка в FLINT получена</b>\n\nКостяк клуба посмотрит её в течение суток и ответит сюда. Пока можно заглянуть в афишу.`,
+            }),
+          });
+        } catch (e) { slog('warn', 'apply: подтверждение заявителю не ушло', (e as Error).message); }
       }
 
       // Авто-впуска больше нет: всегда «заявка на рассмотрении», костяк решит

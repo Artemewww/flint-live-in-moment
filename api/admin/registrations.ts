@@ -435,6 +435,8 @@ export default async function handler(req: any, res: any) {
         botActive: m.bot_active !== false,
         lastSeenAt: m.last_seen_at,
         createdAt: m.created_at,
+        // Когда подана заявка: анкета ставит отметки в prefs, created_at — это первое «Старт».
+        appliedAt: m.prefs?.rules_accepted?.at || m.prefs?.join_reason?.at || null,
         // Веб-заявки без Telegram имеют отрицательный хеш вместо id.
         realTelegram: Number(m.telegram_id) > 0,
         attendedCount: attendedBy.get(String(m.telegram_id)) || 0,
@@ -529,6 +531,67 @@ export default async function handler(req: any, res: any) {
     } catch (error) {
       return res.status(500).json({ error: (error as Error).message });
     }
+  }
+  // ─── Учёт вещей из админки: завести вещь, выдать человеку с датой, принять обратно ──
+  // «Отдал Анне манишку 20 октября» — записывается сразу (админ свидетель),
+  // дата может быть задним числом; человеку приходит короткое уведомление.
+  if (req.method === 'POST' && req.query?.action === 'asset_create') {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const name = String(body.name || '').trim().slice(0, 80);
+      if (name.length < 2) return res.status(400).json({ error: 'Нужно название вещи' });
+      const qty = Math.max(1, Math.min(500, Number(body.qty) || 1));
+      const id = 'ast-' + crypto.randomBytes(5).toString('hex');
+      const owner = String(body.ownerName || 'Клуб FLINT').trim().slice(0, 60);
+      const { error } = await supabase.from('club_assets').insert({
+        id, name, qty, category: String(body.category || 'прочее').slice(0, 30),
+        owner_name: owner, holder_name: owner, notes: body.notes ? String(body.notes).slice(0, 300) : null,
+      });
+      if (error) return res.status(500).json({ error: error.message });
+      return res.status(200).json({ ok: true, id });
+    } catch (error) { return res.status(500).json({ error: (error as Error).message }); }
+  }
+  if (req.method === 'POST' && (req.query?.action === 'asset_give' || req.query?.action === 'asset_return')) {
+    try {
+      const body = typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
+      const assetId = String(body.assetId || '');
+      const { data: asset } = await supabase.from('club_assets').select('name,owner_name,holder_name,holder_id').eq('id', assetId).maybeSingle();
+      if (!asset) return res.status(404).json({ error: 'Вещь не найдена' });
+      const day = /^\d{4}-\d{2}-\d{2}$/.test(String(body.at || '')) ? String(body.at) : new Date().toISOString().slice(0, 10);
+      const at = new Date(`${day}T12:00:00+03:00`);
+      if (at.getTime() > Date.now() + 864e5) return res.status(400).json({ error: 'Дата выдачи не может быть в будущем' });
+      const giving = req.query.action === 'asset_give';
+      let toId: number | null = null;
+      let toName: string;
+      if (giving) {
+        toId = Number(body.toId);
+        const { data: m } = await supabase.from('members').select('telegram_id,first_name,username').eq('telegram_id', toId).maybeSingle();
+        if (!m) return res.status(400).json({ error: 'Участник не найден' });
+        toName = (m as any).first_name || ('@' + (m as any).username);
+      } else {
+        toName = (asset as any).owner_name || 'Клуб FLINT';
+      }
+      await supabase.from('asset_handoffs').update({ note: 'cancelled' }).eq('asset_id', assetId).eq('note', 'pending');
+      await supabase.from('asset_handoffs').insert({
+        asset_id: assetId, at: at.toISOString(),
+        from_name: (asset as any).holder_name || null, from_id: (asset as any).holder_id || null,
+        to_id: toId, to_name: toName, note: giving ? 'admin_give' : 'admin_return',
+      });
+      const { error } = await supabase.from('club_assets').update({
+        holder_name: toName, holder_id: toId, taken_at: giving ? at.toISOString() : null, updated_at: new Date().toISOString(),
+      }).eq('id', assetId);
+      if (error) return res.status(500).json({ error: error.message });
+      if (giving && body.notify !== false && BOT_TOKEN && toId && toId > 0) {
+        const esc = (x: string) => String(x || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        const d = at.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: 'Europe/Minsk' });
+        await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: toId, parse_mode: 'HTML',
+            text: `🎒 За тобой записана вещь клуба: <b>${esc((asset as any).name)}</b> — с ${d}.\nБереги её и захвати, когда попросят 🙌` }),
+        }).catch(() => null);
+      }
+      return res.status(200).json({ ok: true, holder: toName });
+    } catch (error) { return res.status(500).json({ error: (error as Error).message }); }
   }
   // Правка инвентаря: держатель/владелец/заметка (+ таймстемп взятия при смене держателя).
   if (req.method === 'PATCH' && req.query?.action === 'asset') {
@@ -892,6 +955,20 @@ export default async function handler(req: any, res: any) {
 
       const { error } = await supabase.from('members').update(patch).eq('telegram_id', telegramId);
       if (error) return res.status(500).json({ error: error.message });
+      // Принят из админки — то же, что кнопка «Принять» в боте: кнопка приложения
+      // и поздравление. Раньше человек, принятый здесь, ничего не узнавал.
+      if (body.status === 'approved' && BOT_TOKEN && telegramId > 0) {
+        const site = process.env.SITE_URL || 'https://flint-live-in-moment.vercel.app';
+        const call = (method: string, payload: unknown) => fetch(`https://api.telegram.org/bot${BOT_TOKEN}/${method}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+        }).catch(() => null);
+        await call('setChatMenuButton', { chat_id: telegramId, menu_button: { type: 'web_app', text: 'Приложение', web_app: { url: site } } });
+        await call('sendMessage', {
+          chat_id: telegramId, parse_mode: 'HTML',
+          text: '🎉 <b>Тебя приняли в клуб!</b>\n\nАфиша, запись и логистика — в приложении.',
+          reply_markup: { inline_keyboard: [[{ text: 'Открыть приложение', web_app: { url: site } }]] },
+        });
+      }
       // Блокировка = полная изоляция: отменяем активные регистрации (иначе
       // рассылки/напоминания бьют по registrations и доходят до заблокированного)
       // и убираем кнопку афиши из его бота.

@@ -328,6 +328,19 @@ export default async function handler(req: any, res: any) {
   // Забаненных исключаем на слое отправки (защита-в-глубину для legacy).
   await loadBlockedIds();
 
+  // Прошедшие события закрываем сами: 27.10.2026 нашлось 10 событий с июля
+  // со статусом «open» — в них можно было записаться задним числом.
+  // Дата окончания (или начала) раньше сегодняшней по Минску → closed.
+  try {
+    const todayMinsk = new Date(Date.now() + 3 * 36e5).toISOString().slice(0, 10);
+    const { data: openEvs } = await supabase.from('events').select('id,date,date_end').eq('status', 'open');
+    const stale = (openEvs || []).filter((e: any) => String(e.date_end || e.date || '') < todayMinsk).map((e: any) => e.id);
+    if (stale.length) {
+      await supabase.from('events').update({ status: 'closed' }).in('id', stale);
+      (report as any).eventsAutoClosed = stale.length;
+    }
+  } catch (e) { report.errors.push(`autoclose: ${(e as Error).message}`); }
+
   // ══════════════════════════════════════════════════════════════════════════
   // БЛОК A: Автонапоминания (каждые 15 мин, не ждём суточного крона)
   // ══════════════════════════════════════════════════════════════════════════
@@ -1442,7 +1455,21 @@ export default async function handler(req: any, res: any) {
           // ban + unban = «вывести, но не запретить вход»: kick в Bot API
           // без разбана — это пожизненный бан в группе.
           const out = await tg('banChatMember', { chat_id: chatId, user_id: uid, revoke_messages: false });
-          if (out?.ok) await tg('unbanChatMember', { chat_id: chatId, user_id: uid, only_if_banned: true });
+          // Не вышло вывести — регистрацию не отменяем: человек остаётся в
+          // списке и уйдёт на следующем прогоне, а организатор узнаёт причину.
+          if (!out?.ok) {
+            if (ev.deputy_id) {
+              await send(Number(ev.deputy_id),
+                `⚠️ Не смог вывести ${escH(name)} из чата челленджа: ${escH(String(out?.description || 'нет прав'))}. ` +
+                `Дай боту право «Блокировка пользователей» или убери вручную.`);
+            }
+            continue;
+          }
+          const unban = await tg('unbanChatMember', { chat_id: chatId, user_id: uid, only_if_banned: true });
+          if (!unban?.ok && ev.deputy_id) {
+            await send(Number(ev.deputy_id),
+              `⚠️ ${escH(name)} выведен, но разбан не прошёл: ${escH(String(unban?.description || 'ошибка'))}. Разбань вручную, иначе он не вернётся.`);
+          }
           await tg('sendPhoto', {
             chat_id: chatId, parse_mode: 'HTML',
             photo: `${SITE}/assets/challenge/out.png`,
@@ -1457,13 +1484,6 @@ export default async function handler(req: any, res: any) {
             .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancel_reason: 'challenge_inactive' })
             .eq('id', p.id);
           await supabase.from('app_config').delete().eq('key', warnKey);
-          // Бот без права ограничивать участников молча не справится —
-          // организатор должен узнать, что человека надо убрать руками.
-          if (!out?.ok && ev.deputy_id) {
-            await send(Number(ev.deputy_id),
-              `⚠️ Не смог вывести ${escH(name)} из чата челленджа: ${escH(String(out?.description || 'нет прав'))}. ` +
-              `Дай боту право «Блокировка пользователей» или убери вручную.`);
-          }
           (report as any).challengeOut = ((report as any).challengeOut || 0) + 1;
         }
       }

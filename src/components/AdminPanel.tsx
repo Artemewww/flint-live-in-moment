@@ -5,6 +5,8 @@ import ClubTickets from './ClubTickets';
 import EventExtrasEditor from './EventExtrasEditor';
 import { makeShareCard } from '../shareCard';
 import Avatar, { AvatarStack } from './Avatar';
+import AdminApplications from './AdminApplications';
+import { AssetAdd, AssetGive } from './AssetControls';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Lock, Unlock, Calendar, Users, Edit, Save, Plus, Trash2, Eye, EyeOff, Shield, RefreshCw, Send, CheckCircle, XCircle, BarChart3, MapPin, Package, DollarSign, Clock, FileText, Settings, Bell, UserCheck, UserX, ClipboardList, Truck, Flag, Play, Pause, X as XIcon, RotateCcw, ShoppingCart, ChefHat, Tent, Navigation, Award, MessageSquare, Star, UserPlus, UserMinus, Globe, Key, CheckSquare, Square, Activity, Heart, Vote, BookOpen, ChevronLeft, CornerUpLeft, Archive, Mail } from 'lucide-react';
@@ -1642,6 +1644,12 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
    * просил видеть картину «в реальном времени»: ключ может сгореть прямо во
    * время выезда, и статичный снимок при открытии тут бесполезен.
    */
+  // Заявки в клуб видны сразу при входе в админку — блоком над событиями.
+  useEffect(() => {
+    if (isAuthenticated && !audience) loadAudience();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated]);
+
   useEffect(() => {
     if (!showAiKey) return;
     const t = setInterval(() => { loadKeyStatus(); }, 30000);
@@ -1834,15 +1842,56 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
   }, [actionMsg]);
 
 
-  const createFromTemplate = (template: EventTemplate) => {
+  /**
+   * «Повторить» — событие в один клик из уже проведённого: всё содержимое
+   * (программа, логистика, цена, место, качества, картинка) копируется, дата —
+   * ближайший такой же день недели. Создаётся черновиком (закрыт для записи):
+   * проверить дату и открыть набор — одно действие в редакторе.
+   */
+  const repeatEvent = async (src: CommunityEvent) => {
+    const [y, m, d] = String(src.date || '').split('-').map(Number);
+    const orig = y ? new Date(y, m - 1, d) : new Date();
+    const next = new Date(); next.setHours(0, 0, 0, 0); next.setDate(next.getDate() + 1);
+    while (next.getDay() !== orig.getDay()) next.setDate(next.getDate() + 1);
+    const ymd = (t: Date) => `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+    let dateEnd: string | undefined;
+    if (src.dateEnd && src.dateEnd !== src.date) {
+      const [y2, m2, d2] = src.dateEnd.split('-').map(Number);
+      const span = Math.round((new Date(y2, m2 - 1, d2).getTime() - orig.getTime()) / 864e5);
+      const end = new Date(next); end.setDate(end.getDate() + span); dateEnd = ymd(end);
+    }
+    const date = ymd(next);
+    if (!window.confirm(`Повторить «${src.title}» на ${next.toLocaleDateString('ru-RU', { weekday: 'short', day: 'numeric', month: 'long' })}? Создастся черновик — дату можно поменять.`)) return;
+    const copy: CommunityEvent = {
+      ...src,
+      id: `event-${Date.now()}`,
+      date, dateEnd,
+      dateLabel: buildDateLabel(date, dateEnd || '', src.time),
+      participantsCount: 0,
+      participants: undefined,
+      myRide: undefined,
+      myBuddies: undefined,
+      telegramImage: undefined,
+      status: 'locked',
+      statusReason: undefined,
+      decisionDeadline: undefined,
+    };
+    const err = await onAddEvent(copy);
+    if (err) { setActionMsg({ ok: false, text: `Не повторилось: ${err}` }); return; }
+    setActionMsg({ ok: true, text: `Черновик «${src.title}» на ${date} создан — проверь и открой набор` });
+  };
+
+  const createFromTemplate = async (template: EventTemplate) => {
     if (!templateOrganizer) { setActionMsg({ ok: false, text: 'Сначала выбери организатора — без него событие не создаётся' }); return; }
+    if (!templateDate) { setActionMsg({ ok: false, text: 'Сначала выбери дату события' }); return; }
     const date = templateDate;
-    // Многодневный шаблон → dateEnd от выбранной даты.
+    // Многодневный шаблон → dateEnd от выбранной даты. Считаем по локальному
+    // календарю: toISOString() сдвигает дату назад в UTC+3.
     let dateEnd = '';
     if (template.durationDays && template.durationDays > 1) {
-      const end = new Date(`${date}T00:00:00`);
-      end.setDate(end.getDate() + template.durationDays - 1);
-      dateEnd = end.toISOString().split('T')[0];
+      const [y, m, d] = date.split('-').map(Number);
+      const end = new Date(y, m - 1, d + template.durationDays - 1);
+      dateEnd = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`;
     }
 
     const newEvent: CommunityEvent = {
@@ -1878,7 +1927,9 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
       },
       deputyId: templateOrganizer || undefined,
     };
-    onAddEvent(newEvent);
+    // Ошибку сервера показываем, а окно закрываем только при успехе.
+    const err = await onAddEvent(newEvent);
+    if (err) { setActionMsg({ ok: false, text: `Событие не создано: ${err}` }); return; }
     setShowTemplates(false);
   };
 
@@ -2600,6 +2651,7 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
           {/* На мобильном колонка обязана быть flex-элементом с min-h-0, иначе
               shrink-0 + overflow-hidden родителя обрезали список и он НЕ скроллился. */}
           <div className={`w-full md:w-80 flex-1 md:flex-none md:shrink-0 min-h-0 border-b md:border-b-0 md:border-r border-white/10 overflow-y-auto p-4 space-y-3 md:max-h-none ${selectedEvent ? 'hidden md:block' : 'block'}`}>
+            <AdminApplications members={audience?.members} adminFetch={adminFetch} onChanged={loadAudience} onMsg={setActionMsg} />
             <div className="flex items-center justify-between mb-4">
               <span className="text-white/40 text-[10px] uppercase font-mono">
                 {showArchived ? `Архив: ${archivedEvents.length}` : `Активные: ${activeEvents.length}`}
@@ -2713,6 +2765,14 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     ) : (
                       <Send className="w-3 h-3" />
                     )}
+                  </button>
+
+                  <button
+                    onClick={(e) => { e.stopPropagation(); repeatEvent(event); }}
+                    className="flex-1 bg-white/5 hover:bg-brand/20 text-white/60 hover:text-brand p-1.5 rounded-lg transition-all"
+                    title="Повторить: копия на ближайший такой же день"
+                  >
+                    <RotateCcw className="w-3 h-3" />
                   </button>
 
                   <button
@@ -4217,9 +4277,13 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                     <p className="text-white/60 text-sm">Таблица инвентаря ещё не создана.</p>
                     <p className="text-white/40 text-xs mt-2 font-mono">Накати миграцию <b>supabase/migrations/2026-club-assets.sql</b> в Supabase SQL Editor — появится весь список.</p>
                   </div>
-                ) : assets.length === 0 ? (
-                  <p className="text-white/40 text-xs text-center py-8">Пусто. Накати миграцию с сидом или добавь позиции.</p>
-                ) : assets.map((a: any) => (
+                ) : [
+                  <AssetAdd key="add" adminFetch={adminFetch} onDone={loadAssets} onMsg={setActionMsg} />,
+                  // Сверху — то, что на руках у людей (дольше всех — первым): видно, кто и сколько держит.
+                  ...[...assets].sort((x: any, y: any) => {
+                    const ox = x.holderName && x.holderName !== x.ownerName ? 1 : 0, oy = y.holderName && y.holderName !== y.ownerName ? 1 : 0;
+                    return oy - ox || (y.daysHeld ?? -1) - (x.daysHeld ?? -1);
+                  }).map((a: any) => (
                   <div key={a.id} className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
@@ -4238,16 +4302,10 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                         </div>
                         {a.notes && <div className="text-[10px] text-white/40 mt-1 italic">{a.notes}</div>}
                       </div>
-                      <button
-                        onClick={() => changeAssetHolder(a)}
-                        className="text-[10px] px-2 py-1 rounded-lg font-bold uppercase bg-brand/15 text-brand hover:bg-brand/25 cursor-pointer border-none shrink-0"
-                        title="Передать / сменить держателя"
-                      >
-                        Передать
-                      </button>
                     </div>
+                    <AssetGive asset={a} members={audience?.members} adminFetch={adminFetch} onDone={loadAssets} onMsg={setActionMsg} />
                   </div>
-                ))}
+                ))]}
               </div>
             </motion.div>
           </div>
@@ -4704,7 +4762,8 @@ export default function AdminPanel({ events, onUpdateEvent, onAddEvent, onDelete
                   return list.map((m: any) => (
                     <div key={m.telegramId} className="bg-white/5 border border-white/10 rounded-xl p-3">
                       <div className="flex items-start justify-between gap-2">
-                        <div className="min-w-0">
+                        <Avatar name={m.firstName || m.username || '?'} src={m.avatar} size={44} ring={m.isCore ? 'brand' : 'none'} />
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-bold text-sm">{m.firstName || 'Без имени'}</span>
                             {m.username && <span className="text-[10px] text-white/50 font-mono">@{m.username}</span>}
@@ -5586,7 +5645,7 @@ function EditEventModal({ event, onClose, onSave }: {
           </div>
 
           {/* «Состоится при N»: баня от 10 человек, площадке ответ за 4 ч.
-              Бот сам ведёт сбор и решение — scripts/quorum (api/_lib/quorum.ts). */}
+              Бот сам ведёт сбор и решение — scripts/pulse.mts (api/_lib/quorum.ts). */}
           <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-2">
             <div className="text-[10px] text-white/40 uppercase font-mono">Минимальный состав (необязательно)</div>
             <div className="grid grid-cols-2 gap-2">
