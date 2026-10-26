@@ -327,6 +327,10 @@ export default function App() {
   }, []);
   /** С какой вкладки открыть профиль (deep-link ?checklist ведёт в «Снаряжение»). */
   const [profileTab, setProfileTab] = useState<'overview' | 'events' | 'gear' | 'chat' | 'kb' | 'settings'>('overview');
+  // ?help=1 — кнопка из вечернего дайджеста взаимопомощи: сразу в профиль, вкладка вещей и помощи.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('help') === '1') { setProfileTab('gear'); setShowUserStats(true); }
+  }, []);
   /** Живёт ли музыка прямо сейчас: подсвечивает кнопку-ноту в шапке. */
   const musicPlaying = useMusicPlayer().playing;
   /**

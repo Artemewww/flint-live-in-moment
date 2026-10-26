@@ -1,10 +1,11 @@
 /**
  * ПУЛЬС КЛУБА — почасовой прогон (.github/workflows/pulse.yml):
  *   • «состоится при N» — api/_lib/quorum.ts;
- *   • дни рождения — api/_lib/birthday.ts (10:00 поздравление, 20:00 открытка).
+ *   • дни рождения — api/_lib/birthday.ts (10:00 поздравление, 20:00 открытка);
+ *   • взаимопомощь — вечерний дайджест новых просьб (после 19:00, раз в сутки).
  * Крон Vercel у нас раз в сутки, а этим задачам нужны часы.
  *
- * Руками: npx tsx scripts/pulse.mts [--dry-run] [--only quorum|birthday] [--event <id>]
+ * Руками: npx tsx scripts/pulse.mts [--dry-run] [--only quorum|birthday|help] [--event <id>]
  */
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
@@ -60,11 +61,47 @@ async function quorum() {
   }
 }
 
+const escH = (v: string) => String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+/**
+ * Взаимопомощь: новые просьбы клуба одним сообщением вечером. Мгновенных
+ * рассылок нет (бота не блокируют), отписка — кнопкой «Не присылать».
+ */
+async function helpDigest() {
+  const minsk = new Date(Date.now() + 3 * 3600_000);
+  const day = minsk.toISOString().slice(0, 10);
+  if (minsk.getUTCHours() < 19) return 'рано';
+  const { data: mark } = await db.from('app_config').select('value').eq('key', 'help_digest_day').maybeSingle();
+  if (mark?.value === day) return 'уже было сегодня';
+  const { data: rows } = await db.from('app_config').select('key,value').like('key', 'help:%');
+  const fresh = (rows || []).map((r: any) => { try { return JSON.parse(r.value); } catch { return null; } })
+    .filter((h: any) => h && h.status === 'open' && !h.digested && h.expiresAt > Date.now());
+  await db.from('app_config').upsert({ key: 'help_digest_day', value: day }, { onConflict: 'key' });
+  if (!fresh.length) return 'новых нет';
+  const SITE = (process.env.SITE_URL || 'https://flint-live-in-moment.vercel.app').replace(/\/$/, '');
+  const lines = fresh.slice(0, 6).map((h: any) => `• <b>${escH(h.authorName)}</b>: ${escH(String(h.text).slice(0, 120))}`).join('\n');
+  const authors = new Set(fresh.map((h: any) => String(h.authorId)));
+  const { data: mem } = await db.from('members').select('telegram_id,prefs,bot_active').eq('status', 'approved');
+  let sent = 0;
+  for (const m of mem || []) {
+    const id = Number(m.telegram_id);
+    if (!(id > 0) || m.bot_active === false || authors.has(String(id)) || m.prefs?.help_digest === false) continue;
+    const r: any = await send(id, `🤝 <b>Клубу нужна помощь</b>\n\n${lines}\n\nМожешь помочь — нажми «Могу помочь» в приложении, автор получит твой контакт.`,
+      { inline_keyboard: [[{ text: 'Открыть взаимопомощь', web_app: { url: `${SITE}/?help=1` } }], [{ text: 'Не присылать такое', callback_data: 'helpoff' }]] });
+    if (r?.ok) sent++;
+  }
+  for (const h of fresh) await db.from('app_config').update({ value: JSON.stringify({ ...h, digested: true }) }).eq('key', `help:${h.id}`);
+  return `просьб ${fresh.length}, отправлено ${sent}`;
+}
+
 async function main() {
   if (!BOT) { console.log('нет TELEGRAM_BOT_TOKEN'); return; }
-  if (ONLY !== 'birthday') await quorum();
-  if (ONLY !== 'quorum' && !EVENT) {
+  if (!ONLY || ONLY === 'quorum') await quorum();
+  if ((!ONLY || ONLY === 'birthday') && !EVENT) {
     try { console.log('[birthday]', await stepBirthdays(db, api, BOT)); } catch (e) { console.log('[birthday] error', e); }
+  }
+  if ((!ONLY || ONLY === 'help') && !EVENT) {
+    try { console.log('[help]', await helpDigest()); } catch (e) { console.log('[help] error', e); }
   }
 }
 main().then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });

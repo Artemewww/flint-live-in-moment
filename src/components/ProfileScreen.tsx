@@ -9,6 +9,7 @@ import GearShelf from './GearShelf';
 import Avatar from './Avatar';
 import CampingChecklist from './CampingChecklist';
 import ClubRating, { useClubRating } from './ClubRating';
+import HelpBoard from './HelpBoard';
 import HomeScreenButton from './HomeScreenButton';
 import { createPortal } from 'react-dom';
 
@@ -468,6 +469,9 @@ export default function ProfileScreen({ onClose, initialTab }: { onClose: () => 
                * разных оформлениях. Теперь реестр клуба ровно один, и в нём
                * же работают правка и удаление.
                */}
+              {/* Взаимопомощь — рядом со снаряжением: «нужна вещь / нужны руки». */}
+              <HelpBoard />
+
               <GearShelf />
 
               {/* Чек-лист на 131 пункт разворачивался прямо в списке и

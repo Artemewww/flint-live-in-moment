@@ -1282,6 +1282,117 @@ export default async function handler(req: any, res: any) {
      * «показать» получало 401: снаряжение нельзя было ни завести, ни увидеть.
      * Теперь личное снаряжение живёт здесь, под подписью Telegram.
      */
+    /**
+     * ВЗАИМОПОМОЩЬ: «сломался фотоаппарат», «кто посидит с собакой».
+     * Правила (Buy Nothing / таймбанки): только принятые участники; без денег,
+     * продаж и ссылок; ≤2 открытых и ≤3 в неделю; живёт 7 дней. «Могу помочь» —
+     * автору в бот приходит контакт; «Помогли» — помощнику +15 баллов и строка
+     * «помог N раз». 2 жалобы скрывают просьбу и зовут костяк. Рассылки нет —
+     * только вечерний дайджест (cron/reminders), чтобы бота не блокировали.
+     * Хранение: app_config `help:<id>` (без миграции), как у кворума.
+     */
+    if (typeof action === 'string' && action.startsWith('help_')) {
+      const user = verifyInitData(body.initData);
+      if (!user) return res.status(401).json({ error: 'Открой приложение из Telegram' });
+      const { data: me } = await supabase.from('members').select('first_name,username,status,is_core').eq('telegram_id', user.id).maybeSingle();
+      if (!me || !((me as any).is_core === true || (me as any).status === 'approved')) return res.status(403).json({ error: 'Взаимопомощь — для участников клуба' });
+      const CATS: Record<string, string> = { thing: '🎒 Вещь на время', hands: '💪 Нужны руки', pets: '🐾 Питомцы и дом', ride: '🚗 Подвезти', advice: '💡 Совет / контакт', support: '🫂 Поговорить' };
+      const now = Date.now();
+      const load = async () => {
+        const { data } = await supabase.from('app_config').select('key,value').like('key', 'help:%');
+        return (data || []).filter((r: any) => /^help:[a-z0-9]{8,}$/.test(r.key)).map((r: any) => { try { return JSON.parse(r.value); } catch { return null; } }).filter(Boolean);
+      };
+      const save = (h: any) => supabase.from('app_config').upsert({ key: `help:${h.id}`, value: JSON.stringify(h), updated_by: user.id }, { onConflict: 'key' });
+      const tgSend = (chat: number | string, text: string, extra: any = {}) => BOT_TOKEN ? fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chat, parse_mode: 'HTML', disable_web_page_preview: true, text, ...extra }),
+      }).catch(() => null) : Promise.resolve(null);
+      const meName = (me as any).first_name || ((me as any).username ? '@' + (me as any).username : 'Участник');
+      const all = await load();
+      const byId = (id: string) => all.find((h: any) => h.id === String(id || ''));
+
+      if (action === 'help_list') {
+        const thanks = new Map<string, number>();
+        for (const h of all) if (h.thankedId) thanks.set(String(h.thankedId), (thanks.get(String(h.thankedId)) || 0) + 1);
+        const visible = all
+          .filter((h: any) => h.status === 'open' && h.expiresAt > now || String(h.authorId) === String(user.id) && h.status !== 'deleted')
+          .sort((a: any, b: any) => b.createdAt - a.createdAt)
+          .map((h: any) => ({
+            id: h.id, category: h.category, categoryLabel: CATS[h.category] || h.category, text: h.text,
+            authorName: h.authorName, authorHelped: thanks.get(String(h.authorId)) || 0,
+            mine: String(h.authorId) === String(user.id), status: h.expiresAt <= now && h.status === 'open' ? 'expired' : h.status,
+            createdAt: h.createdAt, offers: String(h.authorId) === String(user.id) ? (h.offers || []) : undefined,
+            offered: (h.offers || []).some((o: any) => String(o.id) === String(user.id)), offersCount: (h.offers || []).length,
+          }));
+        return res.status(200).json({ requests: visible, cats: CATS, myHelped: thanks.get(String(user.id)) || 0 });
+      }
+
+      if (action === 'help_create') {
+        const category = String(body.category || '');
+        const text = String(body.text || '').replace(/\s+/g, ' ').trim();
+        if (!CATS[category]) return res.status(400).json({ error: 'Выбери категорию' });
+        if (text.length < 10 || text.length > 500) return res.status(400).json({ error: 'Опиши просьбу в 10–500 символах' });
+        if (/(https?:\/\/|t\.me\/|www\.|\bкарт[ауые]\b|перевод|перевест|займ|в долг|одолж[иу]\s+денег|\bbyn\b|\bруб|\$|€|продам|продаю|куплю|скидк|реклам)/i.test(text)) {
+          return res.status(400).json({ error: 'Без денег, продаж и ссылок — так договорились в клубе. Если нужны деньги, напиши Артёму лично.' });
+        }
+        const mine = all.filter((h: any) => String(h.authorId) === String(user.id));
+        if (mine.filter((h: any) => h.status === 'open' && h.expiresAt > now).length >= 2) return res.status(429).json({ error: 'У тебя уже 2 открытые просьбы — закрой одну, и можно новую' });
+        if (mine.filter((h: any) => now - h.createdAt < 7 * 864e5).length >= 3) return res.status(429).json({ error: 'Не больше 3 просьб в неделю' });
+        const h = { id: crypto.randomBytes(6).toString('hex'), authorId: user.id, authorName: meName, authorUsername: (me as any).username || null,
+          category, text, status: 'open', createdAt: now, expiresAt: now + 7 * 864e5, offers: [], reports: [], digested: false };
+        await save(h);
+        return res.status(200).json({ ok: true, id: h.id });
+      }
+
+      const h = byId(body.id);
+      if (!h) return res.status(404).json({ error: 'Просьба не найдена' });
+      const isAuthor = String(h.authorId) === String(user.id);
+
+      if (action === 'help_offer') {
+        if (isAuthor) return res.status(400).json({ error: 'Это твоя просьба' });
+        if (h.status !== 'open' || h.expiresAt <= now) return res.status(400).json({ error: 'Просьба уже закрыта' });
+        if (!(h.offers || []).some((o: any) => String(o.id) === String(user.id))) {
+          h.offers = [...(h.offers || []), { id: user.id, name: meName, username: (me as any).username || null, at: now }];
+          await save(h);
+          const link = (me as any).username ? `<a href="https://t.me/${escHtml((me as any).username)}">${escHtml(meName)}</a>` : `<a href="tg://user?id=${user.id}">${escHtml(meName)}</a>`;
+          await tgSend(h.authorId, `🤝 ${link} готов(а) помочь с твоей просьбой:\n<i>${escHtml(h.text.slice(0, 200))}</i>\n\nНапиши напрямую и договоритесь. Когда помогут — отметь в приложении «Помогли», это благодарность человеку.`);
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      if (action === 'help_close') {
+        if (!isAuthor) return res.status(403).json({ error: 'Закрыть может только автор' });
+        const thankedId = body.thankedId ? String(body.thankedId) : null;
+        if (thankedId && !(h.offers || []).some((o: any) => String(o.id) === thankedId)) return res.status(400).json({ error: 'Этот человек не откликался' });
+        const firstThanks = thankedId && !h.thankedId;
+        h.status = 'closed'; h.closedAt = now; if (thankedId) h.thankedId = thankedId;
+        await save(h);
+        if (firstThanks) {
+          const HELP_POINTS = 15;
+          try {
+            const { data: hm } = await supabase.from('members').select('points').eq('telegram_id', Number(thankedId)).maybeSingle();
+            await supabase.from('members').update({ points: Number((hm as any)?.points || 0) + HELP_POINTS }).eq('telegram_id', Number(thankedId));
+            await supabase.from('points_log').insert({ telegram_id: Number(thankedId), event_id: null, reason: 'help', points: HELP_POINTS, description: `Помог(ла): ${h.text.slice(0, 60)}` });
+          } catch { /* баллы — бонус */ }
+          await tgSend(thankedId, `🙏 ${escHtml(meName)} говорит спасибо — ты помог(ла) с просьбой «${escHtml(h.text.slice(0, 80))}». +15 баллов. Так и держится клуб.`);
+        }
+        return res.status(200).json({ ok: true });
+      }
+
+      if (action === 'help_report') {
+        if (isAuthor) return res.status(400).json({ error: 'Нельзя пожаловаться на свою просьбу' });
+        if (!(h.reports || []).includes(String(user.id))) h.reports = [...(h.reports || []), String(user.id)];
+        if (h.reports.length >= 2 && h.status === 'open') {
+          h.status = 'hidden';
+          const { data: core } = await supabase.from('members').select('telegram_id').eq('is_core', true);
+          for (const c of core || []) await tgSend((c as any).telegram_id, `⚠️ Просьба во взаимопомощи скрыта после 2 жалоб.\nАвтор: ${escHtml(h.authorName)}\n<i>${escHtml(h.text.slice(0, 300))}</i>`);
+        }
+        await save(h);
+        return res.status(200).json({ ok: true });
+      }
+      return res.status(400).json({ error: 'Неизвестное действие' });
+    }
+
     if (typeof action === 'string' && action.startsWith('gear_')) {
       const user = verifyInitData(body.initData);
       if (!user) return res.status(401).json({ error: 'Открой приложение из Telegram' });

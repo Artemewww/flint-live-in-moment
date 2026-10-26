@@ -4005,7 +4005,7 @@ export default async function handler(req: any, res: any) {
        */
       // refgender_ — финал реф-онбординга: реф-новичок ещё НЕ approved (впускаем
       // его только в конце анкеты), поэтому кнопка выбора пола обязана быть открытой.
-      const OPEN_TO_ALL = /^(cfm_|grpgo_|grpmaybe_|grpno_|verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
+      const OPEN_TO_ALL = /^(helpoff|cfm_|grpgo_|grpmaybe_|grpno_|verify_start|verify_consent|verify_pd|applyg_|refgender_|support|usreply|helpguide|setdiet|sos|sos_alert|approve_|reject_|payok_|payno_|reply_|mconsent_|chk_|valok|whyme)/;
       if (gateOn() && !OPEN_TO_ALL.test(data) && !(await isApproved(tgId))) {
         await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Сначала нужно вступить в клуб', show_alert: true });
         await tg('sendMessage', {
@@ -5567,6 +5567,14 @@ export default async function handler(req: any, res: any) {
       }
 
       // Модерация заявки костяком.
+      // Отписка от вечернего дайджеста взаимопомощи (scripts/pulse.mts).
+      if (data === 'helpoff') {
+        const { data: row } = await supabase.from('members').select('prefs').eq('telegram_id', cq.from.id).maybeSingle();
+        await supabase.from('members').update({ prefs: { ...(((row as any)?.prefs) || {}), help_digest: false } }).eq('telegram_id', cq.from.id);
+        await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Больше не пришлю. Просьбы клуба — в профиле приложения.' });
+        return res.status(200).json({ ok: true });
+      }
+
       if (data.startsWith('approve_') || data.startsWith('reject_')) {
         if (!(await isCore(cq.from.id))) {
           await tg('answerCallbackQuery', { callback_query_id: cq.id, text: 'Решать может только костяк клуба' });
