@@ -369,6 +369,39 @@ function wrapText(font: any, t: string, size: number, maxW: number, maxLines: nu
 const RU_DAYS = ['ВОСКРЕСЕНЬЕ', 'ПОНЕДЕЛЬНИК', 'ВТОРНИК', 'СРЕДА', 'ЧЕТВЕРГ', 'ПЯТНИЦА', 'СУББОТА'];
 const RU_MON = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 
+/**
+ * Фоны афиш: сгенерированы один раз в высоком качестве (GPT Image, стиль FLINT —
+ * тёмная фотография, лаймовые акценты) и лежат в Storage event-images/backgrounds.
+ * Подбираются по смыслу события, если у него нет своего фото; logistics.bg — ручной выбор.
+ */
+const POSTER_BG: [string, RegExp][] = [
+  ['banya', /бан[яиюе]|сауна|парил/i],
+  ['dive', /прыжк|вышк|бассейн|ныря/i],
+  ['wake', /вейк|wake|сап\b|sup|каяк|серф/i],
+  ['run', /пробеж|бег|забег|марафон|race|марш|трейл/i],
+  ['tea', /чай|чаепит|настол|игр/i],
+  ['cinema', /кино|фильм|кинопоказ/i],
+  ['forum', /форум|expo|конференц|лекци|митап|ai\b|дискусс/i],
+  ['fire', /костёр|костер|звёзд|звезд|персеид|ночь/i],
+  ['challenge', /челлендж|challenge|вызов|голодан|90/i],
+  ['river', /выезд|ислоч|нароч|поход|карьер|река|озер|природ|палатк/i],
+];
+export function posterBgKey(ev: any): string {
+  const own = String(ev?.logistics?.bg || '');
+  if (POSTER_BG.some(([k]) => k === own) || own === 'flint') return own;
+  const text = `${ev?.title || ''} ${ev?.description || ''}`;
+  return POSTER_BG.find(([, re]) => re.test(text))?.[0] || 'flint';
+}
+async function posterBackground(ev: any): Promise<Buffer | null> {
+  const base = String(process.env.SUPABASE_URL || '').replace(/\/$/, '');
+  if (!base) return null;
+  try {
+    const r = await fetch(`${base}/storage/v1/object/public/event-images/backgrounds/${posterBgKey(ev)}.jpg`);
+    if (r.ok) return Buffer.from(await r.arrayBuffer());
+  } catch { /* нет фона — фирменная заливка */ }
+  return null;
+}
+
 async function posterPhoto(ev: any): Promise<Buffer | null> {
   const src = String(ev.image || '') || (/\/posters\//.test(String(ev.telegram_image || '')) ? '' : String(ev.telegram_image || ''));
   try {
@@ -388,7 +421,7 @@ export async function buildPoster(ev: any): Promise<Buffer> {
   const lg = ev.logistics || {};
   const PH = 500;
   // 1) Фото: верх афиши, сочнее, с плавным уходом в фон.
-  const raw = await posterPhoto(ev);
+  const raw = (await posterPhoto(ev)) || (await posterBackground(ev));
   const photo = raw
     ? await sharp(raw).rotate().resize(S, PH, { fit: 'cover', position: 'centre' }).modulate({ saturation: 1.15, brightness: 1.03 }).toBuffer()
     : await sharp({ create: { width: S, height: PH, channels: 3, background: '#1d2412' } }).png().toBuffer();

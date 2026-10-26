@@ -443,7 +443,14 @@ export default async function handler(req: any, res: any) {
             // Счётчик и имена подтвердивших. Приклеиваем только к СВОЕМУ тексту:
             // если организатор написал сообщение руками, не лезем в его слова.
             socialLine
-          : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
+          : /\/posters\//.test(String(event?.telegram_image || ''))
+            // Есть афиша — всё главное на картинке (цена, время, программа).
+            // Подпись в две строки: длинные простыни владелец просил убрать.
+            ? `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n` +
+              [event?.date_label, event?.location].filter(Boolean).map((x: any) => esc(String(x))).join(' · ') +
+              (quorumLine ? `\n${quorumLine.trim()}` : '') +
+              `\n\n<a href="https://t.me/campsflint_bot?start=event_${eventId}">Записаться →</a>`
+            : `🔔 <b>${esc(event?.title || 'Мероприятие FLINT')}</b>\n\n` +
             (event?.date_label ? `📆 ${esc(event.date_label)}\n` : '') +
             (event?.location ? `📍 ${esc(event.location)}\n` : '') +
             `\n💰 ${esc(costLineOf(event))}\n` + quorumLine + includedBlock +
