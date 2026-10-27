@@ -45,6 +45,7 @@ const SnapModal = lazyWithRetry(() => import('./components/SnapModal'));
 const MusicPlayer = lazyWithRetry(() => import('./components/MusicPlayer'));
 const HistoryStories = lazyWithRetry(() => import('./components/HistoryStories'));
 const ProfileScreen = lazyWithRetry(() => import('./components/ProfileScreen'));
+import VibePick from './components/VibePick';
 const AdminPanel = lazyWithRetry(() => import('./components/AdminPanel'));
 const GateScreen = lazyWithRetry(() => import('./components/GateScreen'));
 const FundraiserPage = lazyWithRetry(() =>
@@ -1425,6 +1426,9 @@ export default function App() {
                 />
               </section>
             )}
+
+            {/* «Тебе сейчас подойдёт» — подбор по вайбу, состоянию и погоде. */}
+            <section className="pt-2"><VibePick events={events} onOpen={setActiveDetailEvent} /></section>
 
             {/* Как прошли последние выезды — повод записаться на следующий. */}
             <RecentRecaps onOpen={(id) => { setHistoryStartId(id); setShowHistory(true); }} />
